@@ -86,7 +86,12 @@ function resolveShimPath(shimsDir: string, name: string): string | null {
   return real;
 }
 
-export function execHostShim(agentGroupId: string, name: string, args: string[]): Promise<ShimResult> {
+export function execHostShim(
+  agentGroupId: string,
+  name: string,
+  args: string[],
+  timeoutMs = TIMEOUT_MS,
+): Promise<ShimResult> {
   if (!NAME_RE.test(name)) {
     return Promise.resolve(refuse(`"${name}" is not a valid shim name`));
   }
@@ -107,7 +112,7 @@ export function execHostShim(agentGroupId: string, name: string, args: string[])
     execFile(
       shimPath,
       args,
-      { timeout: TIMEOUT_MS, maxBuffer: MAX_BUFFER, encoding: 'utf-8' },
+      { timeout: timeoutMs, maxBuffer: MAX_BUFFER, encoding: 'utf-8' },
       (error, stdout, stderr) => {
         // execFile sets error.code to the numeric exit code on a nonzero
         // exit, or a string (e.g. 'ENOENT', 'ETIMEDOUT') if the process

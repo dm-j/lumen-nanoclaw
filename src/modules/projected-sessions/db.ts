@@ -1,0 +1,115 @@
+/**
+ * DB access for the projected-sessions module. Owns two tables entirely
+ * (migration 025) — no reach-in to `container_configs` or any core table.
+ */
+import { getDb } from '../../db/connection.js';
+import { inboundDbPath } from '../../session-manager.js';
+import { openInboundDb } from '../../db/session-db.js';
+import fs from 'fs';
+
+export function isEnabled(agentGroupId: string): boolean {
+  const row = getDb().prepare('SELECT 1 FROM projected_sessions_enabled WHERE agent_group_id = ?').get(agentGroupId);
+  return row !== undefined;
+}
+
+export function setEnabled(agentGroupId: string, enabled: boolean): void {
+  if (enabled) {
+    getDb()
+      .prepare(
+        `INSERT INTO projected_sessions_enabled (agent_group_id, enabled_at) VALUES (?, ?)
+         ON CONFLICT(agent_group_id) DO NOTHING`,
+      )
+      .run(agentGroupId, new Date().toISOString());
+  } else {
+    getDb().prepare('DELETE FROM projected_sessions_enabled WHERE agent_group_id = ?').run(agentGroupId);
+  }
+}
+
+export function listEnabled(): string[] {
+  return (
+    getDb().prepare('SELECT agent_group_id FROM projected_sessions_enabled').all() as Array<{
+      agent_group_id: string;
+    }>
+  ).map((r) => r.agent_group_id);
+}
+
+export function getSessionBriefing(sessionKey: string): string {
+  const row = getDb().prepare('SELECT content FROM session_briefings WHERE session_key = ?').get(sessionKey) as
+    | { content: string }
+    | undefined;
+  return row?.content ?? '';
+}
+
+export function setSessionBriefing(sessionKey: string, content: string): void {
+  getDb()
+    .prepare(
+      `INSERT INTO session_briefings (session_key, content, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(session_key) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at`,
+    )
+    .run(sessionKey, content, new Date().toISOString());
+}
+
+export type TailLane = 'compiler' | 'responder';
+
+export interface TailAnchor {
+  anchorTs: string | null;
+  count: number;
+}
+
+export function getTailAnchor(sessionKey: string, lane: TailLane): TailAnchor {
+  const col = lane === 'compiler' ? 'compiler_anchor_ts' : 'responder_anchor_ts';
+  const countCol = lane === 'compiler' ? 'compiler_anchor_count' : 'responder_anchor_count';
+  const row = getDb()
+    .prepare(`SELECT ${col} AS anchorTs, ${countCol} AS count FROM session_briefings WHERE session_key = ?`)
+    .get(sessionKey) as { anchorTs: string | null; count: number } | undefined;
+  return row ?? { anchorTs: null, count: 0 };
+}
+
+export function setTailAnchor(sessionKey: string, lane: TailLane, anchorTs: string | null, count: number): void {
+  const col = lane === 'compiler' ? 'compiler_anchor_ts' : 'responder_anchor_ts';
+  const countCol = lane === 'compiler' ? 'compiler_anchor_count' : 'responder_anchor_count';
+  getDb()
+    .prepare(
+      `INSERT INTO session_briefings (session_key, content, updated_at, ${col}, ${countCol})
+       VALUES (?, '', ?, ?, ?)
+       ON CONFLICT(session_key) DO UPDATE SET ${col} = excluded.${col}, ${countCol} = excluded.${countCol}`,
+    )
+    .run(sessionKey, new Date().toISOString(), anchorTs, count);
+}
+
+const BATCH_READ_CAP = 50;
+
+/**
+ * Plain-text rendering of the currently-pending inbound batch for a session
+ * — read directly from `inbound.db` rather than being threaded through from
+ * `router.ts`. This is what lets the whole per-wake hook live in
+ * `container-runner.ts`'s `spawnContainer` (mirroring the existing
+ * `agent_destinations` hasTable-gated hook) instead of `router.ts`: by the
+ * time `spawnContainer` runs, `writeSessionMessage` has already persisted
+ * the batch, so there's nothing router-side left to pass in.
+ */
+export function readPendingBatchText(agentGroupId: string, sessionId: string): string {
+  const dbPath = inboundDbPath(agentGroupId, sessionId);
+  if (!fs.existsSync(dbPath)) return '';
+
+  const db = openInboundDb(dbPath);
+  try {
+    const rows = db
+      .prepare(
+        `SELECT content FROM messages_in WHERE status = 'pending' AND kind IN ('chat','chat-sdk')
+         ORDER BY seq ASC LIMIT ?`,
+      )
+      .all(BATCH_READ_CAP) as Array<{ content: string }>;
+    return rows
+      .map((r) => {
+        try {
+          return (JSON.parse(r.content) as { text?: string }).text ?? r.content;
+        } catch {
+          return r.content;
+        }
+      })
+      .join('\n');
+  } finally {
+    db.close();
+  }
+}

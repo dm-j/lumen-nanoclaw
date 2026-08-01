@@ -127,6 +127,16 @@ async function spawnContainer(session: Session): Promise<void> {
   }
   writeSessionRouting(agentGroup.id, session.id);
 
+  // Compiled briefing + literal tail for projected-lifecycle sessions —
+  // module is optional, skip when its table is absent. Reads the pending
+  // batch straight from inbound.db (already written by writeSessionMessage
+  // before wakeContainer was called), so this needs nothing from the
+  // router-level event.
+  if (hasTable(getDb(), 'projected_sessions_enabled')) {
+    const { maybeSynthesizeProjectedContext } = await import('./modules/projected-sessions/synthesize.js');
+    await maybeSynthesizeProjectedContext(agentGroup.id, session.id);
+  }
+
   // Materialize container.json from DB — writes fresh file and returns
   // the config object, threaded through provider resolution, buildMounts,
   // and buildContainerArgs so we don't re-read.
