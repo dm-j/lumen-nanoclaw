@@ -63,6 +63,10 @@ export const DATA_DIR = path.resolve(PROJECT_ROOT, 'data');
 export const TEMPLATES_DIR = process.env.NANOCLAW_TEMPLATES_DIR
   ? path.resolve(process.env.NANOCLAW_TEMPLATES_DIR)
   : path.resolve(PROJECT_ROOT, 'templates');
+// Trunk-owned default host-shim scripts (e.g. briefing-host), copied into a
+// new group's own host-shims/ once at group-init time. Not runtime-overridable
+// — unlike TEMPLATES_DIR, these aren't user-authored, they're shipped assets.
+export const HOST_SHIM_TEMPLATES_DIR = path.resolve(PROJECT_ROOT, 'src', 'host-shim-templates');
 
 // Per-checkout image tag so two installs on the same host don't share
 // `nanoclaw-agent:latest` and clobber each other on rebuild.

@@ -53,8 +53,22 @@ function presentConfig(row: ContainerConfigRow): Record<string, unknown> {
     additional_mounts: JSON.parse(row.additional_mounts),
     cli_scope: row.cli_scope,
     timezone: row.timezone,
+    host_shims_dir: row.host_shims_dir,
     updated_at: row.updated_at,
   };
+}
+
+/**
+ * Parse a --host-shims-dir flag: undefined = not passed, null = explicit
+ * clear (empty string → default to groups/<folder>/host-shims/), otherwise
+ * the given path. Validity (existence, etc.) is checked at call time by
+ * execHostShim, not here — an admin may point this at a directory before
+ * populating it.
+ */
+function parseHostShimsDirFlag(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined;
+  const dir = String(value);
+  return dir === '' ? null : dir;
 }
 
 registerResource({
@@ -281,7 +295,8 @@ registerResource({
       description:
         'Update container config scalar fields. Changes are saved but do NOT take effect until you run `ncl groups restart`. ' +
         'Use --id <group-id> and any of: --provider, --model, --effort, --image-tag, --assistant-name, --max-messages-per-prompt, --cli-scope, ' +
-        '--timezone (IANA id like "Europe/Lisbon"; "" clears back to the install default; scheduled-task times follow it immediately, message display after restart).',
+        '--timezone (IANA id like "Europe/Lisbon"; "" clears back to the install default; scheduled-task times follow it immediately, message display after restart), ' +
+        '--host-shims-dir (path to this group\'s host-shim whitelist directory; "" clears back to the default groups/<folder>/host-shims/).',
       handler: async (args) => {
         const id = args.id as string;
         if (!id) throw new Error('--id is required');
@@ -299,11 +314,15 @@ registerResource({
             | 'max_messages_per_prompt'
             | 'cli_scope'
             | 'timezone'
+            | 'host_shims_dir'
           >
         > = {};
         if (args.provider !== undefined) updates.provider = args.provider as string;
         const timezone = parseTimezoneFlag(args.timezone);
         if (timezone !== undefined) updates.timezone = timezone;
+        const hostShimsDirFlag = args['host-shims-dir'] ?? args.host_shims_dir;
+        const hostShimsDir = parseHostShimsDirFlag(hostShimsDirFlag);
+        if (hostShimsDir !== undefined) updates.host_shims_dir = hostShimsDir;
         if (args.model !== undefined) updates.model = args.model as string;
         if (args.effort !== undefined) updates.effort = args.effort as string;
         if (args.image_tag !== undefined) updates.image_tag = args.image_tag as string;
@@ -320,7 +339,7 @@ registerResource({
 
         if (Object.keys(updates).length === 0) {
           throw new Error(
-            'Nothing to update — provide at least one of: --provider, --model, --effort, --image-tag, --assistant-name, --max-messages-per-prompt, --cli-scope, --timezone',
+            'Nothing to update — provide at least one of: --provider, --model, --effort, --image-tag, --assistant-name, --max-messages-per-prompt, --cli-scope, --timezone, --host-shims-dir',
           );
         }
 

@@ -66,3 +66,33 @@ describe('default settings.json for new groups', () => {
     expect(after.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS).toBe('1');
   });
 });
+
+describe('default host-shims/briefing-host for new groups', () => {
+  it('is seeded, executable, and refuses to run with the placeholder VAULT_PATH', () => {
+    const ag = makeGroup('ag-briefing');
+    initGroupFilesystem(ag, {});
+
+    const file = path.join(TEST_ROOT, 'groups', ag.folder, 'host-shims', 'briefing-host');
+    expect(fs.existsSync(file)).toBe(true);
+    expect(fs.statSync(file).mode & 0o111).toBeTruthy(); // executable bits set
+
+    const content = fs.readFileSync(file, 'utf-8');
+    expect(content).toContain('CHANGE/ME');
+    expect(content).toContain('--agent briefer');
+  });
+
+  it("never rewrites an existing briefing-host — a group's VAULT_PATH edit sticks", () => {
+    const ag = makeGroup('ag-briefing-edit');
+    initGroupFilesystem(ag, {});
+
+    const file = path.join(TEST_ROOT, 'groups', ag.folder, 'host-shims', 'briefing-host');
+    const edited = fs
+      .readFileSync(file, 'utf-8')
+      .replace('/CHANGE/ME/path/to/this/groups/obsidian/vault', '/real/vault');
+    fs.writeFileSync(file, edited);
+
+    initGroupFilesystem(ag, {}); // next spawn
+
+    expect(fs.readFileSync(file, 'utf-8')).toContain('/real/vault');
+  });
+});

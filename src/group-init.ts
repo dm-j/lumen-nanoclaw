@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 
-import { DATA_DIR, DEFAULT_AGENT_PROVIDER, GROUPS_DIR } from './config.js';
+import { DATA_DIR, DEFAULT_AGENT_PROVIDER, GROUPS_DIR, HOST_SHIM_TEMPLATES_DIR } from './config.js';
 import { ensureContainerConfig } from './db/container-configs.js';
 import { stageGroupPersona } from './group-persona.js';
 import { log } from './log.js';
@@ -76,6 +76,25 @@ export function initGroupFilesystem(
 
   if (opts?.instructions && stageGroupPersona(groupDir, opts.instructions)) {
     initialized.push('instructions.prepend.md');
+  }
+
+  // host-shims/ — this group's own host-shim whitelist directory (default
+  // location per resolveHostShimsDir; container_configs.host_shims_dir can
+  // override it). Seeded with the default briefing-host script
+  // (src/host-shim-templates/briefing-host), copied once and never
+  // overwritten again — a group's own edits (e.g. its VAULT_PATH) must
+  // survive every future spawn/restart.
+  const hostShimsDir = path.join(groupDir, 'host-shims');
+  if (!fs.existsSync(hostShimsDir)) {
+    fs.mkdirSync(hostShimsDir, { recursive: true });
+    initialized.push('host-shims/');
+  }
+  const briefingHostDst = path.join(hostShimsDir, 'briefing-host');
+  const briefingHostSrc = path.join(HOST_SHIM_TEMPLATES_DIR, 'briefing-host');
+  if (!fs.existsSync(briefingHostDst) && fs.existsSync(briefingHostSrc)) {
+    fs.copyFileSync(briefingHostSrc, briefingHostDst);
+    fs.chmodSync(briefingHostDst, 0o755);
+    initialized.push('host-shims/briefing-host');
   }
 
   // Ensure container_configs row exists in the DB. Idempotent — no-op if

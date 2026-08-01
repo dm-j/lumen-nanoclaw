@@ -467,6 +467,7 @@ describe('container configs', () => {
       additional_mounts: '[]',
       cli_scope: 'global',
       timezone: null,
+      host_shims_dir: null,
       updated_at: now(),
     });
     const row = getContainerConfig('ag-full');

@@ -1,0 +1,79 @@
+#!/bin/sh
+# briefing-host — default template, seeded once per group into its own
+# host-shims/ directory by group-init.ts's initGroupFilesystem (never
+# overwritten after — a group's own edits, chiefly VAULT_PATH, must survive
+# every future spawn/restart).
+#
+# Calling contract (docs/host-shims.md; Obsidian note "Lumen on NanoClaw —
+# Projected Session Implementation Plan", §3): invoked as
+#   briefing-host <prev-briefing-file> <new-batch-file>
+# and must write the updated briefing to stdout.
+#
+# Shells to the `briefer` Claude Code subagent (VAULT_PATH/.claude/agents/
+# briefer.md) — the same invocation shape proven out by nanoclaw v1's
+# src/memory-briefing/briefer.ts (`claude -p --agent briefer`, cwd=vault).
+# That agent is vault-specific (reads/writes Meta/working-memory.md, its own
+# post-it, assumes a particular digest pipeline) — deliberately NOT shared
+# across agent groups. Each group gets its own copy of this script pointed
+# at its own vault (the "obsidian-host vs. obsidian-readonly-host" pattern:
+# same shape, different embedded policy per group) — do not point two
+# groups' scripts at the same vault unless that sharing is deliberate.
+
+set -eu
+
+# --- Per-group configuration — edit this for your vault ---
+VAULT_PATH="/CHANGE/ME/path/to/this/groups/obsidian/vault"
+# --- end configuration ---
+
+if [ ! -d "$VAULT_PATH" ] || [ "$VAULT_PATH" = "/CHANGE/ME/path/to/this/groups/obsidian/vault" ]; then
+  echo "briefing-host: VAULT_PATH not configured — edit $0" >&2
+  exit 1
+fi
+
+PREV_FILE="$1"
+BATCH_FILE="$2"
+
+PREV_BRIEFING="$(cat "$PREV_FILE" 2>/dev/null || true)"
+NEW_BATCH="$(cat "$BATCH_FILE")"
+
+# Prompt shape mirrors buildBrieferPrompt (nanoclaw v1's
+# src/memory-briefing/briefer.ts:156-192), with the one required correction
+# from the Implementation Plan (§3): the compiler must never emit a "nothing
+# changed" meta-statement, only substantive briefing text. Here the compiled
+# briefing IS the responder's entire substitute for memory — the responder
+# never sees the previous briefing itself, only what this call emits — so a
+# one-line "unchanged" would be 100% of what the responder receives.
+PROMPT="## Inciting message — what you are preparing a briefing to answer
+
+$NEW_BATCH
+"
+
+if [ -n "$PREV_BRIEFING" ]; then
+  PROMPT="## Your previous briefing (stale — update it, do not just repeat it verbatim unless truly nothing changed)
+
+$PREV_BRIEFING
+
+$PROMPT"
+fi
+
+PROMPT="$PROMPT
+## Output constraint
+
+The briefing text is the whole response — no process narration, no remarks
+about matching the previous briefing or how you produced this. Pick one
+primary subject (up to 6 one-sentence bullets), zero-or-one secondary subject
+(up to 4 curt bullets), zero-or-one additional subject (one bullet + citation
+only). Every bullet is tagged with a confidence estimate (CERTAIN/CONFIDENT/
+SPECULATIVE/DISPUTED/UNCLEAR/DOUBTFUL) and cited as a wikilink.
+
+If nothing meaningful changed since the previous briefing, output the
+previous briefing's content again (verbatim or lightly re-condensed) — never
+a sentence stating that nothing changed. Your output must always stand alone
+as substantive briefing text, never a statement about the briefing."
+
+cd "$VAULT_PATH"
+exec claude -p --agent briefer \
+  --output-format text \
+  --permission-mode bypassPermissions \
+  --no-session-persistence \
+  "$PROMPT"

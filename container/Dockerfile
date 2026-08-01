@@ -111,6 +111,11 @@ RUN --mount=type=cache,target=/root/.cache/pnpm \
 RUN printf '#!/bin/sh\nexec bun /app/src/cli/ncl.ts "$@"\n' > /usr/local/bin/ncl && \
     chmod +x /usr/local/bin/ncl
 
+# ---- host-shim CLI wrapper -----------------------------------------------------
+# Actual script lives in the mounted source at /app/src/cli/host-shim.ts.
+RUN printf '#!/bin/sh\nexec bun /app/src/cli/host-shim.ts "$@"\n' > /usr/local/bin/host-shim && \
+    chmod +x /usr/local/bin/host-shim
+
 # ---- Entrypoint --------------------------------------------------------------
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
