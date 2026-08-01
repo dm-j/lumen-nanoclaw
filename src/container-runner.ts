@@ -491,6 +491,20 @@ async function buildContainerArgs(
     }
   }
 
+  // Per-agent-group env overrides — applied last to win over provider values.
+  if (containerConfig.env) {
+    for (const [key, value] of Object.entries(containerConfig.env)) {
+      args.push('-e', `${key}=${value}`);
+    }
+  }
+
+  // Blocked hosts: resolve to 0.0.0.0 so they are unreachable inside the container.
+  if (containerConfig.blockedHosts) {
+    for (const host of containerConfig.blockedHosts) {
+      args.push('--add-host', `${host}:0.0.0.0`);
+    }
+  }
+
   // Egress lockdown when enabled — throws if it can't be established, aborting
   // the spawn rather than running with open egress. Otherwise the host gateway.
   if (ensureEgressNetwork()) {

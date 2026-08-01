@@ -45,6 +45,8 @@ export interface ContainerConfig {
   model?: string;
   effort?: string;
   timezone?: string;
+  env?: Record<string, string>;
+  blockedHosts?: string[];
 }
 
 /**
@@ -97,6 +99,19 @@ export function materializeContainerJson(agentGroupId: string): ContainerConfig 
   const p = path.join(GROUPS_DIR, group.folder, 'container.json');
   const dir = path.dirname(p);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+  // env/blockedHosts are not DB-backed (host-local overrides, e.g. local
+  // model routing) — preserve whatever is already on disk across regeneration.
+  if (fs.existsSync(p)) {
+    try {
+      const existing = JSON.parse(fs.readFileSync(p, 'utf8')) as ContainerConfig;
+      if (existing.env) config.env = existing.env;
+      if (existing.blockedHosts) config.blockedHosts = existing.blockedHosts;
+    } catch {
+      // ignore unreadable/corrupt file — regenerate clean
+    }
+  }
+
   fs.writeFileSync(p, JSON.stringify(config, null, 2) + '\n');
 
   return config;
