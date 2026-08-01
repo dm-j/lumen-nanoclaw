@@ -22,3 +22,4 @@ import './permissions/index.js';
 import './agent-to-agent/index.js';
 import './self-mod/index.js';
 import './host-shim/index.js';
+import './host-cron/index.js';

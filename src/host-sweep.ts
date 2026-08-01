@@ -32,6 +32,7 @@ import fs from 'fs';
 import { ensureEgressNetwork } from './egress-lockdown.js';
 import { getActiveSessions, isTaskThread, updateSession } from './db/sessions.js';
 import { getAgentGroup } from './db/agent-groups.js';
+import { getDb, hasTable } from './db/connection.js';
 import {
   countDueMessages,
   deleteOrphanProcessingClaims,
@@ -163,6 +164,19 @@ async function sweep(): Promise<void> {
     log.error('Reject-with-reason sweep failed', { err });
   }
   // MODULE-HOOK:approvals-reason-sweep:end
+
+  // Agent-group-scoped, not session-scoped — runs once per tick, not once
+  // per active session. Module is optional; skip when its table is absent.
+  // MODULE-HOOK:host-cron:start
+  if (hasTable(getDb(), 'host_cron_jobs')) {
+    try {
+      const { runDueHostCronJobs } = await import('./modules/host-cron/run.js');
+      await runDueHostCronJobs();
+    } catch (err) {
+      log.error('host-cron sweep failed', { err });
+    }
+  }
+  // MODULE-HOOK:host-cron:end
 
   setTimeout(sweep, SWEEP_INTERVAL_MS);
 }
