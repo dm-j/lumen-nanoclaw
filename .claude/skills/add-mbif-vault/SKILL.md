@@ -1,6 +1,6 @@
 ---
 name: add-mbif-vault
-description: Install MBIF (My-Brain-Is-Full-Crew) as the recommended vault-management layer for a projected-lifecycle agent group, and derive a Briefer subagent from MBIF's Seeker for use by add-projected-sessions' briefing-host script. Fork-specific recommendation (lumen-nanoclaw), not upstream NanoClaw.
+description: Install MBIF (My-Brain-Is-Full-Crew) as the recommended vault-management layer for a projected-lifecycle agent group, derive a Briefer subagent from MBIF's Seeker for add-projected-sessions' briefing-host script, and seed a real Digester subagent for the vault memory pipeline's digest-generation phase. Fork-specific recommendation (lumen-nanoclaw), not upstream NanoClaw.
 ---
 
 # Add MBIF Vault
@@ -23,6 +23,13 @@ divergence was decided in this project's own design work (the "Memory
 Briefing Design" note, 2026-07-07) before this skill existed — this skill
 just makes that derivation repeatable instead of hand-done once.
 
+**Digester is not derived — it's a real, complete, already-working agent
+this skill ships verbatim** (`digester.md`, shipped alongside this
+`SKILL.md`). Unlike Briefer, it isn't a fork of an MBIF stock agent — it
+was purpose-built for this exact job (raw transcript → categorized,
+wikilinked, anchor-cited digest) and is generic enough to ship as-is: no
+vault-specific names, people, or projects hardcoded into its prompt.
+
 **Optional, not a hard dependency.** `add-projected-sessions`'s
 `briefing-host` template shells out to *whatever* `VAULT_PATH/.claude/agents/briefer.md`
 contains — it has no idea whether that came from this skill, a hand-written
@@ -43,6 +50,7 @@ onboarding conversation, not a scripted stand-in for it.
 ```bash
 test -f "<vault-path>/.claude/agents/seeker.md" && echo "MBIF already installed"
 test -f "<vault-path>/.claude/agents/briefer.md" && echo "Briefer already derived — skip to Wire it up"
+test -f "<vault-path>/.claude/agents/digester.md" && echo "Digester already seeded"
 test -f "<vault-path>/Meta/vault-map.md" && echo "Vault already onboarded"
 ```
 
@@ -136,6 +144,31 @@ let a fresh vault's Briefer diverge on its own. This skill's job stops at
 "a real Briefer exists, derived from a real Seeker," not "the one true
 Briefer prompt."
 
+### 5b. Seed Digester
+
+```bash
+cp "${CLAUDE_SKILL_DIR}/digester.md" "<vault-path>/.claude/agents/digester.md"
+```
+
+No editing needed — unlike Briefer, this is shipped ready to use.
+
+**Real dependency this skill does NOT provide.** `digester.md`'s prompt
+calls out to vault tooling by path — `Meta/scripts/link-index` (entity/
+project link lookup), `Meta/scripts/number-digest-blocks` (anchors the
+digest's own Event Log entries), `Meta/naming-conventions` (wikilink
+format reference), `Meta/user-profile` (personalization context), and its
+own post-it at `Meta/states/digester.md` (created on first run, not a
+dependency). **None of these come from MBIF's stock install or from this
+skill** — they're this fork's own custom vault tooling. A freshly
+MBIF-onboarded vault will not have them. Digester degrades gracefully for
+the parts it can (entity/project linking without `link-index` just means
+less consistent blind-link spelling; no anchor-numbering script means the
+digest's own entries aren't citable one tier up, which breaks the weekly
+digest phase) but does not silently pretend they exist. **Not solved
+here** — either hand-write equivalents for a fresh vault, or treat this as
+confirmation that a vault needs more than MBIF's stock onboarding before
+the full digest pipeline works end-to-end.
+
 ### 6. Wire it to `add-projected-sessions`
 
 Edit the target agent group's `briefing-host` script
@@ -180,6 +213,12 @@ a competing convention. Nothing to prepare for that here beyond having
   can't be skipped — if it's missing or buried, Seeker's original framing
   ("use when the user asks...") can leak through and the model may try to
   have a conversation instead of just emitting briefing text.
+- **Digester errors out or behaves inconsistently referencing scripts/notes
+  that don't exist.** Expected on a vault that only has MBIF's stock
+  onboarding — see step 5b's "Real dependency this skill does NOT
+  provide." Digester's prompt assumes `Meta/scripts/link-index`,
+  `Meta/scripts/number-digest-blocks`, and `Meta/naming-conventions`
+  exist; none of them ship with MBIF or this skill.
 
 ## Verify
 
@@ -191,6 +230,14 @@ cd "<vault-path>" && claude -p --agent briefer --output-format text --permission
 Should produce briefing-shaped text (or a reasonable "nothing found yet"
 for a brand-new vault), not a conversational reply asking what the user
 needs.
+
+```bash
+test -f "<vault-path>/.claude/agents/digester.md" && echo OK
+```
+
+A real end-to-end digest run needs an actual transcript file to point it
+at (see the vault memory pipeline's transcript-export phase) — not
+meaningfully testable in isolation with a placeholder input.
 
 ## Removal
 
@@ -205,6 +252,10 @@ See [REMOVE.md](REMOVE.md).
   before installing — this skill doesn't paraphrase or bypass them.
 - Briefer's derivation-from-Seeker design: Obsidian note "Memory Briefing:
   Design Notes" (2026-07-07), §5.
+- Digester (`digester.md`, shipped verbatim with this skill) is this
+  fork's own custom agent, not part of MBIF — built for the vault memory
+  pipeline's digest-generation phase (Obsidian note "Lumen on NanoClaw —
+  Vault Memory Pipeline Implementation Plan", Phase 3).
 - Depends on: `/add-host-scripts`, `/add-projected-sessions` (this skill's
-  entire output is meaningless without the `briefing-host` script that
+  Briefer output is meaningless without the `briefing-host` script that
   reads it).

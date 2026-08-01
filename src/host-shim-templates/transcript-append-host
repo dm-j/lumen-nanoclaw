@@ -1,0 +1,77 @@
+#!/bin/sh
+# transcript-append-host — default template, seeded once per group into its
+# own host-shims/ directory by group-init.ts's initGroupFilesystem (never
+# overwritten after — a group's own edits, chiefly VAULT_PATH and
+# VAULT_TIMEZONE, must survive every future spawn/restart).
+#
+# Calling contract (docs/host-shims.md; src/modules/vault-transcript/index.ts):
+# invoked once per delivered/inbound chat turn as
+#   transcript-append-host <speaker> <utc-iso-timestamp> <text>
+# and appends one turn to that local calendar day's
+# 07-Daily/Transcripts-readonly/YYYY/MM/DD.md, creating the file (with
+# frontmatter) on first turn of the day. No stdout contract — NanoClaw
+# only checks the exit code.
+#
+# Anchor/blockquote format matches this vault's own existing
+# Meta/scripts/assemble-transcript exactly (same slugify/compact_ts
+# algorithm, same block-anchor shape) so a hand-written or
+# assemble-transcript-produced transcript and one written by this script
+# are indistinguishable to digester or a human reader.
+
+set -eu
+
+# --- Per-group configuration — edit this for your vault ---
+VAULT_PATH="/CHANGE/ME/path/to/this/groups/obsidian/vault"
+VAULT_TIMEZONE="America/Chicago"
+# --- end configuration ---
+
+if [ ! -d "$VAULT_PATH" ] || [ "$VAULT_PATH" = "/CHANGE/ME/path/to/this/groups/obsidian/vault" ]; then
+  echo "transcript-append-host: VAULT_PATH not configured — edit $0" >&2
+  exit 1
+fi
+
+SPEAKER="$1"
+UTC_TS="$2"
+TEXT="$3"
+
+# Strip fractional seconds (JS toISOString() emits them; BSD date -f can't
+# parse them) before converting UTC -> local with an explicit offset.
+UTC_TS_WHOLE=$(echo "$UTC_TS" | sed -E 's/\.[0-9]+Z$/Z/')
+EPOCH=$(date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$UTC_TS_WHOLE" "+%s")
+LOCAL_TS=$(TZ="$VAULT_TIMEZONE" date -j -f "%s" "$EPOCH" "+%Y-%m-%dT%H:%M:%S%z" | sed -E 's/([+-][0-9]{2})([0-9]{2})$/\1:\2/')
+LOCAL_DATE="${LOCAL_TS%%T*}"
+
+YYYY=$(echo "$LOCAL_DATE" | cut -d- -f1)
+MM=$(echo "$LOCAL_DATE" | cut -d- -f2)
+DD=$(echo "$LOCAL_DATE" | cut -d- -f3)
+DEST_DIR="$VAULT_PATH/07-Daily/Transcripts-readonly/$YYYY/$MM"
+DEST="$DEST_DIR/$DD.md"
+
+mkdir -p "$DEST_DIR"
+
+if [ ! -f "$DEST" ]; then
+  {
+    echo "---"
+    echo "type: transcript"
+    echo "date: \"${LOCAL_DATE}\""
+    echo "tags: [transcript]"
+    echo "---"
+    echo
+    echo "# Transcript — ${LOCAL_DATE}"
+    echo
+  } > "$DEST"
+fi
+
+# Slug for the anchor: lowercase, spaces->hyphens, strip to [a-z0-9-].
+SLUG=$(echo "$SPEAKER" | tr '[:upper:]' '[:lower:]' | tr -s ' ' '-' | tr -cd 'a-z0-9-')
+# "2026-07-23T02:52:32-05:00" -> "20260723t025232-0500"
+COMPACT_TS=$(echo "$LOCAL_TS" | tr -d ':' | sed -E 's/^([0-9]{4})-([0-9]{2})-([0-9]{2})/\1\2\3/' | tr 'T' 't')
+
+{
+  echo "> **${SPEAKER} — ${LOCAL_TS}**"
+  # Quote every line of the text (blank lines become a bare '>').
+  echo "$TEXT" | sed -E 's/^$/>/; s/^([^>])/> \1/'
+  echo
+  echo "^${SLUG}-${COMPACT_TS}"
+  echo
+} >> "$DEST"

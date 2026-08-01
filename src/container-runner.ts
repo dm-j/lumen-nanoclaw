@@ -127,6 +127,15 @@ async function spawnContainer(session: Session): Promise<void> {
   }
   writeSessionRouting(agentGroup.id, session.id);
 
+  // Live per-turn vault transcript export — no table/flag; unconditional
+  // and cheap because execHostShim no-ops (a stat, not a spawn) when the
+  // group has no transcript-append-host script. See vault-transcript's
+  // own module header for the two-call-site design.
+  {
+    const { appendPendingInboundTurns } = await import('./modules/vault-transcript/index.js');
+    await appendPendingInboundTurns(agentGroup.id, session.id);
+  }
+
   // Materialize container.json from DB — writes fresh file and returns
   // the config object, threaded through provider resolution, buildMounts,
   // and buildContainerArgs so we don't re-read.

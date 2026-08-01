@@ -89,12 +89,16 @@ export function initGroupFilesystem(
     fs.mkdirSync(hostShimsDir, { recursive: true });
     initialized.push('host-shims/');
   }
-  const briefingHostDst = path.join(hostShimsDir, 'briefing-host');
-  const briefingHostSrc = path.join(HOST_SHIM_TEMPLATES_DIR, 'briefing-host');
-  if (!fs.existsSync(briefingHostDst) && fs.existsSync(briefingHostSrc)) {
-    fs.copyFileSync(briefingHostSrc, briefingHostDst);
-    fs.chmodSync(briefingHostDst, 0o755);
-    initialized.push('host-shims/briefing-host');
+  // transcript-append-host: same seed-once-never-overwrite treatment,
+  // for live per-turn vault transcript export (src/modules/vault-transcript/).
+  for (const shimName of ['briefing-host', 'transcript-append-host']) {
+    const shimDst = path.join(hostShimsDir, shimName);
+    const shimSrc = path.join(HOST_SHIM_TEMPLATES_DIR, shimName);
+    if (!fs.existsSync(shimDst) && fs.existsSync(shimSrc)) {
+      fs.copyFileSync(shimSrc, shimDst);
+      fs.chmodSync(shimDst, 0o755);
+      initialized.push(`host-shims/${shimName}`);
+    }
   }
 
   // Ensure container_configs row exists in the DB. Idempotent — no-op if

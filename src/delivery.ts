@@ -205,6 +205,20 @@ async function drainSession(session: Session): Promise<void> {
         markDelivered(inDb, msg.id, platformMsgId ?? null);
         deliveryAttempts.delete(msg.id);
 
+        // Live per-turn vault transcript export — cheap no-op when the
+        // group has no transcript-append-host script. See
+        // modules/vault-transcript/index.ts's module header.
+        if (msg.kind === 'chat') {
+          const { appendDeliveredOutboundTurn } = await import('./modules/vault-transcript/index.js');
+          const { resolveAssistantName } = await import('./container-config.js');
+          void appendDeliveredOutboundTurn(
+            session.agent_group_id,
+            resolveAssistantName(session.agent_group_id),
+            msg.timestamp,
+            msg.content,
+          );
+        }
+
         // Pause the typing indicator after a real user-facing message
         // lands on the user's screen, so the client has time to visually
         // clear the indicator before the next heartbeat tick brings it

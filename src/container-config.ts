@@ -60,6 +60,12 @@ export function resolveGroupTimezone(agentGroupId: string): string {
   return tz && isValidTimezone(tz) ? tz : TIMEZONE;
 }
 
+/** Effective display name for an agent group's responder: assistant_name override → group name. */
+export function resolveAssistantName(agentGroupId: string): string {
+  const group = getAgentGroup(agentGroupId);
+  return getContainerConfig(agentGroupId)?.assistant_name ?? group?.name ?? 'Assistant';
+}
+
 /** Build a `ContainerConfig` from a DB row + agent group identity. */
 export function configFromDb(row: ContainerConfigRow, group: AgentGroup): ContainerConfig {
   return {
