@@ -45,6 +45,7 @@ export interface ContainerConfig {
   model?: string;
   effort?: string;
   timezone?: string;
+  sessionLifecycle?: 'resumed' | 'projected';
   env?: Record<string, string>;
   blockedHosts?: string[];
 }
@@ -79,6 +80,7 @@ export function configFromDb(row: ContainerConfigRow, group: AgentGroup): Contai
     model: row.model ?? undefined,
     effort: row.effort ?? undefined,
     timezone: row.timezone && isValidTimezone(row.timezone) ? row.timezone : undefined,
+    sessionLifecycle: row.session_lifecycle === 'projected' ? 'projected' : 'resumed',
   };
 }
 

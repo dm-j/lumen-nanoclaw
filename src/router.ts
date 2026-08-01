@@ -17,10 +17,14 @@
  * drops (no agent wired, no trigger match); the access gate writes rows
  * for policy refusals.
  */
+import fs from 'fs';
+import path from 'path';
+
 import { getChannelAdapter, getChannelDefaults } from './channels/channel-registry.js';
 import { resolveThreadPolicy, resolveUnknownSenderPolicy } from './channels/channel-defaults.js';
 import { gateCommand } from './command-gate.js';
 import { getAgentGroup } from './db/agent-groups.js';
+import { getContainerConfig } from './db/container-configs.js';
 import { recordDroppedMessage } from './db/dropped-messages.js';
 import {
   createMessagingGroup,
@@ -29,12 +33,18 @@ import {
 } from './db/messaging-groups.js';
 import { findSessionForAgent } from './db/sessions.js';
 import { startTypingRefresh, stopTypingRefresh } from './modules/typing/index.js';
+import { compileBriefing, sessionBriefingKey } from './modules/synthetic-context/compile-briefing.js';
+import { renderLiteralTail } from './modules/synthetic-context/literal-tail.js';
 import { log } from './log.js';
-import { resolveSession, writeSessionMessage, writeOutboundDirect } from './session-manager.js';
+import { resolveSession, writeSessionMessage, writeOutboundDirect, sessionDir } from './session-manager.js';
 import { wakeContainer } from './container-runner.js';
 import { getSession } from './db/sessions.js';
 import type { AgentGroup, MessagingGroup, MessagingGroupAgent } from './types.js';
 import type { InboundEvent } from './channels/adapter.js';
+
+// Responder's own tail is real working context, not just tone — wider than
+// the compiler's (COMPILER_TAIL_TURNS in compile-briefing.ts).
+const RESPONDER_TAIL_TURNS = 40;
 
 function generateId(): string {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -527,6 +537,24 @@ async function deliverToAgent(
   });
 
   if (wake) {
+    // Projected-lifecycle sessions (Implementation Plan, Phase 1): compile a
+    // fresh briefing + literal tail BEFORE waking the container, and write
+    // them into the session dir the container mounts at /workspace — the
+    // responder never resumes its own transcript in this mode, so this is
+    // its only source of continuity. Runs synchronously (blocking this
+    // message's wake) by design; a slow/failed compile falls back to the
+    // previously stored briefing rather than blocking the turn indefinitely.
+    const containerConfig = getContainerConfig(agent.agent_group_id);
+    if (containerConfig?.session_lifecycle === 'projected') {
+      const sessionKey = sessionBriefingKey(session.agent_group_id, session.messaging_group_id, session.thread_id);
+      const batchText = safeParseContent(event.message.content).text ?? '';
+      const briefing = await compileBriefing(session.agent_group_id, session.id, sessionKey, batchText);
+      const tail = renderLiteralTail(session.agent_group_id, session.id, sessionKey, 'responder', RESPONDER_TAIL_TURNS);
+      const dir = sessionDir(session.agent_group_id, session.id);
+      fs.writeFileSync(path.join(dir, 'briefing.md'), briefing);
+      fs.writeFileSync(path.join(dir, 'recent-turns.md'), tail);
+    }
+
     // Typing indicator + wake are only for the engaged branch; accumulated
     // messages sit silently until a real trigger fires.
     // Typing fires via the adapter instance that owns this chat's row.

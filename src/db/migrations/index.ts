@@ -20,6 +20,9 @@ import { migration018 } from './018-approvals-approver-user-id.js';
 import { migration019 } from './019-wiring-threads.js';
 import { migration020 } from './020-container-config-timezone.js';
 import { migration021 } from './021-host-shims-dir.js';
+import { migration022 } from './022-session-lifecycle.js';
+import { migration023 } from './023-session-briefings.js';
+import { migration024 } from './024-tail-anchors.js';
 
 export interface Migration {
   version: number;
@@ -56,6 +59,9 @@ export const migrations: Migration[] = [
   migration019,
   migration020,
   migration021,
+  migration022,
+  migration023,
+  migration024,
 ];
 
 /** Row shape of PRAGMA foreign_key_check. Child rowids are stable across a

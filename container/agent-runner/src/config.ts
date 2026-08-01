@@ -18,6 +18,14 @@ export interface RunnerConfig {
   mcpServers: Record<string, { command: string; args: string[]; env: Record<string, string> }>;
   model?: string;
   effort?: string;
+  /**
+   * 'resumed' (default) = pre-feature behavior, resume the provider's own
+   * transcript every turn. 'projected' = the host compiles a briefing +
+   * literal tail into /workspace/briefing.md + /workspace/recent-turns.md
+   * before every wake; the poll loop never loads/persists a continuation
+   * and formatMessages() prepends those files as <briefing>/<recent-turns>.
+   */
+  sessionLifecycle: 'resumed' | 'projected';
 }
 
 const DEFAULT_MAX_MESSAGES = 10;
@@ -47,6 +55,7 @@ export function loadConfig(): RunnerConfig {
     mcpServers: (raw.mcpServers as RunnerConfig['mcpServers']) || {},
     model: (raw.model as string) || undefined,
     effort: (raw.effort as string) || undefined,
+    sessionLifecycle: raw.sessionLifecycle === 'projected' ? 'projected' : 'resumed',
   };
 
   return _config;

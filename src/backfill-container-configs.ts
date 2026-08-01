@@ -67,6 +67,7 @@ export function backfillContainerConfigs(): void {
       cli_scope: 'group',
       timezone: null,
       host_shims_dir: null,
+      session_lifecycle: null,
       updated_at: new Date().toISOString(),
     };
 

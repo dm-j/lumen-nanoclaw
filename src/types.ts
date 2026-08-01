@@ -27,6 +27,7 @@ export interface ContainerConfigRow {
   cli_scope: string; // 'disabled' | 'group' | 'global'
   timezone: string | null; // IANA id; NULL = follow the install-global timezone
   host_shims_dir: string | null; // NULL = default to groups/<folder>/host-shims/
+  session_lifecycle: string | null; // NULL/'resumed' | 'projected'
   updated_at: string;
 }
 
