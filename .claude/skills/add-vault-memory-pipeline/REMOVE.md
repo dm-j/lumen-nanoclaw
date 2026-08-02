@@ -17,6 +17,7 @@ ncl host-cron-jobs delete --job-id <id>
 rm -rf src/modules/vault-transcript
 rm -f src/host-shim-templates/transcript-append-host
 rm -f src/host-shim-templates/digest-daily-host
+rm -f src/host-shim-templates/digest-rollup-host
 ```
 
 ## 2. Remove `resolveAssistantName`
@@ -40,10 +41,10 @@ added after `markDelivered` in `drainSession`.
 
 ## 5. Stop seeding new groups
 
-`src/group-init.ts` — remove `'transcript-append-host'` and
-`'digest-daily-host'` from the shim-seeding loop's array (leave
-`'briefing-host'` alone unless `/add-projected-sessions` is also being
-removed).
+`src/group-init.ts` — remove `'transcript-append-host'`,
+`'digest-daily-host'`, and `'digest-rollup-host'` from the shim-seeding
+loop's array (leave `'briefing-host'` alone unless
+`/add-projected-sessions` is also being removed).
 
 ## 6. Build and test
 
