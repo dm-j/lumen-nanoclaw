@@ -1,0 +1,93 @@
+#!/usr/bin/env node
+// Read-only lookup for Digester (and anyone else linking to entities/projects):
+// prints every resolved note in 05-Entities/ and 01-Projects/ (name -> path,
+// for building a correct |alias link) plus every existing blind link already
+// in use vault-wide (so new mentions reuse the same spelling instead of
+// drifting, e.g. [[Kelly]] vs [[Kelly Smith]]).
+//
+// Does not create, edit, or promote anything -- pure read/report, same as
+// blind-link-candidates. Digester links to what this shows or, absent a
+// match, writes its own new blind link; Linker/Connector/Librarian handle
+// promotion and correctness later.
+//
+// Usage: link-index
+'use strict';
+const fs = require('fs');
+const path = require('path');
+
+const SCRIPT_DIR = __dirname;
+const VAULT_DIR = process.env.VAULT_ROOT && process.env.VAULT_ROOT.trim()
+  ? process.env.VAULT_ROOT
+  : path.resolve(SCRIPT_DIR, '..', '..');
+
+const LINK_RE = /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
+
+function walkMdFiles(dir, out = []) {
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return out;
+  }
+  for (const entry of entries) {
+    if (entry.name.startsWith('.')) continue;
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) walkMdFiles(full, out);
+    else if (entry.name.endsWith('.md')) out.push(full);
+  }
+  return out;
+}
+
+function resolvedNotes(root, nameFromFolder) {
+  // name (display text a link to this note would use) -> path without extension
+  const notes = new Map();
+  const rootDir = path.join(VAULT_DIR, root);
+  for (const file of walkMdFiles(rootDir)) {
+    const base = path.basename(file, '.md');
+    if (base === '_index') continue;
+    const rel = path.relative(VAULT_DIR, file).replace(/\.md$/, '');
+    // 01-Projects/ files live in `01-Projects/{{Project Name}}/{{date}} — Project — Name.md`
+    // (naming-conventions.md) -- the folder name is the canonical display
+    // name, not the dated filename. 05-Entities/ files are flat or
+    // split-folder (Kelly/Kelly.md), where the basename is already the name.
+    const dir = path.dirname(file);
+    const name = nameFromFolder && dir !== rootDir ? path.basename(dir) : base;
+    notes.set(name, rel);
+  }
+  return notes;
+}
+
+console.log('## Resolved entities (05-Entities/)\n');
+for (const [name, rel] of [...resolvedNotes('05-Entities', false)].sort()) {
+  console.log(`[[${rel}|${name}]]`);
+}
+
+console.log('\n## Resolved projects (01-Projects/)\n');
+for (const [name, rel] of [...resolvedNotes('01-Projects', true)].sort()) {
+  console.log(`[[${rel}|${name}]]`);
+}
+
+// Every blind link already in use vault-wide, with a use count -- reuse these
+// spellings verbatim rather than inventing a slightly different blind link
+// for the same thing.
+const blindCounts = new Map();
+const scanRoots = [
+  path.join(VAULT_DIR, '07-Daily', 'Digests-readonly'),
+  path.join(VAULT_DIR, '05-Entities'),
+  path.join(VAULT_DIR, '01-Projects'),
+];
+for (const root of scanRoots) {
+  for (const file of walkMdFiles(root)) {
+    const text = fs.readFileSync(file, 'utf8');
+    for (const match of text.matchAll(LINK_RE)) {
+      const [, name, alias] = match;
+      if (alias !== undefined) continue; // resolved link, not blind
+      blindCounts.set(name, (blindCounts.get(name) || 0) + 1);
+    }
+  }
+}
+
+console.log('\n## Existing blind links (reuse this exact spelling)\n');
+for (const [name, count] of [...blindCounts.entries()].sort((a, b) => b[1] - a[1])) {
+  console.log(`[[${name}]] — ${count} use${count === 1 ? '' : 's'}`);
+}

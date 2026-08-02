@@ -32,3 +32,4 @@ runnable end-to-end.
 <!-- Each entry: - [skill-name](../skill-name/SKILL.md) — applied YYYY-MM-DD — one-line why -->
 - [add-host-scripts](../add-host-scripts/SKILL.md) — applied 2026-08-01 — per-agent-group whitelisted host script execution; prerequisite for add-projected-sessions
 - [add-host-cron](../add-host-cron/SKILL.md) — applied 2026-08-01 — schedule host-shim scripts on a cron, no container spawn; foundation for the vault memory pipeline's export/digest jobs
+- [add-vault-memory-pipeline](../add-vault-memory-pipeline/SKILL.md) — applied 2026-08-01 — live per-turn transcript export + scheduled daily digest generation

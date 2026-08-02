@@ -51,6 +51,7 @@ onboarding conversation, not a scripted stand-in for it.
 test -f "<vault-path>/.claude/agents/seeker.md" && echo "MBIF already installed"
 test -f "<vault-path>/.claude/agents/briefer.md" && echo "Briefer already derived — skip to Wire it up"
 test -f "<vault-path>/.claude/agents/digester.md" && echo "Digester already seeded"
+test -f "<vault-path>/Meta/scripts/link-index" && echo "Vault tooling already seeded"
 test -f "<vault-path>/Meta/vault-map.md" && echo "Vault already onboarded"
 ```
 
@@ -152,22 +153,42 @@ cp "${CLAUDE_SKILL_DIR}/digester.md" "<vault-path>/.claude/agents/digester.md"
 
 No editing needed — unlike Briefer, this is shipped ready to use.
 
-**Real dependency this skill does NOT provide.** `digester.md`'s prompt
-calls out to vault tooling by path — `Meta/scripts/link-index` (entity/
-project link lookup), `Meta/scripts/number-digest-blocks` (anchors the
-digest's own Event Log entries), `Meta/naming-conventions` (wikilink
-format reference), `Meta/user-profile` (personalization context), and its
-own post-it at `Meta/states/digester.md` (created on first run, not a
-dependency). **None of these come from MBIF's stock install or from this
-skill** — they're this fork's own custom vault tooling. A freshly
-MBIF-onboarded vault will not have them. Digester degrades gracefully for
-the parts it can (entity/project linking without `link-index` just means
-less consistent blind-link spelling; no anchor-numbering script means the
-digest's own entries aren't citable one tier up, which breaks the weekly
-digest phase) but does not silently pretend they exist. **Not solved
-here** — either hand-write equivalents for a fresh vault, or treat this as
-confirmation that a vault needs more than MBIF's stock onboarding before
-the full digest pipeline works end-to-end.
+### 5c. Seed the vault tooling Digester depends on
+
+`digester.md`'s prompt calls out to vault tooling by path that comes
+neither from MBIF's stock install nor from `.claude/agents/` — it's this
+fork's own custom vault tooling, grabbed verbatim from the live vault this
+project is built against (not reimplemented or guessed):
+
+```bash
+mkdir -p "<vault-path>/Meta/scripts"
+cp "${CLAUDE_SKILL_DIR}/link-index" "<vault-path>/Meta/scripts/link-index"
+cp "${CLAUDE_SKILL_DIR}/number-digest-blocks" "<vault-path>/Meta/scripts/number-digest-blocks"
+chmod +x "<vault-path>/Meta/scripts/link-index" "<vault-path>/Meta/scripts/number-digest-blocks"
+cp "${CLAUDE_SKILL_DIR}/naming-conventions.md" "<vault-path>/Meta/naming-conventions.md"
+```
+
+`link-index` and `number-digest-blocks` are portable as shipped — both
+resolve the vault root relative to their own location (`Meta/scripts/../..`,
+overridable via `VAULT_ROOT`), verified against a throwaway vault at
+authoring time, not just copied on faith.
+
+**`naming-conventions.md` is not fully generic — said honestly, not
+smoothed over.** It's this fork's actual naming-conventions file, complete
+with dated rulings and vault-specific precedent examples (e.g. a named
+correction to a real entity's relationship, retention policy for
+NanoClaw's own memory-briefing cache). Digester's prompt only actually
+needs the "Wikilink format" section (the resolved-vs-blind-link shape) —
+the rest is provided because that's what was asked for ("grab them from
+the current in-use vault"), not because every section is load-bearing for
+a fresh vault. Trim it if the history/precedent content doesn't apply to
+the vault it's being seeded into.
+
+**Not provided, and not needed for Digester specifically:**
+`Meta/user-profile` (personalization — this is genuinely personal to
+whoever owns the vault, MBIF's own onboarding creates it) and
+`Meta/states/digester.md` (Digester's own post-it — self-creates on first
+run). Both are expected gaps, not oversights.
 
 ### 6. Wire it to `add-projected-sessions`
 
@@ -214,11 +235,15 @@ a competing convention. Nothing to prepare for that here beyond having
   ("use when the user asks...") can leak through and the model may try to
   have a conversation instead of just emitting briefing text.
 - **Digester errors out or behaves inconsistently referencing scripts/notes
-  that don't exist.** Expected on a vault that only has MBIF's stock
-  onboarding — see step 5b's "Real dependency this skill does NOT
-  provide." Digester's prompt assumes `Meta/scripts/link-index`,
-  `Meta/scripts/number-digest-blocks`, and `Meta/naming-conventions`
-  exist; none of them ship with MBIF or this skill.
+  that don't exist.** Confirm step 5c actually ran —
+  `<vault-path>/Meta/scripts/link-index` and `number-digest-blocks` must
+  exist and be executable, and `Meta/naming-conventions.md` must be
+  present.
+- **`link-index`/`number-digest-blocks` fail or resolve the wrong vault
+  root.** Both default to two directories up from their own location
+  (`Meta/scripts/../..`) — confirm they actually landed at
+  `<vault-path>/Meta/scripts/`, not a different depth, or set `VAULT_ROOT`
+  explicitly.
 
 ## Verify
 
@@ -233,8 +258,13 @@ needs.
 
 ```bash
 test -f "<vault-path>/.claude/agents/digester.md" && echo OK
+"<vault-path>/Meta/scripts/link-index" | head -5
+"<vault-path>/Meta/scripts/number-digest-blocks"
 ```
 
+`link-index` should run without error and print its three sections
+(even if empty on a fresh vault); `number-digest-blocks` should run
+without error and report 0 files touched on a vault with no digests yet.
 A real end-to-end digest run needs an actual transcript file to point it
 at (see the vault memory pipeline's transcript-export phase) — not
 meaningfully testable in isolation with a placeholder input.
@@ -256,6 +286,10 @@ See [REMOVE.md](REMOVE.md).
   fork's own custom agent, not part of MBIF — built for the vault memory
   pipeline's digest-generation phase (Obsidian note "Lumen on NanoClaw —
   Vault Memory Pipeline Implementation Plan", Phase 3).
+- `link-index`, `number-digest-blocks`, `naming-conventions.md` (shipped
+  alongside this skill) are likewise this fork's own vault tooling, taken
+  verbatim from the live vault it was authored against — not MBIF, not
+  reimplemented.
 - Depends on: `/add-host-scripts`, `/add-projected-sessions` (this skill's
   Briefer output is meaningless without the `briefing-host` script that
   reads it).

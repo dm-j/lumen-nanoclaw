@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Add deterministic per-entry block IDs (^000, ^001, ...) to every digest's
+# Event Log, mirroring the ^speaker-timestamp anchors written for transcript
+# turns. A digest entry can synthesize multiple turns, so it can't reuse a
+# timestamp anchor -- a plain incrementing counter per file is the
+# deterministic equivalent, and it's what a week/month-level digest links to
+# when citing a specific day's entry.
+#
+# Idempotent and backfilling: always walks the whole Digests-readonly tree
+# and strips any existing trailing " ^NNN" from an Event Log line before
+# renumbering, so a bare re-run picks up unnumbered digests, renumbers
+# cleanly after digester appends new entries, and is safe to call as often
+# as you like.
+#
+# Usage: number-digest-blocks
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VAULT_DIR="${VAULT_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
+DIGESTS_DIR="$VAULT_DIR/07-Daily/Digests-readonly"
+
+number_file() {
+  local file="$1"
+  local tmp
+  tmp="$(mktemp)"
+  local n=0
+  local in_log=0
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [[ "$line" == "## Event Log" ]]; then
+      in_log=1
+      printf '%s\n' "$line" >> "$tmp"
+      continue
+    fi
+    if [[ $in_log -eq 1 && "$line" =~ ^##[[:space:]] ]]; then
+      in_log=0
+    fi
+    if [[ $in_log -eq 1 && "$line" =~ ^-[[:space:]] ]]; then
+      stripped="${line%% \^[0-9][0-9][0-9]}"
+      printf '%s ^%03d\n' "$stripped" "$n" >> "$tmp"
+      n=$((n + 1))
+    else
+      printf '%s\n' "$line" >> "$tmp"
+    fi
+  done < "$file"
+
+  if ! cmp -s "$tmp" "$file"; then
+    mv "$tmp" "$file"
+    echo "Numbered $file ($n entries)"
+  else
+    rm -f "$tmp"
+  fi
+}
+
+while IFS= read -r f; do
+  number_file "$f"
+done < <(find "$DIGESTS_DIR" -type f -name '*.md' -not -path '*/intraday/*' | sort)

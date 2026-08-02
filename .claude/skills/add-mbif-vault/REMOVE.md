@@ -5,12 +5,19 @@ skill doesn't own its lifecycle and doesn't try to fully reverse an MBIF
 install. It only reverses what this skill itself did: deriving and wiring
 `briefer.md`.
 
-## 1. Remove the Briefer derivation and the seeded Digester
+## 1. Remove the Briefer derivation, the seeded Digester, and its vault tooling
 
 ```bash
 rm -f "<vault-path>/.claude/agents/briefer.md"
 rm -f "<vault-path>/.claude/agents/digester.md"
+rm -f "<vault-path>/Meta/scripts/link-index"
+rm -f "<vault-path>/Meta/scripts/number-digest-blocks"
+rm -f "<vault-path>/Meta/naming-conventions.md"
 ```
+
+Check whether anything else in the vault depends on `naming-conventions.md`
+before removing it — other agents/skills the operator has added since may
+reference it.
 
 ## 2. Unwire it from `briefing-host`
 
