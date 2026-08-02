@@ -89,9 +89,10 @@ export function initGroupFilesystem(
     fs.mkdirSync(hostShimsDir, { recursive: true });
     initialized.push('host-shims/');
   }
-  // transcript-append-host: same seed-once-never-overwrite treatment,
-  // for live per-turn vault transcript export (src/modules/vault-transcript/).
-  for (const shimName of ['briefing-host', 'transcript-append-host']) {
+  // transcript-append-host, digest-daily-host: same seed-once-never-overwrite
+  // treatment, for the vault memory pipeline (live per-turn transcript
+  // export + scheduled daily digest generation via add-host-cron).
+  for (const shimName of ['briefing-host', 'transcript-append-host', 'digest-daily-host']) {
     const shimDst = path.join(hostShimsDir, shimName);
     const shimSrc = path.join(HOST_SHIM_TEMPLATES_DIR, shimName);
     if (!fs.existsSync(shimDst) && fs.existsSync(shimSrc)) {
