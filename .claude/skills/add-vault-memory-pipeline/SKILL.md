@@ -197,25 +197,22 @@ VAULT_TIMEZONE="America/Chicago"   # or the group's own timezone
 # groups/<folder>/host-shims/digest-rollup-host — VAULT_PATH only, no timezone (librarian resolves "this week" itself)
 ```
 
-```nc:prompt digest_time validate:^([01]?[0-9]):[0-5][0-9]\s*(am|pm)$ flags:i normalize:trim
-What time should the daily vault digest run? Answer as e.g. "12:05am" or
-"1:30am" — this is when digest-daily-host processes yesterday's
-transcript, in the group's own configured timezone. Press enter / say
-nothing for the default, 12:05am.
-```
+Ask the operator: **"What time should the daily vault digest run?"**
+(e.g. "12:05am", "1:30am" — this is when `digest-daily-host` processes
+yesterday's transcript, in the group's own configured timezone). Default
+to **12:05am** if they have no preference.
 
-An unanswered prompt means the operator has no preference — apply the
-default (`12:05am`) rather than blocking. Convert whatever time is in
-effect to 5-field cron (`MM HH * * *`; e.g. `12:05am` → `5 0`, `1:30am` →
-`30 1`) and use it below. `digest-rollup-host`'s own schedule isn't part
-of this prompt — it defaults to a fixed offset after the daily digest
-(the example below keeps the ~3h15m gap the original crontab this is
-based on used between its `digester` and `librarian` jobs, so the rollup
-reliably runs after that day's digest exists) unless there's a reason to
-ask about it separately too.
+Convert whatever time is in effect to 5-field cron (`MM HH * * *`; e.g.
+`12:05am` → `5 0`, `1:30am` → `30 1`) and use it below.
+`digest-rollup-host`'s own schedule isn't part of this question — it
+defaults to a fixed offset after the daily digest (the example below
+keeps the ~3h15m gap the original crontab this is based on used between
+its `digester` and `librarian` jobs, so the rollup reliably runs after
+that day's digest exists) unless there's a reason to ask about it
+separately too.
 
 ```bash
-ncl host-cron-jobs create --id <group-id> --name digest-daily --cron "<converted digest_time> * * *"
+ncl host-cron-jobs create --id <group-id> --name digest-daily --cron "5 0 * * *"   # replace "5 0" with the converted answer
 ncl host-cron-jobs create --id <group-id> --name digest-rollup --cron "0 4 * * *"
 ```
 
