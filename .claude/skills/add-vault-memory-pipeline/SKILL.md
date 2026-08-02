@@ -29,15 +29,49 @@ prompt — against the real crontab job it's taken from) at authoring time:
 Together they close the write side of the vault memory pipeline that
 `/add-projected-sessions`'s `briefing-host` reads from.
 
-**A real operational note, not resolved here:** if the vault a group
-points at is *also* maintained by an existing system crontab doing this
-same rollup (as this fork's own vault is), both `digest-rollup-host` and
-the crontab job can end up running against the same files. Librarian's
-own idempotency (create-if-absent, fill-in-only-what's-missing) should
-make double-running harmless, but this hasn't been verified under actual
-concurrent execution — if a group's vault has its own crontab already
-doing this, prefer disabling one path rather than assuming both are
-perfectly safe together.
+**If the vault a group points at already has its own system crontab doing
+this same maintenance** (as this fork's own vault does): don't run both.
+Decided plan — remove the crontab entries once this skill's scripts are
+confirmed working for that vault, don't try to run them concurrently.
+See "Migrating off an existing crontab" below.
+
+## Migrating off an existing crontab
+
+If a vault already has cron jobs doing what `transcript-append-host`,
+`digest-daily-host`, and `digest-rollup-host` now do, identify which
+crontab lines are actually superseded before touching anything — not
+every line in a maintenance crontab is: only remove entries whose job
+this skill's scripts now perform.
+
+**Superseded (safe to remove once cutover is confirmed working):**
+- Any `assemble-transcript <today> <yesterday>` line — replaced by
+  `transcript-append-host`'s live per-turn append.
+- Any `invoke-claude digester -- -p "...digesting yesterday's...raw
+  transcript..."` line — replaced by `digest-daily-host`.
+- Any `invoke-claude librarian -- -p "...Roll up this week's daily
+  digests...append...to its monthly digest..."` line — replaced by
+  `digest-rollup-host`.
+
+**Not superseded — leave alone:** anything doing inbox triage (`sorter`),
+blind-link promotion (`linker`), vault-wide dedup/maintenance (`scribe`),
+skill-mining (`skill-drafter`), or unrelated housekeeping (a vault git
+auto-commit, a sketch/intraday check). This skill only covers the
+transcript-export → daily-digest → weekly/monthly-rollup chain, nothing
+else a vault's crontab might be doing.
+
+**Cutover order, per group:**
+1. Apply this skill, configure `VAULT_PATH`/`VAULT_TIMEZONE` in all three
+   scripts, wire the two `host-cron-jobs` (Apply step 7).
+2. Let both paths run in parallel for at least one full day/week cycle —
+   confirm `transcript-append-host` produces the same shape of output the
+   crontab's `assemble-transcript` did, and that `digest-daily-host`/
+   `digest-rollup-host` fire and produce correct files.
+3. Only then remove the superseded crontab lines
+   (`crontab -e`, delete just those lines — never `crontab -r`, which
+   wipes the whole table including the unrelated jobs above).
+4. Keep the old scripts (`assemble-transcript`, the crontab's inline
+   prompts) around on disk even after removal — they're not deleted by
+   this cutover, just no longer scheduled, in case of rollback.
 
 ## Pre-flight
 
@@ -151,7 +185,7 @@ pnpm test
 
 No container rebuild needed — nothing in `container/agent-runner/` changed.
 
-### 7. Configure and schedule per group
+### 7. Configure, ask what time the digest should run, and schedule per group
 
 ```sh
 # groups/<folder>/host-shims/transcript-append-host — edit:
@@ -163,8 +197,25 @@ VAULT_TIMEZONE="America/Chicago"   # or the group's own timezone
 # groups/<folder>/host-shims/digest-rollup-host — VAULT_PATH only, no timezone (librarian resolves "this week" itself)
 ```
 
+```nc:prompt digest_time validate:^([01]?[0-9]):[0-5][0-9]\s*(am|pm)$ flags:i normalize:trim
+What time should the daily vault digest run? Answer as e.g. "12:05am" or
+"1:30am" — this is when digest-daily-host processes yesterday's
+transcript, in the group's own configured timezone. Press enter / say
+nothing for the default, 12:05am.
+```
+
+An unanswered prompt means the operator has no preference — apply the
+default (`12:05am`) rather than blocking. Convert whatever time is in
+effect to 5-field cron (`MM HH * * *`; e.g. `12:05am` → `5 0`, `1:30am` →
+`30 1`) and use it below. `digest-rollup-host`'s own schedule isn't part
+of this prompt — it defaults to a fixed offset after the daily digest
+(the example below keeps the ~3h15m gap the original crontab this is
+based on used between its `digester` and `librarian` jobs, so the rollup
+reliably runs after that day's digest exists) unless there's a reason to
+ask about it separately too.
+
 ```bash
-ncl host-cron-jobs create --id <group-id> --name digest-daily --cron "45 0 * * *"
+ncl host-cron-jobs create --id <group-id> --name digest-daily --cron "<converted digest_time> * * *"
 ncl host-cron-jobs create --id <group-id> --name digest-rollup --cron "0 4 * * *"
 ```
 
@@ -212,8 +263,9 @@ the week is actually over" logic work).
   produced.
 - **Weekly/monthly digest looks duplicated or double-appended after
   running both this and an external crontab against the same vault.**
-  See the SKILL's own "real operational note" above — this combination
-  is untested; disable one path.
+  Expected if the cutover in "Migrating off an existing crontab" wasn't
+  completed — remove the superseded crontab lines rather than running
+  both indefinitely.
 
 ## Verify
 
