@@ -92,7 +92,7 @@ export function initGroupFilesystem(
   // transcript-append-host, digest-daily-host: same seed-once-never-overwrite
   // treatment, for the vault memory pipeline (live per-turn transcript
   // export + scheduled daily digest generation via add-host-cron).
-  for (const shimName of ['briefing-host', 'transcript-append-host', 'digest-daily-host']) {
+  for (const shimName of ['briefing-host', 'transcript-append-host', 'digest-daily-host', 'digest-rollup-host']) {
     const shimDst = path.join(hostShimsDir, shimName);
     const shimSrc = path.join(HOST_SHIM_TEMPLATES_DIR, shimName);
     if (!fs.existsSync(shimDst) && fs.existsSync(shimSrc)) {
