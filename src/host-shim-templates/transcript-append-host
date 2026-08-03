@@ -18,6 +18,17 @@
 # assemble-transcript-produced transcript and one written by this script
 # are indistinguishable to digester or a human reader.
 
+case "${1:-}" in
+  -h|--help)
+    cat <<'EOF'
+transcript-append — append one conversation turn to today's transcript.
+
+Usage: transcript-append <speaker> <utc-iso-timestamp> <text>
+EOF
+    exit 0
+    ;;
+esac
+
 set -eu
 
 # --- Per-group configuration — edit this for your vault ---

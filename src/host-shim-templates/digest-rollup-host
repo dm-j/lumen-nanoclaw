@@ -28,6 +28,20 @@
 # yet, so this is a deliberate delta from what's actually running today,
 # not something already proven in production.
 
+case "${1:-}" in
+  -h|--help)
+    cat <<'EOF'
+digest-rollup — roll this week's daily digests up into the weekly digest,
+and the weekly digest up into the monthly digest once a week completes.
+
+Usage: digest-rollup
+
+Takes no arguments.
+EOF
+    exit 0
+    ;;
+esac
+
 set -eu
 
 # --- Per-group configuration — edit this for your vault ---

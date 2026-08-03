@@ -19,6 +19,18 @@
 # same shape, different embedded policy per group) — do not point two
 # groups' scripts at the same vault unless that sharing is deliberate.
 
+case "${1:-}" in
+  -h|--help)
+    cat <<'EOF'
+briefing — compile an updated memory briefing from the previous briefing
+plus a new batch of inbound messages.
+
+Usage: briefing <prev-briefing-file> <new-batch-file>
+EOF
+    exit 0
+    ;;
+esac
+
 set -eu
 
 # --- Per-group configuration — edit this for your vault ---

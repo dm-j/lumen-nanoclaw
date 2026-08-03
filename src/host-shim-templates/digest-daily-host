@@ -21,6 +21,20 @@
 # — this script does not check whether a digest already exists for the
 # date; re-running is always safe.
 
+case "${1:-}" in
+  -h|--help)
+    cat <<'EOF'
+digest-daily — digest a day's transcript into the vault's daily digests.
+
+Usage: digest-daily [YYYY-MM-DD]
+
+Defaults to yesterday (in the vault's configured timezone) if no date is
+given.
+EOF
+    exit 0
+    ;;
+esac
+
 set -eu
 
 # --- Per-group configuration — edit this for your vault ---

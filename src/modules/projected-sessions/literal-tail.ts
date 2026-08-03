@@ -100,9 +100,17 @@ export function renderLiteralTail(
   sessionKey: string,
   lane: TailLane,
   n: number,
+  leadingBriefing?: string,
 ): string {
   const all = readAllTurns(agentGroupId, sessionId);
-  if (all.length === 0) return '';
+
+  // The briefing (already formatted with its own per-entry headers by
+  // getBriefingHistoryText) is prepended as an uncounted leading block — it
+  // never touches `selected`, the anchor, or the N-turn budget below, so
+  // growth and reset behavior are exactly as before regardless of length.
+  const briefingBlock = leadingBriefing?.trim() ?? '';
+
+  if (all.length === 0) return briefingBlock;
 
   const anchor = getTailAnchor(sessionKey, lane);
 
@@ -120,5 +128,7 @@ export function renderLiteralTail(
   const newAnchorTs = selected[0]?.timestamp ?? null;
   setTailAnchor(sessionKey, lane, newAnchorTs, selected.length);
 
-  return selected.map((r) => `[${r.timestamp}] ${r.sender}: ${r.text}`).join('\n');
+  const turnsBlock = selected.map((r) => `[${r.timestamp}] ${r.sender}: ${r.text}`).join('\n');
+
+  return briefingBlock ? `${briefingBlock}\n\n${turnsBlock}` : turnsBlock;
 }

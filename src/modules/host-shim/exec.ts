@@ -118,7 +118,8 @@ export function execHostShim(
         // exit, or a string (e.g. 'ENOENT', 'ETIMEDOUT') if the process
         // itself failed to run — the latter has no exit code to report.
         if (error && typeof error.code !== 'number') {
-          resolve({ ok: true, exitCode: 1, stdout, stderr: stderr || error.message });
+          const reason = error.signal ? `killed by ${error.signal}` : error.message;
+          resolve({ ok: true, exitCode: 1, stdout, stderr: stderr ? `${stderr}\n${reason}` : reason });
           return;
         }
         const exitCode = error ? (error.code as number) : 0;

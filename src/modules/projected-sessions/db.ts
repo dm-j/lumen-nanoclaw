@@ -49,6 +49,44 @@ export function setSessionBriefing(sessionKey: string, content: string): void {
     .run(sessionKey, content, new Date().toISOString());
 }
 
+/**
+ * Rolling briefing history, capped at `cap` most recent entries per session
+ * key — shown to both compiler and responder tails so a briefing ages out
+ * of context at the same rate for both sides (see migration 027). Trims on
+ * every insert rather than on read, so the table never grows past `cap`
+ * rows per session key.
+ */
+export function appendBriefingHistory(sessionKey: string, content: string, cap: number): void {
+  const db = getDb();
+  const nextSeq = (
+    db
+      .prepare('SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM session_briefing_history WHERE session_key = ?')
+      .get(sessionKey) as { next: number }
+  ).next;
+  db.prepare('INSERT INTO session_briefing_history (session_key, seq, content, created_at) VALUES (?, ?, ?, ?)').run(
+    sessionKey,
+    nextSeq,
+    content,
+    new Date().toISOString(),
+  );
+  db.prepare(
+    `DELETE FROM session_briefing_history WHERE session_key = ? AND seq <= (
+       SELECT seq FROM session_briefing_history WHERE session_key = ? ORDER BY seq DESC LIMIT 1 OFFSET ?
+     )`,
+  ).run(sessionKey, sessionKey, cap);
+}
+
+/** Oldest-first text of the last `cap` briefings, one `[briefing <timestamp>]` block each. */
+export function getBriefingHistoryText(sessionKey: string, cap: number): string {
+  const rows = getDb()
+    .prepare('SELECT content, created_at FROM session_briefing_history WHERE session_key = ? ORDER BY seq DESC LIMIT ?')
+    .all(sessionKey, cap) as Array<{ content: string; created_at: string }>;
+  return rows
+    .reverse()
+    .map((r) => `[briefing ${r.created_at}]\n${r.content}`)
+    .join('\n\n');
+}
+
 export type TailLane = 'compiler' | 'responder';
 
 export interface TailAnchor {

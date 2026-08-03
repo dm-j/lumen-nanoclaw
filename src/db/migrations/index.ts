@@ -22,6 +22,7 @@ import { migration020 } from './020-container-config-timezone.js';
 import { migration021 } from './021-host-shims-dir.js';
 import { migration025 } from './025-projected-sessions.js';
 import { migration026 } from './026-host-cron.js';
+import { migration027 } from './027-briefing-history.js';
 
 export interface Migration {
   version: number;
@@ -60,6 +61,7 @@ export const migrations: Migration[] = [
   migration021,
   migration025,
   migration026,
+  migration027,
 ];
 
 /** Row shape of PRAGMA foreign_key_check. Child rowids are stable across a

@@ -10,16 +10,25 @@
  * not gated behind hasTable() the way schema-owning modules are.
  *
  * Two call sites: inbound turns are appended from container-runner.ts's
- * spawnContainer (reads the pending batch straight from inbound.db, same
- * pattern as projected-sessions' synthesize.ts); outbound turns are
+ * wakeContainer, before the already-running short-circuit (reads the
+ * pending batch straight from inbound.db, same pattern as
+ * projected-sessions' synthesize.ts) — this must run on every wake, not
+ * just fresh spawns, since an already-warm container's poll loop picks up
+ * new inbound rows with no other host-side hook; outbound turns are
  * appended from delivery.ts, right after a message is marked delivered.
  *
  * Known limitation: if a container crashes mid-turn and host-sweep resets
  * a message back to 'pending' for a retry wake, that message's inbound
  * turn gets appended again on the retry — a rare duplicate line in the
- * transcript. Not tracked/deduped (would need a new table, defeating the
- * zero-footprint design) — same "human can fix the vault file by hand"
- * tolerance as an unresolved sender name.
+ * transcript. Not tracked/deduped in the DB (would need a new table,
+ * defeating the zero-footprint design) — same "human can fix the vault
+ * file by hand" tolerance as an unresolved sender name. An in-memory-only
+ * watermark (`lastExportedSeq` below) still covers the much more common
+ * case — wakeContainer firing more than once for the same session while a
+ * message is still 'pending' (e.g. two messages close together on an
+ * already-warm container) — without persisting anything; it resets on
+ * host restart, which only re-widens the window back to the rare case
+ * above, never worse.
  */
 import fs from 'fs';
 
@@ -27,6 +36,8 @@ import { execHostShim } from '../host-shim/exec.js';
 import { inboundDbPath } from '../../session-manager.js';
 import { openInboundDb } from '../../db/session-db.js';
 import { log } from '../../log.js';
+
+const lastExportedSeq = new Map<string, number>();
 
 async function appendTranscriptTurn(
   agentGroupId: string,
@@ -68,21 +79,25 @@ function parseChatContent(content: string): { sender: string; text: string } {
   }
 }
 
-/** Append every currently-pending inbound chat turn for this session. Called at wake, before the container consumes them. */
+/** Append every currently-pending inbound chat turn for this session not already exported. Called at wake, before the container consumes them. */
 export async function appendPendingInboundTurns(agentGroupId: string, sessionId: string): Promise<void> {
   const dbPath = inboundDbPath(agentGroupId, sessionId);
   if (!fs.existsSync(dbPath)) return;
 
   const db = openInboundDb(dbPath);
   try {
+    const sinceSeq = lastExportedSeq.get(sessionId) ?? 0;
     const rows = db
       .prepare(
-        `SELECT timestamp, content FROM messages_in WHERE status = 'pending' AND kind IN ('chat','chat-sdk') ORDER BY seq ASC`,
+        `SELECT seq, timestamp, content FROM messages_in
+         WHERE status = 'pending' AND kind IN ('chat','chat-sdk') AND seq > ?
+         ORDER BY seq ASC`,
       )
-      .all() as Array<{ timestamp: string; content: string }>;
+      .all(sinceSeq) as Array<{ seq: number; timestamp: string; content: string }>;
     for (const row of rows) {
       const { sender, text } = parseChatContent(row.content);
       await appendTranscriptTurn(agentGroupId, sender, row.timestamp, text);
+      lastExportedSeq.set(sessionId, row.seq);
     }
   } finally {
     db.close();
