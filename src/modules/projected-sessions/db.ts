@@ -92,27 +92,37 @@ export type TailLane = 'compiler' | 'responder';
 export interface TailAnchor {
   anchorTs: string | null;
   count: number;
+  lastCallAt: string | null;
 }
 
 export function getTailAnchor(sessionKey: string, lane: TailLane): TailAnchor {
   const col = lane === 'compiler' ? 'compiler_anchor_ts' : 'responder_anchor_ts';
   const countCol = lane === 'compiler' ? 'compiler_anchor_count' : 'responder_anchor_count';
+  const lastCallCol = lane === 'compiler' ? 'compiler_last_call_at' : 'responder_last_call_at';
   const row = getDb()
-    .prepare(`SELECT ${col} AS anchorTs, ${countCol} AS count FROM session_briefings WHERE session_key = ?`)
-    .get(sessionKey) as { anchorTs: string | null; count: number } | undefined;
-  return row ?? { anchorTs: null, count: 0 };
+    .prepare(
+      `SELECT ${col} AS anchorTs, ${countCol} AS count, ${lastCallCol} AS lastCallAt
+       FROM session_briefings WHERE session_key = ?`,
+    )
+    .get(sessionKey) as { anchorTs: string | null; count: number; lastCallAt: string | null } | undefined;
+  return row ?? { anchorTs: null, count: 0, lastCallAt: null };
 }
 
+/** `lastCallAt` is stamped with the current wall-clock time on every call — it
+ * marks when the cache-relevant API call happened, not a message timestamp,
+ * so it can be compared against the cache TTL regardless of message cadence. */
 export function setTailAnchor(sessionKey: string, lane: TailLane, anchorTs: string | null, count: number): void {
   const col = lane === 'compiler' ? 'compiler_anchor_ts' : 'responder_anchor_ts';
   const countCol = lane === 'compiler' ? 'compiler_anchor_count' : 'responder_anchor_count';
+  const lastCallCol = lane === 'compiler' ? 'compiler_last_call_at' : 'responder_last_call_at';
+  const now = new Date().toISOString();
   getDb()
     .prepare(
-      `INSERT INTO session_briefings (session_key, content, updated_at, ${col}, ${countCol})
-       VALUES (?, '', ?, ?, ?)
-       ON CONFLICT(session_key) DO UPDATE SET ${col} = excluded.${col}, ${countCol} = excluded.${countCol}`,
+      `INSERT INTO session_briefings (session_key, content, updated_at, ${col}, ${countCol}, ${lastCallCol})
+       VALUES (?, '', ?, ?, ?, ?)
+       ON CONFLICT(session_key) DO UPDATE SET ${col} = excluded.${col}, ${countCol} = excluded.${countCol}, ${lastCallCol} = excluded.${lastCallCol}`,
     )
-    .run(sessionKey, new Date().toISOString(), anchorTs, count);
+    .run(sessionKey, now, anchorTs, count, now);
 }
 
 const BATCH_READ_CAP = 50;

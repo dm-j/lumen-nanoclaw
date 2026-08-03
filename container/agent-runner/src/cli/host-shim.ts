@@ -28,7 +28,10 @@ type ShimResponse = {
 
 const INBOUND_DB = '/workspace/inbound.db';
 const OUTBOUND_DB = '/workspace/outbound.db';
-const TIMEOUT_MS = 30_000;
+// See mcp-tools/memory-fact.ts's HOST_SHIM_TIMEOUT_MS for why this needs to
+// stay above the host's own execHostShim ceiling for subagent-dispatch shims
+// (recall/remember/digest/briefing) rather than the old flat 30s.
+const TIMEOUT_MS = 210_000;
 
 function generateId(): string {
   return `shim-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;

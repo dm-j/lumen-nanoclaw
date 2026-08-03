@@ -20,6 +20,24 @@
  * (`compileBriefing`'s COMPILER_TAIL_TURNS vs. `synthesize.ts`'s
  * RESPONDER_TAIL_TURNS) — anchor state per lane lives in `session_briefings`
  * (migration 025, this module's own table).
+ *
+ * The 2N turn-count trigger alone under-resets for a lane whose calls go
+ * through Anthropic's server-side ephemeral prompt cache: a gap between
+ * calls longer than the cache TTL already invalidates the cached prefix
+ * regardless of where the anchor sits in its N→2N cycle, so the anchor keeps
+ * growing through that gap and the eventual cache-miss rebuild pays full
+ * price for a bigger tail than N ever required. The optional `cacheTtlMs`
+ * param (migration 028's `*_last_call_at` columns) adds that second,
+ * independent reset trigger for callers where it actually applies.
+ *
+ * Deliberately opt-in, not blanket-applied to every lane: the compiler lane
+ * (`compileBriefing`) shells out to a fresh `claude -p --agent briefer`
+ * process per call — a real Anthropic API call each time, so the ephemeral
+ * cache TTL is a real constraint and this lane passes `cacheTtlMs`. The
+ * responder lane (`synthesize.ts`, Lumen's own in-container session) instead
+ * feeds a live provider session resume — a different caching path entirely,
+ * not proven to share the same TTL behavior — so it omits `cacheTtlMs` and
+ * keeps the original pure 2N-count reset until that's verified.
  */
 import fs from 'fs';
 
@@ -37,6 +55,12 @@ interface TailRow {
 // or hold, independent of N — protects a long-lived agent-shared session from
 // an unbounded per-turn read once growth is in play.
 const SAFETY_CAP = 500;
+
+// Anthropic's default ephemeral prompt-cache TTL, for callers that opt into
+// the `cacheTtlMs` reset trigger. Not configurable per call today (would
+// need a 1h-cache beta header to raise it) — if that changes, this constant
+// is the one place to update.
+export const DEFAULT_CACHE_TTL_MS = 5 * 60 * 1000;
 
 function parseText(content: string): string {
   try {
@@ -101,6 +125,7 @@ export function renderLiteralTail(
   lane: TailLane,
   n: number,
   leadingBriefing?: string,
+  cacheTtlMs?: number,
 ): string {
   const all = readAllTurns(agentGroupId, sessionId);
 
@@ -114,13 +139,17 @@ export function renderLiteralTail(
 
   const anchor = getTailAnchor(sessionKey, lane);
 
+  const cacheStale =
+    cacheTtlMs !== undefined && anchor.lastCallAt !== null && Date.now() - Date.parse(anchor.lastCallAt) > cacheTtlMs;
+
   let selected: TailRow[];
-  const needsReset = anchor.anchorTs === null || anchor.count >= 2 * n;
+  const needsReset = anchor.anchorTs === null || anchor.count >= 2 * n || cacheStale;
 
   selected = needsReset ? [] : all.filter((r) => r.timestamp >= anchor.anchorTs!);
 
-  // Anchor missing, past its 2N cap, or stale (aged out of SAFETY_CAP,
-  // filter came back empty) — reset to the last N turns, fresh cycle.
+  // Anchor missing, past its 2N cap, cache-stale (see CACHE_TTL_MS above), or
+  // aged out of SAFETY_CAP (filter came back empty) — reset to the last N
+  // turns, fresh cycle.
   if (selected.length === 0) {
     selected = all.slice(-n);
   }

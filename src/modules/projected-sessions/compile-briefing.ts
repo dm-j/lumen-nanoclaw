@@ -11,13 +11,15 @@ import path from 'path';
 
 import { execHostShim } from '../host-shim/exec.js';
 import { appendBriefingHistory, getBriefingHistoryText, getSessionBriefing, setSessionBriefing } from './db.js';
-import { renderLiteralTail } from './literal-tail.js';
+import { DEFAULT_CACHE_TTL_MS, renderLiteralTail } from './literal-tail.js';
 import { log } from '../../log.js';
 
 // Real Briefer calls run 20-90s in production use (Synthetic Context doc,
 // 2026-07-17); the shared host-shim default (30s) is sized for cheap scripts,
 // not a subagent dispatch. compile-briefing is the one caller that needs more.
-const COMPILE_TIMEOUT_MS = 120_000;
+// Bumped from 120s once briefing-host started routing through
+// PrefixRouter/Ollama, whose round-trips run slower than Anthropic's.
+const COMPILE_TIMEOUT_MS = 180_000;
 
 // Compiler's own tail is tone/continuity only — small on purpose so it
 // doesn't crowd out what the compiler is supposed to be freshly looking up.
@@ -50,7 +52,19 @@ export async function compileBriefing(
   // framed as "already-known context", so its own instructions can tell it
   // not to restate what's already visible here.
   const briefingHistory = getBriefingHistoryText(sessionKey, COMPILER_TAIL_TURNS);
-  const tail = renderLiteralTail(agentGroupId, sessionId, sessionKey, 'compiler', COMPILER_TAIL_TURNS, briefingHistory);
+  // Compiler lane shells out to a fresh `claude -p --agent briefer` process
+  // per call — a real API call each time, so the ephemeral prompt-cache TTL
+  // is a real constraint here (see literal-tail.ts's header for why the
+  // responder lane deliberately omits this).
+  const tail = renderLiteralTail(
+    agentGroupId,
+    sessionId,
+    sessionKey,
+    'compiler',
+    COMPILER_TAIL_TURNS,
+    briefingHistory,
+    DEFAULT_CACHE_TTL_MS,
+  );
   const batchWithTail = tail ? `## Recent turns\n\n${tail}\n\n## New message\n\n${newBatchText}` : newBatchText;
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nanoclaw-briefing-'));

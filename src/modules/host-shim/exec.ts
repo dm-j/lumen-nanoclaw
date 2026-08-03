@@ -31,6 +31,19 @@ const NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const TIMEOUT_MS = 30_000;
 const MAX_BUFFER = 1024 * 1024; // 1MB cap on captured stdout/stderr
 
+// Subagent-dispatch calls (`claude -p --agent <x>`) run 20-90s in production
+// use; plain export/utility scripts don't need that long. Name-prefix
+// heuristic rather than a per-job column (mirrors host-cron/run.ts's own,
+// now shared from here) — revisit if a shim needs a timeout between these
+// two bands. Exported so any execHostShim caller gets the same default
+// without re-deriving its own list.
+const LONG_TIMEOUT_MS = 180_000;
+const LONG_RUNNING_PREFIXES = ['digest', 'recall', 'remember', 'briefing'];
+
+export function timeoutFor(name: string): number {
+  return LONG_RUNNING_PREFIXES.some((p) => name.startsWith(p)) ? LONG_TIMEOUT_MS : TIMEOUT_MS;
+}
+
 export interface ShimResult {
   ok: boolean;
   exitCode: number;
@@ -90,7 +103,7 @@ export function execHostShim(
   agentGroupId: string,
   name: string,
   args: string[],
-  timeoutMs = TIMEOUT_MS,
+  timeoutMs = timeoutFor(name),
 ): Promise<ShimResult> {
   if (!NAME_RE.test(name)) {
     return Promise.resolve(refuse(`"${name}" is not a valid shim name`));

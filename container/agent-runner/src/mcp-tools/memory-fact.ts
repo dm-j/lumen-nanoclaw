@@ -15,7 +15,14 @@ import { execFile } from 'node:child_process';
 import { registerTools } from './server.js';
 import type { McpToolDefinition } from './types.js';
 
-const HOST_SHIM_TIMEOUT_MS = 30_000;
+// recall/remember dispatch a `claude -p --agent <x>` subagent call on the
+// host (recall-host/remember-host), which per compile-briefing.ts's own
+// documented range runs 20-90s in production. Layered above the container's
+// own host-shim CLI poll deadline (cli/host-shim.ts, 210s), which is itself
+// above the host's execHostShim ceiling for these names (host-shim/exec.ts's
+// timeoutFor, 180s) — each wrapper needs enough margin to let the layer
+// inside it report its own clean timeout instead of being killed mid-write.
+const HOST_SHIM_TIMEOUT_MS = 220_000;
 const MAX_BUFFER = 1024 * 1024;
 
 function ok(text: string) {
