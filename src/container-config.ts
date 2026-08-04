@@ -15,6 +15,7 @@ import { GROUPS_DIR, TIMEZONE } from './config.js';
 import { getContainerConfig } from './db/container-configs.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import { isValidTimezone } from './timezone.js';
+import { discoverMcpShims, type McpShimManifestEntry } from './modules/host-shim/mcp-manifest.js';
 import type { AgentGroup, ContainerConfigRow } from './types.js';
 
 export interface McpServerConfig {
@@ -47,6 +48,7 @@ export interface ContainerConfig {
   timezone?: string;
   env?: Record<string, string>;
   blockedHosts?: string[];
+  mcpShims: McpShimManifestEntry[];
 }
 
 /**
@@ -85,6 +87,7 @@ export function configFromDb(row: ContainerConfigRow, group: AgentGroup): Contai
     model: row.model ?? undefined,
     effort: row.effort ?? undefined,
     timezone: row.timezone && isValidTimezone(row.timezone) ? row.timezone : undefined,
+    mcpShims: [],
   };
 }
 
@@ -101,6 +104,7 @@ export function materializeContainerJson(agentGroupId: string): ContainerConfig 
   if (!row) throw new Error(`Container config not found for agent group: ${agentGroupId}`);
 
   const config = configFromDb(row, group);
+  config.mcpShims = discoverMcpShims(agentGroupId);
 
   const p = path.join(GROUPS_DIR, group.folder, 'container.json');
   const dir = path.dirname(p);

@@ -28,6 +28,8 @@ import { GROUPS_DIR } from '../../config.js';
 import { log } from '../../log.js';
 
 const NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+// mcp-shims namespaced form: "<server>/<leaf>", each segment matching NAME_RE.
+const NAMESPACED_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}\/[a-z0-9][a-z0-9_-]{0,63}$/;
 const TIMEOUT_MS = 30_000;
 const MAX_BUFFER = 1024 * 1024; // 1MB cap on captured stdout/stderr
 
@@ -72,6 +74,17 @@ export function resolveHostShimsDir(agentGroupId: string): string | null {
   return path.join(GROUPS_DIR, group.folder, 'host-shims');
 }
 
+/**
+ * The mcp-shims whitelist directory for a given agent group:
+ * `groups/<folder>/mcp-shims/`. No override in v1 — add one only if a real
+ * group needs it (mirroring host_shims_dir's own override as precedent).
+ */
+export function resolveMcpShimsDir(agentGroupId: string): string | null {
+  const group = getAgentGroup(agentGroupId);
+  if (!group) return null;
+  return path.join(GROUPS_DIR, group.folder, 'mcp-shims');
+}
+
 /** Resolve `<name>-host` inside `shimsDir`, refusing anything that escapes it. */
 function resolveShimPath(shimsDir: string, name: string): string | null {
   const candidate = path.join(shimsDir, `${name}-host`);
@@ -105,17 +118,28 @@ export function execHostShim(
   args: string[],
   timeoutMs = timeoutFor(name),
 ): Promise<ShimResult> {
-  if (!NAME_RE.test(name)) {
+  const namespaced = name.includes('/');
+  if (namespaced ? !NAMESPACED_NAME_RE.test(name) : !NAME_RE.test(name)) {
     return Promise.resolve(refuse(`"${name}" is not a valid shim name`));
   }
 
-  const shimsDir = resolveHostShimsDir(agentGroupId);
+  let shimsDir: string | null;
+  let leaf: string;
+  if (namespaced) {
+    const [server, rest] = name.split('/');
+    shimsDir = resolveMcpShimsDir(agentGroupId);
+    if (shimsDir) shimsDir = path.join(shimsDir, server);
+    leaf = rest;
+  } else {
+    shimsDir = resolveHostShimsDir(agentGroupId);
+    leaf = name;
+  }
   if (!shimsDir) {
     log.warn('host-shim: unknown agent group', { agentGroupId, name });
     return Promise.resolve(refuse('unknown agent group'));
   }
 
-  const shimPath = resolveShimPath(shimsDir, name);
+  const shimPath = resolveShimPath(shimsDir, leaf);
   if (!shimPath) {
     log.warn('host-shim: no matching whitelisted script', { agentGroupId, shimsDir, name });
     return Promise.resolve(refuse(`no whitelisted shim named "${name}"`));

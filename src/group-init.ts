@@ -102,6 +102,16 @@ export function initGroupFilesystem(
     }
   }
 
+  // mcp-shims/ — this group's own dynamic MCP-tool whitelist directory.
+  // Same isolation model as host-shims/ (a subfolder script is invisible to
+  // every other group) but auto-exposed as an MCP tool per script instead of
+  // requiring a Bash-tool call. Empty by default — no seeded scripts.
+  const mcpShimsDir = path.join(groupDir, 'mcp-shims');
+  if (!fs.existsSync(mcpShimsDir)) {
+    fs.mkdirSync(mcpShimsDir, { recursive: true });
+    initialized.push('mcp-shims/');
+  }
+
   // Ensure container_configs row exists in the DB. Idempotent — no-op if
   // the row already exists (e.g. created by backfill or group creation). On a
   // fresh row, stamp the resolved provider hint so a new group is created on
