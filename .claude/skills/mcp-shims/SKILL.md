@@ -1,0 +1,125 @@
+---
+name: mcp-shims
+description: Reference for the mcp-shims paradigm — turning a plain executable into a real MCP tool an agent can call, without writing an MCP server. Use when the user wants to add an ad-hoc tool, wrap a CLI/API as an MCP tool, or facade/constrain/compose an existing MCP server's tools into a narrower interface.
+---
+
+# mcp-shims
+
+A way to give an agent group a new MCP tool by dropping in one executable
+script — no MCP server to write, no protocol code, no container rebuild.
+This is reference documentation, not something to "run" — read it when you or
+the user want to understand the mechanism. To actually build a new tool
+step-by-step, use the `add-mcp-shim` skill instead — it walks through
+naming, wrapper type, language, per-parameter expose/hardcode/validate
+decisions, writing the script, and verifying it registers.
+
+## The mental model
+
+An MCP tool is normally something a whole server exposes. mcp-shims lets a
+**single script** be the tool instead: one script, one process boundary, one
+tool. The host discovers scripts, describes them, and materializes a manifest
+into the group's `container.json`; the container reads that manifest at
+startup and registers one generic MCP tool per entry, each of which just
+shells out to the script via the same host-shim CLI transport `remember` and
+`recall` already use.
+
+Two different things people reach for this to build:
+
+1. **Wrap something that isn't MCP-native** — a CLI, a REST API, a local
+   script you already have. The shim script does whatever validation,
+   hardcoding, or processing it wants, then prints its result.
+2. **Facade, constrain, or compose a real MCP server.** Nothing stops a shim
+   script from being an MCP *client* itself: it connects to a real MCP
+   server (stdio or HTTP), calls one specific tool with a fixed/validated
+   subset of parameters, and returns a single result. This is how you expose
+   a curated slice of a big MCP server (3 tools out of 40), hardcode a
+   parameter the agent shouldn't control (a fixed `--repo`, a fixed
+   `--project-id`), clamp/validate ranges before they reach the real server,
+   or chain two calls (possibly across two different MCP servers) behind one
+   tool call. The engine doesn't care what's inside the script — an MCP
+   client living inside it is just another implementation detail.
+
+## Where scripts live
+
+`groups/<folder>/mcp-shims/<server>/<name>-host` — an executable file. The
+directory structure is the whitelist: nothing registers a script anywhere
+else, and there's no DB table of tools to keep in sync.
+
+- `<server>` groups related tools under one namespace (e.g. several small
+  scripts front different endpoints of the same API).
+- `<name>-host` becomes the MCP tool `<server>_<name>`.
+- No per-group override in v1 (unlike `host-shims/`'s `host_shims_dir`
+  config) — add one only if a real group needs it.
+
+## Self-description (optional, but worth doing)
+
+A script can handle `--help` and print JSON to stdout:
+
+```json
+{ "description": "What this tool does", "inputSchema": { "type": "object", "properties": { ... } } }
+```
+
+If it does: that description and schema become the tool's real MCP schema.
+If it doesn't — no `--help` support, nonzero exit, bad JSON, or a schema
+missing `type: "object"` (MCP requires that field; something else falls back
+rather than registering a tool the SDK would reject at call time) — the
+engine falls back to a generic schema: `{ args: string[] }`. Every script
+works with zero required ceremony; self-description is opt-in polish, not a
+requirement.
+
+`--help` is invoked with a 3s timeout at discovery time (when the group's
+container.json is materialized), separate from the timeout the tool call
+itself gets at runtime.
+
+## Example: a tiny wrapper
+
+```sh
+#!/bin/sh
+# groups/my-group/mcp-shims/weather/current-host
+case "${1:-}" in
+  --help)
+    cat <<'EOF'
+{"description": "Get current weather for a city", "inputSchema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}
+EOF
+    exit 0 ;;
+esac
+curl -sf "https://api.example.com/weather?city=$1"
+```
+
+Registers as tool `weather_current`. No manifest to hand-edit, no server
+process to keep running — the script itself is the whole implementation.
+
+## Example: facading a real MCP server
+
+A shim script can itself speak MCP as a client (small Node/Python/Bun script
+using an MCP SDK, or any CLI that already speaks MCP) — connect to the real
+server, call one of its tools with fixed/validated params, print the result.
+The facade is invisible to the discovery engine; it just sees an executable
+that takes args and returns output. This is the composition angle: constrain
+what an agent can reach on a large server, hardcode context the agent
+shouldn't control, or combine multiple calls behind one tool.
+
+## Related to, but distinct from, real MCP servers
+
+If something already speaks the MCP protocol, don't shim it — register it
+directly via `mcpServers` in the group's container config (`ncl groups config
+add-mcp-server`, or the `add_mcp_server` self-mod tool from inside a
+container). The container connects to it directly and gets its full,
+unmodified tool surface. Reach for a shim instead when you want *less* than
+the full surface (facade/constrain/compose), or when there's no MCP server at
+all and you're wrapping something else.
+
+## Key files (for anyone extending this, not for day-to-day use)
+
+| File | Purpose |
+|------|---------|
+| `src/modules/host-shim/mcp-manifest.ts` | Discovers scripts under a group's `mcp-shims/<server>/`, runs `--help` to self-describe, builds the manifest |
+| `src/modules/host-shim/exec.ts` | `resolveMcpShimsDir`, and namespaced (`server/leaf`) name resolution alongside the existing flat `host-shims/` resolution |
+| `container/agent-runner/src/dynamic-shims.ts` | Container-side: reads the manifest, registers one generic MCP tool per entry |
+
+## Current gaps
+
+- No `/add-mcp-shims` distribution skill yet — nothing walks a user through
+  writing their first shim interactively; this doc is the extent of it.
+- No per-group `mcp_shims_dir` override (mirrors `host-shims/`'s
+  `host_shims_dir`, which does have one) — add if a real use case needs it.

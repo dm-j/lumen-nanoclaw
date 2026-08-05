@@ -73,6 +73,7 @@ For ad-hoc queries from skills or scripts, use the in-tree wrapper rather than t
 | `src/command-gate.ts` | Router-side admin command gate — queries `user_roles` directly (no env var, no container-side check) |
 | `src/modules/approvals/onecli-approvals.ts` | OneCLI credentialed-action approval bridge |
 | `src/modules/permissions/user-dm.ts` | Cold-DM resolution + `user_dms` cache |
+| `src/modules/host-shim/exec.ts` + `mcp-manifest.ts`, `container/agent-runner/src/dynamic-shims.ts` | `host-shims/` (whitelisted host scripts callable via the Bash tool) and `mcp-shims/` (scripts auto-registered as real MCP tools) — see `/mcp-shims` skill for the latter's paradigm |
 | `src/group-init.ts` | Per-agent-group filesystem scaffold (CLAUDE.md, skills) — agent-runner source is a shared read-only mount, not copied per group |
 | `src/db/container-configs.ts` | CRUD for `container_configs` table (per-group container runtime config) |
 | `src/backfill-container-configs.ts` | Migrates legacy `container.json` files into the DB on startup |
@@ -203,6 +204,8 @@ Four types of skills. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full taxono
 | `/update-nanoclaw` | Bring upstream updates into a customized install |
 | `/init-onecli` | Install OneCLI Agent Vault and migrate `.env` credentials |
 | `/migrate-memory` | Carry a group's agent memory across a provider switch (operator-run, both directions) |
+| `/mcp-shims` | Reference: turn a script into an MCP tool without writing an MCP server (facade/constrain/compose a real one, or wrap a CLI/API) |
+| `/add-mcp-shim` | Guided, step-by-step build of one new mcp-shims tool (naming, wrapper type, language, per-parameter expose/hardcode/validate) |
 
 ## Contributing
 
