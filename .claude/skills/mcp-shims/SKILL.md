@@ -84,6 +84,22 @@ requirement.
 container.json is materialized), separate from the timeout the tool call
 itself gets at runtime.
 
+`--help`'s JSON can also declare a top-level `timeoutMs` to override the
+default 30s call timeout for this one script — the explicit alternative to
+the server-name-prefix heuristic below. Threaded end to end: discovery
+reads it into the manifest → the container's `dynamic-shims.ts` passes it
+to the `host-shim` CLI via an env var (its own argv contract has no room
+for a third concept) → the host's `host_shim_exec` handler reads it and
+calls `execHostShim` with it directly, skipping `timeoutFor()`'s prefix
+match. Absent `timeoutMs`, behavior is unchanged from before it existed.
+
+Discovery also does a best-effort static check: if the schema declares any
+parameters but the script's source has no `jq`/`JSON.parse`/`json.loads`
+anywhere in it, a warning is logged at spawn time — a nudge toward the
+mistake described in "The calling contract" below, not a real verification
+(actually invoking the script to check could have side effects, so it never
+does).
+
 ## The calling contract: one argv, a JSON envelope
 
 This part is **not** an MCP requirement — MCP itself is completely normal
@@ -175,9 +191,11 @@ all and you're wrapping something else.
 
 | File | Purpose |
 |------|---------|
-| `src/modules/host-shim/mcp-manifest.ts` | Discovers scripts under a group's `mcp-shims/<server>/`, runs `--help` to self-describe, builds the manifest |
-| `src/modules/host-shim/exec.ts` | `resolveMcpShimsDir`, and namespaced (`server/leaf`) name resolution alongside the existing flat `host-shims/` resolution |
-| `container/agent-runner/src/dynamic-shims.ts` | Container-side: reads the manifest, registers one generic MCP tool per entry |
+| `src/modules/host-shim/mcp-manifest.ts` | Discovers scripts under a group's `mcp-shims/<server>/`, runs `--help` to self-describe (description, inputSchema, optional timeoutMs), builds the manifest, logs the JSON-parse-idiom warning |
+| `src/modules/host-shim/exec.ts` | `resolveMcpShimsDir`, namespaced (`server/leaf`) name resolution alongside the existing flat `host-shims/` resolution, `timeoutFor()`'s prefix-based default |
+| `src/modules/host-shim/index.ts` | Host-side `host_shim_exec` delivery-action handler — reads an optional per-call `timeoutMs` from the request and passes it to `execHostShim`, overriding `timeoutFor()` |
+| `container/agent-runner/src/mcp-tools/dynamic-shims.ts` | Container-side: reads the manifest, registers one generic MCP tool per entry, threads a declared `timeoutMs` to the `host-shim` CLI via an env var |
+| `container/agent-runner/src/cli/host-shim.ts` | The container's `host-shim` CLI transport (shared with `remember`/`recall`) — reads the `HOST_SHIM_TIMEOUT_MS_OVERRIDE` env var and includes it in the request content when set |
 
 ## Current gaps
 

@@ -39,7 +39,16 @@ function generateId(): string {
 
 // Mirrors ncl.ts's writeRequest — BEGIN IMMEDIATE to avoid seq collisions
 // with concurrent agent-runner writes.
+//
+// timeoutMs: an mcp-shim's per-script override (see mcp-manifest.ts's
+// `timeoutMs` field), threaded through by dynamic-shims.ts via the
+// HOST_SHIM_TIMEOUT_MS_OVERRIDE env var — this CLI's own argv contract
+// (name + payload) has no room for a third concept, so it rides along in
+// the environment instead. Absent for plain host-shims calls.
 function writeRequest(requestId: string, name: string, args: string[]): void {
+  const timeoutOverride = process.env.HOST_SHIM_TIMEOUT_MS_OVERRIDE
+    ? Number(process.env.HOST_SHIM_TIMEOUT_MS_OVERRIDE)
+    : undefined;
   const db = new Database(OUTBOUND_DB);
   db.exec('PRAGMA journal_mode = DELETE');
   db.exec('PRAGMA busy_timeout = 5000');
@@ -61,7 +70,13 @@ function writeRequest(requestId: string, name: string, args: string[]): void {
       $id: requestId,
       $seq: nextSeq,
       $timestamp: new Date().toISOString(),
-      $content: JSON.stringify({ action: 'host_shim_exec', requestId, name, args }),
+      $content: JSON.stringify({
+        action: 'host_shim_exec',
+        requestId,
+        name,
+        args,
+        ...(timeoutOverride && Number.isFinite(timeoutOverride) ? { timeoutMs: timeoutOverride } : {}),
+      }),
     });
     db.exec('COMMIT');
   } catch (e) {

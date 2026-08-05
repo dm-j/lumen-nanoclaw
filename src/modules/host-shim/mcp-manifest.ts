@@ -24,6 +24,11 @@ export interface McpShimManifestEntry {
   shimId: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  /** Optional per-script override for the call timeout, declared in --help's
+   *  JSON (top-level `timeoutMs`). Falls back to the name-prefix heuristic
+   *  (timeoutFor in exec.ts) when absent — this is the explicit escape hatch
+   *  for a shim that needs longer without adopting an unrelated prefix. */
+  timeoutMs?: number;
 }
 
 const FALLBACK_SCHEMA = {
@@ -76,8 +81,39 @@ function describeShim(scriptPath: string, server: string, leaf: string): McpShim
     (p.inputSchema as Record<string, unknown>).type === 'object'
       ? (p.inputSchema as Record<string, unknown>)
       : fallback.inputSchema;
+  const timeoutMs =
+    typeof p.timeoutMs === 'number' && Number.isFinite(p.timeoutMs) && p.timeoutMs > 0 ? p.timeoutMs : undefined;
 
-  return { toolName, shimId, description, inputSchema };
+  warnIfLikelyMissingJsonParse(scriptPath, shimId, inputSchema);
+
+  return { toolName, shimId, description, inputSchema, ...(timeoutMs ? { timeoutMs } : {}) };
+}
+
+// Every mcp-shim call passes its args as one JSON-string argv (see
+// dynamic-shims.ts) — a script that declares parameters but never parses
+// $1 as JSON will silently receive the literal envelope text instead of the
+// field inside it (registers fine, runs fine, no error). Can't safely
+// verify this by actually invoking the script (side effects), so this is a
+// best-effort static text scan for a JSON-parsing idiom, not a real check —
+// false positives/negatives possible, hence a warning, not a rejection.
+const JSON_PARSE_HINT_RE = /\bjq\b|JSON\.parse|json\.loads/;
+
+function warnIfLikelyMissingJsonParse(scriptPath: string, shimId: string, inputSchema: Record<string, unknown>): void {
+  const properties = (inputSchema as { properties?: Record<string, unknown> }).properties;
+  if (!properties || Object.keys(properties).length === 0) return; // no declared params, $1 is safely ignorable
+
+  let source: string;
+  try {
+    source = fs.readFileSync(scriptPath, 'utf8');
+  } catch {
+    return;
+  }
+  if (JSON_PARSE_HINT_RE.test(source)) return;
+
+  log.warn(
+    'mcp-shim: script declares parameters but no JSON-parsing call (jq / JSON.parse / json.loads) was found in its source — every call passes $1 as a JSON envelope, never a bare value; this may be silently misreading its arguments',
+    { shimId, scriptPath },
+  );
 }
 
 /** Discover every mcp-shim script for a group, describing each via `--help`. */

@@ -140,6 +140,15 @@ with no parameters still gets called with `$1` = `'{}'`; harmless to ignore.)
 See the `mcp-shims` skill's own "calling contract" section for the fuller
 explanation of why this layer exists.
 
+Discovery does a best-effort check for this: if the schema declares any
+parameters but the script's own source has no `jq`/`JSON.parse`/`json.loads`
+anywhere in it, `discoverMcpShims` logs a warning at spawn time. It's a
+static text scan, not a real verification (it can't safely invoke a script
+with synthetic args — that could have real side effects), so it can miss a
+script that parses JSON some other way, or flag one that has the substring
+for an unrelated reason. Treat it as a nudge to double-check, not proof
+either way — the actual test is step 11 below.
+
 Branch on the answer from step 4:
 
 **CLI wrap:** Which command? How do the tool's future input parameters
@@ -169,14 +178,23 @@ pass for whatever inputs it takes, if any.
 ### 7. Timeout
 
 Default timeout is 30s. If this genuinely needs longer (a subagent dispatch,
-a slow upstream call), the mechanism is a **server-name prefix**, not a
-per-tool setting: `execHostShim`'s `timeoutFor()` checks whether the
-namespaced call (`<server>/<leaf>`) starts with `digest`, `recall`,
-`remember`, or `briefing` — if the *server* name starts with one of those,
-the call gets 180s instead of 30s. There's no arbitrary custom timeout in
-v1; if the need doesn't fit the existing prefixes, say so plainly and ask
-whether the user wants to adopt one of them for this server or accept the
-30s ceiling.
+a slow upstream call), declare it explicitly with a top-level `timeoutMs` in
+the `--help` JSON from step 8 — e.g. `{"description": "...", "inputSchema":
+{...}, "timeoutMs": 60000}`. This is a per-script override, read at
+discovery time and threaded through the whole transport (container →
+`host-shim` CLI via an env var → host's `host_shim_exec` handler →
+`execHostShim`); it takes precedence over the name-prefix fallback below.
+
+The prefix fallback still exists and still applies when no `timeoutMs` is
+declared: `execHostShim`'s `timeoutFor()` checks whether the namespaced call
+(`<server>/<leaf>`) starts with `digest`, `recall`, `remember`, or
+`briefing` — if the *server* name starts with one of those, the call gets
+180s instead of 30s. Prefer the explicit `timeoutMs` field for a new script — it's the same
+`execHostShim`/`timeoutFor()` shared by plain `host-shims/` scripts too, and
+those (`briefing-host` etc.) can't declare a schema at all, so the prefix
+convention predates `timeoutMs` and is what they're stuck with. An mcp-shim
+script has the better option now; use it instead of adopting an unrelated
+prefix just to get a longer timeout.
 
 ### 8. Finalize the input schema
 
@@ -190,12 +208,14 @@ Schema the script will self-describe via `--help`:
     "type": "object",
     "properties": { "...": "only the exposed/validated params" },
     "required": ["..."]
-  }
+  },
+  "timeoutMs": 60000
 }
 ```
 
 Hardcoded parameters never appear in the schema — the agent shouldn't see
-them as something it could set.
+them as something it could set. `timeoutMs` is optional — include it only
+if step 7 decided this tool needs longer than the 30s default.
 
 ### 9. Write the script
 

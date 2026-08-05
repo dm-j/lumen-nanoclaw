@@ -22,6 +22,7 @@ interface McpShimManifestEntry {
   shimId: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  timeoutMs?: number;
 }
 
 function ok(text: string) {
@@ -32,12 +33,25 @@ function err(text: string) {
   return { content: [{ type: 'text' as const, text: `Error: ${text}` }], isError: true };
 }
 
-function runHostShim(shimId: string, payload: string): Promise<{ code: number; stdout: string; stderr: string }> {
+function runHostShim(
+  shimId: string,
+  payload: string,
+  timeoutMs?: number,
+): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     execFile(
       'host-shim',
       [shimId, payload],
-      { timeout: HOST_SHIM_TIMEOUT_MS, maxBuffer: MAX_BUFFER },
+      {
+        timeout: HOST_SHIM_TIMEOUT_MS,
+        maxBuffer: MAX_BUFFER,
+        // host-shim's own CLI argv contract (name + payload) doesn't have
+        // room for a third concept, so this rides along as an env var the
+        // CLI reads and forwards to the host in the request content — see
+        // cli/host-shim.ts. Absent when the manifest entry has no
+        // timeoutMs override, same as before this existed.
+        env: timeoutMs ? { ...process.env, HOST_SHIM_TIMEOUT_MS_OVERRIDE: String(timeoutMs) } : process.env,
+      },
       (error, stdout, stderr) => {
         const code = error ? (typeof (error as { code?: unknown }).code === 'number' ? (error as { code: number }).code : 1) : 0;
         resolve({ code, stdout, stderr });
@@ -62,7 +76,7 @@ const tools: McpToolDefinition[] = loadMcpShims().map((entry) => ({
     inputSchema: entry.inputSchema as McpToolDefinition['tool']['inputSchema'],
   },
   async handler(args) {
-    const { code, stdout, stderr } = await runHostShim(entry.shimId, JSON.stringify(args));
+    const { code, stdout, stderr } = await runHostShim(entry.shimId, JSON.stringify(args), entry.timeoutMs);
     if (code !== 0) return err(stderr.trim() || `${entry.shimId} exited ${code}`);
     return ok(stdout.trim() || '(no output)');
   },

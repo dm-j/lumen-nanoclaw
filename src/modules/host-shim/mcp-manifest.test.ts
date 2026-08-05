@@ -16,6 +16,7 @@ vi.mock('../../log.js', () => ({
 import { closeDb, initTestDb, runMigrations } from '../../db/index.js';
 import { createAgentGroup } from '../../db/agent-groups.js';
 import { discoverMcpShims } from './mcp-manifest.js';
+import { log } from '../../log.js';
 
 const GROUP_FOLDER = 'demo';
 const SHIMS_DIR = path.join(TEST_ROOT, 'groups', GROUP_FOLDER, 'mcp-shims');
@@ -106,6 +107,85 @@ fi
 
     const entries = discoverMcpShims('ag-demo');
     expect(entries[0].description).toBe('Host shim: demo/garbled');
+  });
+
+  it('picks up a valid timeoutMs from --help JSON', () => {
+    writeShim(
+      'demo',
+      'slow',
+      `#!/bin/sh
+if [ "$1" = "--help" ]; then
+  echo '{"description":"slow op","inputSchema":{"type":"object","properties":{}},"timeoutMs":60000}'
+fi
+`,
+    );
+
+    const entries = discoverMcpShims('ag-demo');
+    expect(entries[0].timeoutMs).toBe(60000);
+  });
+
+  it('ignores an invalid timeoutMs (non-number, zero, negative)', () => {
+    writeShim(
+      'demo',
+      'bogus-timeout',
+      `#!/bin/sh
+if [ "$1" = "--help" ]; then
+  echo '{"description":"x","inputSchema":{"type":"object","properties":{}},"timeoutMs":-5}'
+fi
+`,
+    );
+
+    const entries = discoverMcpShims('ag-demo');
+    expect(entries[0].timeoutMs).toBeUndefined();
+  });
+
+  it('warns when a script declares parameters but has no JSON-parsing idiom in its source', () => {
+    writeShim(
+      'demo',
+      'unparsed',
+      `#!/bin/sh
+case "$1" in
+  --help) echo '{"description":"x","inputSchema":{"type":"object","properties":{"foo":{"type":"string"}}}}' ;;
+esac
+echo "got: $1"
+`,
+    );
+
+    discoverMcpShims('ag-demo');
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('no JSON-parsing call'), expect.anything());
+  });
+
+  it('does not warn when the script references jq', () => {
+    writeShim(
+      'demo',
+      'parsed',
+      `#!/bin/sh
+case "$1" in
+  --help) echo '{"description":"x","inputSchema":{"type":"object","properties":{"foo":{"type":"string"}}}}' ;;
+esac
+FOO="$(printf '%s' "$1" | jq -r .foo)"
+`,
+    );
+
+    vi.mocked(log.warn).mockClear();
+    discoverMcpShims('ag-demo');
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it('does not warn when the script declares no parameters', () => {
+    writeShim(
+      'demo',
+      'noparams',
+      `#!/bin/sh
+if [ "$1" = "--help" ]; then
+  echo '{"description":"x","inputSchema":{"type":"object","properties":{}}}'
+fi
+`,
+    );
+
+    vi.mocked(log.warn).mockClear();
+    discoverMcpShims('ag-demo');
+    expect(log.warn).not.toHaveBeenCalled();
   });
 
   it('skips non-executable scripts', () => {
