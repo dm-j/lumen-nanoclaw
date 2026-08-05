@@ -19,7 +19,7 @@ import { getAgentGroup } from '../../db/agent-groups.js';
 import { getSession } from '../../db/sessions.js';
 import { sessionDir } from '../../session-manager.js';
 import { log } from '../../log.js';
-import { getBriefingHistoryEntries, isEnabled, readPendingBatchText } from './db.js';
+import { getBriefingHistoryEntries, getSessionBriefing, isEnabled, readPendingBatchText } from './db.js';
 import { COMPILER_TAIL_TURNS, compileBriefing, sessionBriefingKey } from './compile-briefing.js';
 import { renderLiteralTail } from './literal-tail.js';
 
@@ -56,7 +56,12 @@ export async function maybeSynthesizeProjectedContext(agentGroupId: string, sess
   try {
     const sessionKey = sessionBriefingKey(agentGroupId, session.messaging_group_id, session.thread_id);
     const batchText = readPendingBatchText(agentGroupId, sessionId);
-    const briefing = await compileBriefing(agentGroupId, sessionId, sessionKey, batchText);
+    // Wakes with no new chat message (scheduled tasks, on_wake respawns,
+    // host-sweep self-heal) have nothing for the briefer to compile — skip
+    // the subagent dispatch and reuse the last known-good briefing verbatim.
+    const briefing = batchText.trim()
+      ? await compileBriefing(agentGroupId, sessionId, sessionKey, batchText)
+      : getSessionBriefing(sessionKey);
     // Up to RESPONDER_BRIEFING_CAP past briefings (oldest-first, includes
     // the one just compiled above), interleaved by timestamp with the raw
     // turns inside renderLiteralTail below — still written to briefing.md
