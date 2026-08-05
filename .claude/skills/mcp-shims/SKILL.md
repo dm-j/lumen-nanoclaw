@@ -51,6 +51,19 @@ else, and there's no DB table of tools to keep in sync.
 - No per-group override in v1 (unlike `host-shims/`'s `host_shims_dir`
   config) — add one only if a real group needs it.
 
+**Unlike the rest of `groups/<folder>/`, mcp-shims scripts are git-tracked.**
+`.gitignore` ignores `groups/*` wholesale as per-installation state
+(`container.json`, persona, `host-shims/` with real credentials/paths,
+memory) — right for those, since they're config, not code. A shim script is
+closer to a real MCP server's wiring: losing it to a fresh clone or reinstall
+means losing a capability, not just re-entering local settings. `.gitignore`
+carves an explicit exception for `mcp-shims/` (see its own comment there for
+the mechanics — un-ignore the group folder for traversal, re-ignore its
+other direct children, un-ignore only `mcp-shims/`). Write scripts as if
+they'll be committed: don't hardcode secrets inline (use `.env`/a local
+config file the script reads, same as any host-shim would), since anything
+under `mcp-shims/` is fair game to end up in git history.
+
 ## Self-description (optional, but worth doing)
 
 A script can handle `--help` and print JSON to stdout:

@@ -205,6 +205,12 @@ Create the directory and the script:
 mkdir -p groups/<folder>/mcp-shims/<server>
 ```
 
+Unlike the rest of `groups/<folder>/`, mcp-shims scripts are **git-tracked**
+(`.gitignore` carves an explicit exception — see the `mcp-shims` skill for
+why). Never hardcode a credential/secret inline in the script; read it from
+`.env` or a local config file the way any host-shim would, since this file
+is expected to end up in version control.
+
 Write `groups/<folder>/mcp-shims/<server>/<name>-host` with:
 - A `--help` branch printing the exact JSON from step 8 to stdout, exit 0.
 - If the script shells out to anything installed outside the base OS (a
