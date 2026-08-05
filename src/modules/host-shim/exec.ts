@@ -7,12 +7,15 @@
  * add a tool by dropping one script in, remove one by deleting it.
  *
  * Segregated per agent group: each group resolves its own whitelist
- * directory (`resolveHostShimsDir`), defaulting to `groups/<folder>/host-shims/`
- * or overridden via `container_configs.host_shims_dir`. A group can only ever
- * run scripts from its own directory — this is what lets a shared group (e.g.
- * "household") point at a script with broader access than any individual
- * group's own, without individual groups gaining access to it or to each
- * other's scripts.
+ * directory (`resolveHostShimsDir`), defaulting to `host-shims/<folder>/`
+ * under `HOST_SHIMS_DIR` (a sibling of `groups/`, never mounted into any
+ * container) or overridden via `container_configs.host_shims_dir`. A group
+ * can only ever run scripts from its own directory — this is what lets a
+ * shared group (e.g. "household") point at a script with broader access
+ * than any individual group's own, without individual groups gaining
+ * access to it or to each other's scripts. mcp-shims (`resolveMcpShimsDir`)
+ * uses the identical mechanism, same reasoning: the agent is meant to know
+ * a tool by name only, never see its implementation.
  *
  * Each `-host` script does its own validation of the args it receives; this
  * layer only prevents the name from escaping the whitelist directory and
@@ -24,7 +27,7 @@ import path from 'node:path';
 
 import { getAgentGroup } from '../../db/agent-groups.js';
 import { getContainerConfig } from '../../db/container-configs.js';
-import { GROUPS_DIR } from '../../config.js';
+import { HOST_SHIMS_DIR, MCP_SHIMS_DIR } from '../../config.js';
 import { log } from '../../log.js';
 
 const NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
@@ -60,9 +63,14 @@ function refuse(reason: string): ShimResult {
 
 /**
  * The whitelist directory for a given agent group: its `container_configs.host_shims_dir`
- * override if set, otherwise `groups/<folder>/host-shims/`. Every group gets
- * its own directory by default — segregation is the out-of-the-box behavior,
- * not something a group has to opt into.
+ * override if set, otherwise `host-shims/<folder>/` under `HOST_SHIMS_DIR`.
+ * Every group gets its own directory by default — segregation is the
+ * out-of-the-box behavior, not something a group has to opt into. Not
+ * inside `groups/<folder>/`: that tree is bind-mounted RW into the group's
+ * own container, so a script living inside it would be readable *and
+ * writable* from inside the agent's own session — the agent is meant to
+ * invoke a host-shim by name only (via the shared, read-only `host-shim`
+ * CLI + IPC round-trip), never see its implementation.
  */
 export function resolveHostShimsDir(agentGroupId: string): string | null {
   const group = getAgentGroup(agentGroupId);
@@ -71,18 +79,28 @@ export function resolveHostShimsDir(agentGroupId: string): string | null {
   const override = getContainerConfig(agentGroupId)?.host_shims_dir;
   if (override) return path.resolve(override);
 
-  return path.join(GROUPS_DIR, group.folder, 'host-shims');
+  return path.join(HOST_SHIMS_DIR, group.folder);
 }
 
 /**
- * The mcp-shims whitelist directory for a given agent group:
- * `groups/<folder>/mcp-shims/`. No override in v1 — add one only if a real
- * group needs it (mirroring host_shims_dir's own override as precedent).
+ * The mcp-shims whitelist directory for a given agent group: its
+ * `container_configs.mcp_shims_dir` override if set, otherwise
+ * `mcp-shims/<folder>/` under `MCP_SHIMS_DIR` — same off-mount-by-default
+ * reasoning as `resolveHostShimsDir` just above. The one difference:
+ * mcp-shims tools are registered natively via MCP (dynamic-shims.ts reads
+ * container.json's pre-materialized name+schema and registers real tools
+ * in-process), where host-shims tools are invoked by the agent explicitly
+ * naming them via the Bash tool — different call surface, identical
+ * "implementation stays host-only" guarantee.
  */
 export function resolveMcpShimsDir(agentGroupId: string): string | null {
   const group = getAgentGroup(agentGroupId);
   if (!group) return null;
-  return path.join(GROUPS_DIR, group.folder, 'mcp-shims');
+
+  const override = getContainerConfig(agentGroupId)?.mcp_shims_dir;
+  if (override) return path.resolve(override);
+
+  return path.join(MCP_SHIMS_DIR, group.folder);
 }
 
 /** Resolve `<name>-host` inside `shimsDir`, refusing anything that escapes it. */

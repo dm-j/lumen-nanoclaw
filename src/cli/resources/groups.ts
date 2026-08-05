@@ -54,6 +54,7 @@ function presentConfig(row: ContainerConfigRow): Record<string, unknown> {
     cli_scope: row.cli_scope,
     timezone: row.timezone,
     host_shims_dir: row.host_shims_dir,
+    mcp_shims_dir: row.mcp_shims_dir,
     updated_at: row.updated_at,
   };
 }
@@ -66,6 +67,14 @@ function presentConfig(row: ContainerConfigRow): Record<string, unknown> {
  * populating it.
  */
 function parseHostShimsDirFlag(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined;
+  const dir = String(value);
+  return dir === '' ? null : dir;
+}
+
+/** Same shape as parseHostShimsDirFlag, for --mcp-shims-dir: empty string
+ *  clears back to the default mcp-shims/<folder>/ under MCP_SHIMS_DIR. */
+function parseMcpShimsDirFlag(value: unknown): string | null | undefined {
   if (value === undefined) return undefined;
   const dir = String(value);
   return dir === '' ? null : dir;
@@ -296,7 +305,8 @@ registerResource({
         'Update container config scalar fields. Changes are saved but do NOT take effect until you run `ncl groups restart`. ' +
         'Use --id <group-id> and any of: --provider, --model, --effort, --image-tag, --assistant-name, --max-messages-per-prompt, --cli-scope, ' +
         '--timezone (IANA id like "Europe/Lisbon"; "" clears back to the install default; scheduled-task times follow it immediately, message display after restart), ' +
-        '--host-shims-dir (path to this group\'s host-shim whitelist directory; "" clears back to the default groups/<folder>/host-shims/).',
+        '--host-shims-dir (path to this group\'s host-shim whitelist directory; "" clears back to the default groups/<folder>/host-shims/), ' +
+        '--mcp-shims-dir (path to this group\'s mcp-shims whitelist directory; "" clears back to the default mcp-shims/<folder>/, never mounted into the container).',
       handler: async (args) => {
         const id = args.id as string;
         if (!id) throw new Error('--id is required');
@@ -315,6 +325,7 @@ registerResource({
             | 'cli_scope'
             | 'timezone'
             | 'host_shims_dir'
+            | 'mcp_shims_dir'
           >
         > = {};
         if (args.provider !== undefined) updates.provider = args.provider as string;
@@ -323,6 +334,9 @@ registerResource({
         const hostShimsDirFlag = args['host-shims-dir'] ?? args.host_shims_dir;
         const hostShimsDir = parseHostShimsDirFlag(hostShimsDirFlag);
         if (hostShimsDir !== undefined) updates.host_shims_dir = hostShimsDir;
+        const mcpShimsDirFlag = args['mcp-shims-dir'] ?? args.mcp_shims_dir;
+        const mcpShimsDir = parseMcpShimsDirFlag(mcpShimsDirFlag);
+        if (mcpShimsDir !== undefined) updates.mcp_shims_dir = mcpShimsDir;
         if (args.model !== undefined) updates.model = args.model as string;
         if (args.effort !== undefined) updates.effort = args.effort as string;
         if (args.image_tag !== undefined) updates.image_tag = args.image_tag as string;

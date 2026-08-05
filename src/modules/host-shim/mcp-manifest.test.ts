@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../config.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../config.js')>()),
-  GROUPS_DIR: '/tmp/nanoclaw-mcp-manifest-test/groups',
+  MCP_SHIMS_DIR: '/tmp/nanoclaw-mcp-manifest-test/mcp-shims',
 }));
 
 const TEST_ROOT = '/tmp/nanoclaw-mcp-manifest-test';
@@ -19,7 +19,7 @@ import { discoverMcpShims } from './mcp-manifest.js';
 import { log } from '../../log.js';
 
 const GROUP_FOLDER = 'demo';
-const SHIMS_DIR = path.join(TEST_ROOT, 'groups', GROUP_FOLDER, 'mcp-shims');
+const SHIMS_DIR = path.join(TEST_ROOT, 'mcp-shims', GROUP_FOLDER);
 
 function writeShim(server: string, leaf: string, script: string): void {
   const dir = path.join(SHIMS_DIR, server);

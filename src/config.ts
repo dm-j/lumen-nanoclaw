@@ -59,6 +59,24 @@ export const GROUPS_DIR = path.resolve(PROJECT_ROOT, 'groups');
 export const DATA_DIR = path.resolve(PROJECT_ROOT, 'data');
 // Never mounted into containers — operator-only, cat/tail from the host shell.
 export const LOGS_DIR = path.resolve(PROJECT_ROOT, 'logs');
+// mcp-shims implementation scripts — deliberately a sibling of groups/, not
+// inside it. groups/<folder>/ is bind-mounted RW into its container as
+// /workspace/agent, so anything living inside a group's own folder is
+// readable *and writable* from inside that agent's own session — fine for
+// CLAUDE.md/container.json (which get their own dedicated read-only mounts
+// overlaying the RW base), but mcp-shims scripts are meant to be invisible
+// to the agent entirely: the container only ever gets a generic forwarder
+// (dynamic-shims.ts) with no implementation in it. Default layout:
+// mcp-shims/<group-folder>/<server>/<name>-host — see resolveMcpShimsDir.
+export const MCP_SHIMS_DIR = path.resolve(PROJECT_ROOT, 'mcp-shims');
+// host-shims implementation scripts — same reasoning and layout as
+// MCP_SHIMS_DIR, a sibling of groups/, not inside it. host-shims scripts
+// (briefing-host, recall-host, etc.) are Bash-tool-invoked by name via the
+// shared host-shim CLI (agent-runner source, read-only, never per-group) —
+// the agent is meant to know only the tool's *name*, never its
+// implementation. Default layout: host-shims/<group-folder>/<name>-host —
+// see resolveHostShimsDir.
+export const HOST_SHIMS_DIR = path.resolve(PROJECT_ROOT, 'host-shims');
 // Local agent-template library. Committed but ships empty (+ README). Resolved
 // once at load. Override to another LOCAL path via NANOCLAW_TEMPLATES_DIR; never
 // a remote URL, never an ncl flag, never runtime-mutable.

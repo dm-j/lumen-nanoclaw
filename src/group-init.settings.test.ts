@@ -8,6 +8,8 @@ vi.mock('./config.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./config.js')>()),
   DATA_DIR: '/tmp/nanoclaw-group-init-settings-test/data',
   GROUPS_DIR: '/tmp/nanoclaw-group-init-settings-test/groups',
+  HOST_SHIMS_DIR: '/tmp/nanoclaw-group-init-settings-test/host-shims',
+  MCP_SHIMS_DIR: '/tmp/nanoclaw-group-init-settings-test/mcp-shims',
 }));
 
 vi.mock('./log.js', () => ({
@@ -72,7 +74,7 @@ describe('default host-shims/briefing-host for new groups', () => {
     const ag = makeGroup('ag-briefing');
     initGroupFilesystem(ag, {});
 
-    const file = path.join(TEST_ROOT, 'groups', ag.folder, 'host-shims', 'briefing-host');
+    const file = path.join(TEST_ROOT, 'host-shims', ag.folder, 'briefing-host');
     expect(fs.existsSync(file)).toBe(true);
     expect(fs.statSync(file).mode & 0o111).toBeTruthy(); // executable bits set
 
@@ -85,7 +87,7 @@ describe('default host-shims/briefing-host for new groups', () => {
     const ag = makeGroup('ag-briefing-edit');
     initGroupFilesystem(ag, {});
 
-    const file = path.join(TEST_ROOT, 'groups', ag.folder, 'host-shims', 'briefing-host');
+    const file = path.join(TEST_ROOT, 'host-shims', ag.folder, 'briefing-host');
     const edited = fs
       .readFileSync(file, 'utf-8')
       .replace('/CHANGE/ME/path/to/this/groups/obsidian/vault', '/real/vault');

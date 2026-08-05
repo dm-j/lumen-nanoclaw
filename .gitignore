@@ -14,17 +14,17 @@ logs/
 # Groups - per-installation state, not tracked
 groups/*
 
-# ...except mcp-shims scripts: these are capability code (like a real MCP
-# server's wiring would be), not instance state — worth persisting/versioning
-# the same way. A fully-ignored directory blocks descent for later
-# negations, so: un-ignore each group folder for traversal, re-ignore all
-# its direct children (container.json, persona, host-shims/ with real
-# credentials/paths, memory, etc. stay excluded exactly as before), then
-# un-ignore only the one child that should be tracked.
-!groups/*/
-groups/*/*
-!groups/*/mcp-shims
-!groups/*/mcp-shims/**
+# mcp-shims and host-shims implementation scripts — both moved out of
+# groups/<folder>/ entirely (see src/config.ts's MCP_SHIMS_DIR/HOST_SHIMS_DIR
+# and resolveMcpShimsDir/resolveHostShimsDir): groups/<folder>/ is bind-mounted
+# RW into that group's own container, so anything living inside it —
+# including the old groups/*/mcp-shims/ and groups/*/host-shims/ locations —
+# is readable *and* writable from inside the agent's own session. These two
+# top-level directories are siblings of groups/, never mounted into any
+# container, and per-installation state (real host paths, real config) —
+# not tracked, same as everything else under groups/*.
+/mcp-shims/
+/host-shims/
 
 # Composer-managed CLAUDE.md artifacts (regenerated every spawn) and
 # per-group memory (CLAUDE.local.md) must never be committed.

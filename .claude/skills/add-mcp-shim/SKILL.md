@@ -6,7 +6,7 @@ description: Guided, step-by-step creation of one new mcp-shims tool — a scrip
 # Add an mcp-shim tool
 
 Walks through creating exactly one new mcp-shims tool: an executable script
-placed at `groups/<folder>/mcp-shims/<server>/<name>-host` that the host
+placed at `mcp-shims/<folder>/<server>/<name>-host` that the host
 discovers, self-describes, and registers as a real MCP tool the next time
 that agent group's container spawns. See the `mcp-shims` skill for the
 background paradigm (what this is, why it exists, host-shims vs mcp-shims,
@@ -70,7 +70,7 @@ Resolve to the group's `folder` (needed for the filesystem path) and its
 List what's already there:
 
 ```bash
-ls groups/<folder>/mcp-shims/ 2>/dev/null
+ls mcp-shims/<folder>/ 2>/dev/null
 ```
 
 Ask: reuse an existing server namespace (this tool joins others already
@@ -87,7 +87,7 @@ Ask what the tool should be called (the leaf name — becomes the MCP tool
 existing server, check the name isn't already taken:
 
 ```bash
-ls groups/<folder>/mcp-shims/<server>/ 2>/dev/null
+ls mcp-shims/<folder>/<server>/ 2>/dev/null
 ```
 
 ### 4. What kind of shim
@@ -222,7 +222,7 @@ if step 7 decided this tool needs longer than the 30s default.
 Create the directory and the script:
 
 ```bash
-mkdir -p groups/<folder>/mcp-shims/<server>
+mkdir -p mcp-shims/<folder>/<server>
 ```
 
 Unlike the rest of `groups/<folder>/`, mcp-shims scripts are **git-tracked**
@@ -231,7 +231,7 @@ why). Never hardcode a credential/secret inline in the script; read it from
 `.env` or a local config file the way any host-shim would, since this file
 is expected to end up in version control.
 
-Write `groups/<folder>/mcp-shims/<server>/<name>-host` with:
+Write `mcp-shims/<folder>/<server>/<name>-host` with:
 - A `--help` branch printing the exact JSON from step 8 to stdout, exit 0.
 - If the script shells out to anything installed outside the base OS (a
   Homebrew/nvm/pyenv-managed tool, an npm global), set `PATH` explicitly
@@ -253,7 +253,7 @@ convention as `briefing-host` and the other host-shim templates in
 ### 10. Make it executable
 
 ```bash
-chmod +x groups/<folder>/mcp-shims/<server>/<name>-host
+chmod +x mcp-shims/<folder>/<server>/<name>-host
 ```
 
 Scripts that aren't executable are invisible to discovery — `mcp-manifest.ts`
@@ -265,7 +265,7 @@ mid-edit shouldn't register a half-finished tool).
 Run it exactly as the host will:
 
 ```bash
-groups/<folder>/mcp-shims/<server>/<name>-host --help
+mcp-shims/<folder>/<server>/<name>-host --help
 ```
 
 Confirm the JSON is well-formed and `inputSchema.type` is `"object"` — a
@@ -276,7 +276,7 @@ time). Then run it **exactly as the real transport will call it — a single
 JSON-string argv**, not bare values:
 
 ```bash
-groups/<folder>/mcp-shims/<server>/<name>-host '{"fieldname": "value"}'
+mcp-shims/<folder>/<server>/<name>-host '{"fieldname": "value"}'
 ```
 
 Testing with `<script> value` instead of `<script> '{"fieldname":"value"}'`
@@ -290,7 +290,7 @@ a stripped-down `PATH` to catch the failure mode above *before* it reaches
 the user, rather than after:
 
 ```bash
-env -i PATH=/usr/bin:/bin groups/<folder>/mcp-shims/<server>/<name>-host '{"fieldname": "value"}'
+env -i PATH=/usr/bin:/bin mcp-shims/<folder>/<server>/<name>-host '{"fieldname": "value"}'
 ```
 
 If that fails but running the script normally (your full shell `PATH`)

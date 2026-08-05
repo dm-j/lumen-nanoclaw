@@ -48,6 +48,7 @@ describe('execHostShim', () => {
       additional_mounts: '[]',
       cli_scope: 'group',
       timezone: null,
+      mcp_shims_dir: null,
       updated_at: new Date().toISOString(),
     };
     createContainerConfig({ ...base, agent_group_id: 'ag-a', host_shims_dir: dirA });

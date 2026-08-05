@@ -1,7 +1,14 @@
 import fs from 'fs';
 import path from 'path';
 
-import { DATA_DIR, DEFAULT_AGENT_PROVIDER, GROUPS_DIR, HOST_SHIM_TEMPLATES_DIR } from './config.js';
+import {
+  DATA_DIR,
+  DEFAULT_AGENT_PROVIDER,
+  GROUPS_DIR,
+  HOST_SHIMS_DIR,
+  HOST_SHIM_TEMPLATES_DIR,
+  MCP_SHIMS_DIR,
+} from './config.js';
 import { ensureContainerConfig } from './db/container-configs.js';
 import { stageGroupPersona } from './group-persona.js';
 import { log } from './log.js';
@@ -78,13 +85,17 @@ export function initGroupFilesystem(
     initialized.push('instructions.prepend.md');
   }
 
-  // host-shims/ — this group's own host-shim whitelist directory (default
-  // location per resolveHostShimsDir; container_configs.host_shims_dir can
-  // override it). Seeded with the default briefing-host script
+  // host-shims/<folder>/ — this group's own host-shim whitelist directory
+  // (default location per resolveHostShimsDir; container_configs.host_shims_dir
+  // can override it). Deliberately a sibling of groups/, NOT inside
+  // groupDir — groupDir is bind-mounted RW into this group's own container,
+  // so a script living inside it would be readable *and* writable from
+  // inside the agent's own session; the agent is meant to know a host-shim
+  // by name only. Seeded with the default briefing-host script
   // (src/host-shim-templates/briefing-host), copied once and never
   // overwritten again — a group's own edits (e.g. its VAULT_PATH) must
   // survive every future spawn/restart.
-  const hostShimsDir = path.join(groupDir, 'host-shims');
+  const hostShimsDir = path.join(HOST_SHIMS_DIR, group.folder);
   if (!fs.existsSync(hostShimsDir)) {
     fs.mkdirSync(hostShimsDir, { recursive: true });
     initialized.push('host-shims/');
@@ -102,11 +113,12 @@ export function initGroupFilesystem(
     }
   }
 
-  // mcp-shims/ — this group's own dynamic MCP-tool whitelist directory.
-  // Same isolation model as host-shims/ (a subfolder script is invisible to
-  // every other group) but auto-exposed as an MCP tool per script instead of
-  // requiring a Bash-tool call. Empty by default — no seeded scripts.
-  const mcpShimsDir = path.join(groupDir, 'mcp-shims');
+  // mcp-shims/<folder>/ — this group's own dynamic MCP-tool whitelist
+  // directory. Same off-mount isolation model as host-shims/ above (a
+  // subfolder script is invisible to every other group, and to the agent
+  // itself) but auto-exposed as an MCP tool per script instead of requiring
+  // a Bash-tool call. Empty by default — no seeded scripts.
+  const mcpShimsDir = path.join(MCP_SHIMS_DIR, group.folder);
   if (!fs.existsSync(mcpShimsDir)) {
     fs.mkdirSync(mcpShimsDir, { recursive: true });
     initialized.push('mcp-shims/');

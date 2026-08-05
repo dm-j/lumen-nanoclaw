@@ -41,28 +41,40 @@ Two different things people reach for this to build:
 
 ## Where scripts live
 
-`groups/<folder>/mcp-shims/<server>/<name>-host` — an executable file. The
-directory structure is the whitelist: nothing registers a script anywhere
-else, and there's no DB table of tools to keep in sync.
+`mcp-shims/<group-folder>/<server>/<name>-host` — an executable file, at
+project root, a **sibling of `groups/`, not inside it.** The directory
+structure is the whitelist: nothing registers a script anywhere else, and
+there's no DB table of tools to keep in sync.
 
 - `<server>` groups related tools under one namespace (e.g. several small
   scripts front different endpoints of the same API).
 - `<name>-host` becomes the MCP tool `<server>_<name>`.
-- No per-group override in v1 (unlike `host-shims/`'s `host_shims_dir`
-  config) — add one only if a real group needs it.
+- Per-group override via `container_configs.mcp_shims_dir` (`ncl groups
+  config update --mcp-shims-dir <path>`) — mirrors `host-shims/`'s
+  `host_shims_dir`. Rarely needed; the per-group default is already
+  segregated out of the box.
 
-**Unlike the rest of `groups/<folder>/`, mcp-shims scripts are git-tracked.**
-`.gitignore` ignores `groups/*` wholesale as per-installation state
-(`container.json`, persona, `host-shims/` with real credentials/paths,
-memory) — right for those, since they're config, not code. A shim script is
-closer to a real MCP server's wiring: losing it to a fresh clone or reinstall
-means losing a capability, not just re-entering local settings. `.gitignore`
-carves an explicit exception for `mcp-shims/` (see its own comment there for
-the mechanics — un-ignore the group folder for traversal, re-ignore its
-other direct children, un-ignore only `mcp-shims/`). Write scripts as if
-they'll be committed: don't hardcode secrets inline (use `.env`/a local
-config file the script reads, same as any host-shim would), since anything
-under `mcp-shims/` is fair game to end up in git history.
+**Deliberately outside `groups/<folder>/`, unlike everything else a group
+owns.** `groups/<folder>/` is bind-mounted read-write into that group's own
+container as `/workspace/agent` — anything living inside it is readable
+*and writable* from inside the agent's own session. That's fine for a
+group's working files, and CLAUDE.md/container.json get their own dedicated
+read-only mounts specifically to prevent tampering — but mcp-shims scripts
+are meant to be **entirely invisible** to the agent: the container only
+ever gets a generic forwarder (`dynamic-shims.ts`) with zero implementation
+in it, the same way a real MCP server's own source isn't visible to a
+client that merely calls its tools. Putting the scripts inside
+`groups/<folder>/` would defeat that — the agent could just read (or edit)
+its own tool implementations directly.
+
+**Not git-tracked** — same reasoning as `host-shims/`: scripts here
+routinely embed real per-install specifics (absolute paths, local service
+ports, model routing) that don't belong in version control. `.gitignore`
+excludes the whole top-level `mcp-shims/` directory. If you want a script
+versioned/shared, keep its canonical source under version control elsewhere
+(a separate repo, a project doc) and treat the copy under `mcp-shims/` as
+deployed, per-install state — the same relationship a `.env` file has to
+its `.env.example`.
 
 ## Self-description (optional, but worth doing)
 
@@ -197,7 +209,3 @@ all and you're wrapping something else.
 | `container/agent-runner/src/mcp-tools/dynamic-shims.ts` | Container-side: reads the manifest, registers one generic MCP tool per entry, threads a declared `timeoutMs` to the `host-shim` CLI via an env var |
 | `container/agent-runner/src/cli/host-shim.ts` | The container's `host-shim` CLI transport (shared with `remember`/`recall`) — reads the `HOST_SHIM_TIMEOUT_MS_OVERRIDE` env var and includes it in the request content when set |
 
-## Current gaps
-
-- No per-group `mcp_shims_dir` override (mirrors `host-shims/`'s
-  `host_shims_dir`, which does have one) — add if a real use case needs it.
