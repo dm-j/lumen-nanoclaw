@@ -186,7 +186,7 @@ export async function appendPendingInboundTurns(agentGroupId: string, sessionId:
     const rows = db
       .prepare(
         `SELECT id, seq, timestamp, content FROM messages_in
-         WHERE status = 'pending' AND kind IN ('chat','chat-sdk') AND seq > ?
+         WHERE status IN ('pending','staged') AND kind IN ('chat','chat-sdk') AND seq > ?
          ORDER BY seq ASC`,
       )
       .all(sinceSeq) as Array<{ id: string; seq: number; timestamp: string; content: string }>;
