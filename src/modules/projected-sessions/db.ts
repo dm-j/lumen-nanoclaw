@@ -153,17 +153,22 @@ export function readPendingBatchText(agentGroupId: string, sessionId: string): s
 
   const db = openInboundDb(dbPath);
   try {
+    // kind list includes 'task' so a due reminder still gives the briefer
+    // something to work with — otherwise a task wake looks identical to a
+    // bare respawn (empty batch) and the briefer is skipped even though the
+    // agent is about to act on real content.
     const rows = db
       .prepare(
-        `SELECT content FROM messages_in WHERE status IN ('pending', 'staged') AND kind IN ('chat','chat-sdk')
+        `SELECT kind, content FROM messages_in WHERE status IN ('pending', 'staged') AND kind IN ('chat','chat-sdk','task','webhook','system')
          ORDER BY seq ASC LIMIT ?`,
       )
-      .all(BATCH_READ_CAP) as Array<{ content: string }>;
+      .all(BATCH_READ_CAP) as Array<{ kind: string; content: string }>;
     return rows
       .map((r) => {
         try {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const parsed = JSON.parse(r.content) as { text?: string; attachments?: any[] };
+          const parsed = JSON.parse(r.content) as { text?: string; attachments?: any[]; prompt?: string };
+          if (r.kind === 'task') return parsed.prompt ?? r.content;
           // A caption and any user-supplied text are both kept — text alone
           // says nothing about what's in the image, and dropping it in favor
           // of the placeholder loses what the user actually said. This is a

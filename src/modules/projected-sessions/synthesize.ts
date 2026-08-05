@@ -56,9 +56,12 @@ export async function maybeSynthesizeProjectedContext(agentGroupId: string, sess
   try {
     const sessionKey = sessionBriefingKey(agentGroupId, session.messaging_group_id, session.thread_id);
     const batchText = readPendingBatchText(agentGroupId, sessionId);
-    // Wakes with no new chat message (scheduled tasks, on_wake respawns,
-    // host-sweep self-heal) have nothing for the briefer to compile — skip
-    // the subagent dispatch and reuse the last known-good briefing verbatim.
+    // Wakes with truly nothing pending (bare on_wake respawns, host-sweep
+    // self-heal) have nothing for the briefer to compile — skip the subagent
+    // dispatch and reuse the last known-good briefing verbatim. Due reminders
+    // (kind='task') are included in batchText precisely so this check doesn't
+    // also skip those — the agent may need fresh context on the subject
+    // before it delivers the reminder.
     const briefing = batchText.trim()
       ? await compileBriefing(agentGroupId, sessionId, sessionKey, batchText)
       : getSessionBriefing(sessionKey);
