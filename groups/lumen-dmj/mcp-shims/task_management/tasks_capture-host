@@ -1,0 +1,26 @@
+#!/bin/sh
+# tasks_capture — create a new task from a plain-text description via mtn.
+# mtn's natural-language parsing extracts tags (#), contexts (@), projects (+),
+# dates, and priority from the description itself — nothing to map by hand.
+case "${1:-}" in
+  --help)
+    cat <<'EOF'
+{"description": "Capture a new task from a plain-text description. Tags (#x), contexts (@x), projects (+x), dates, and priority are parsed automatically from the text.", "inputSchema": {"type": "object", "properties": {"description": {"type": "string"}}, "required": ["description"]}}
+EOF
+    exit 0 ;;
+esac
+
+set -eu
+PATH="/opt/homebrew/bin:$PATH"
+
+# Every mcp-shim call receives exactly one argv: a JSON string of the full
+# tool-call arguments object (see dynamic-shims.ts — the container's MCP
+# layer never destructures per-field, it hands the whole thing through as
+# one JSON payload). Extract the field we care about ourselves.
+DESCRIPTION="$(printf '%s' "${1:-}" | jq -r '.description // empty')"
+if [ -z "$DESCRIPTION" ]; then
+  echo "tasks_capture: description required" >&2
+  exit 1
+fi
+
+mtn create "$DESCRIPTION"

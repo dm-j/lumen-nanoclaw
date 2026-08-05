@@ -1,0 +1,16 @@
+#!/bin/sh
+# tasks_list — list active (not-done) tasks via the mdbase-tasknotes CLI (`mtn`),
+# which reads TaskNotes' own vault files directly. No Obsidian command palette
+# involved. Barebones MVP: no filters — just what mtn's own default gives you
+# (open tasks by due date).
+case "${1:-}" in
+  --help)
+    cat <<'EOF'
+{"description": "List all active (not completed) tasks. Each has a `path` field — pass that to tasks_finish to complete it unambiguously.", "inputSchema": {"type": "object", "properties": {}}}
+EOF
+    exit 0 ;;
+esac
+
+set -eu
+PATH="/opt/homebrew/bin:$PATH"
+mtn list --json
