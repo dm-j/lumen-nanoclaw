@@ -19,7 +19,7 @@ import { getAgentGroup } from '../../db/agent-groups.js';
 import { getSession } from '../../db/sessions.js';
 import { sessionDir } from '../../session-manager.js';
 import { log } from '../../log.js';
-import { getBriefingHistoryText, isEnabled, readPendingBatchText } from './db.js';
+import { getBriefingHistoryEntries, isEnabled, readPendingBatchText } from './db.js';
 import { COMPILER_TAIL_TURNS, compileBriefing, sessionBriefingKey } from './compile-briefing.js';
 import { renderLiteralTail } from './literal-tail.js';
 
@@ -58,10 +58,11 @@ export async function maybeSynthesizeProjectedContext(agentGroupId: string, sess
     const batchText = readPendingBatchText(agentGroupId, sessionId);
     const briefing = await compileBriefing(agentGroupId, sessionId, sessionKey, batchText);
     // Up to RESPONDER_BRIEFING_CAP past briefings (oldest-first, includes
-    // the one just compiled above), folded into the tail as an uncounted
-    // leading block — still written to briefing.md too (just the latest),
-    // so anything reading that file directly is unaffected.
-    const briefingHistory = getBriefingHistoryText(sessionKey, RESPONDER_BRIEFING_CAP);
+    // the one just compiled above), interleaved by timestamp with the raw
+    // turns inside renderLiteralTail below — still written to briefing.md
+    // too (just the latest), so anything reading that file directly is
+    // unaffected.
+    const briefingHistory = getBriefingHistoryEntries(sessionKey, RESPONDER_BRIEFING_CAP);
     const tail = await renderLiteralTail(
       agentGroupId,
       sessionId,

@@ -77,15 +77,25 @@ export function appendBriefingHistory(sessionKey: string, content: string, cap: 
   ).run(sessionKey, sessionKey, cap);
 }
 
-/** Oldest-first text of the last `cap` briefings, one `[briefing <timestamp>]` block each. */
-export function getBriefingHistoryText(sessionKey: string, cap: number): string {
+export interface BriefingHistoryEntry {
+  content: string;
+  createdAt: string;
+}
+
+/**
+ * Oldest-first, the last `cap` briefings for this session key — structured
+ * (not pre-rendered to text) so the caller can interleave each entry by its
+ * own `createdAt` against the raw turns in `renderLiteralTail` rather than
+ * clumping all past briefings into one leading block. A briefing summarizes
+ * turns that came before it and was itself superseded by turns that came
+ * after — showing it out of that order reads as the compiler/responder
+ * "jumping around" in time instead of following a single timeline.
+ */
+export function getBriefingHistoryEntries(sessionKey: string, cap: number): BriefingHistoryEntry[] {
   const rows = getDb()
     .prepare('SELECT content, created_at FROM session_briefing_history WHERE session_key = ? ORDER BY seq DESC LIMIT ?')
     .all(sessionKey, cap) as Array<{ content: string; created_at: string }>;
-  return rows
-    .reverse()
-    .map((r) => `[briefing ${r.created_at}]\n${r.content}`)
-    .join('\n\n');
+  return rows.reverse().map((r) => ({ content: r.content, createdAt: r.created_at }));
 }
 
 export type TailLane = 'compiler' | 'responder';

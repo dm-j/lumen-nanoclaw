@@ -13,7 +13,7 @@ import os from 'os';
 import path from 'path';
 
 import { execHostShim } from '../host-shim/exec.js';
-import { appendBriefingHistory, getBriefingHistoryText, getSessionBriefing, setSessionBriefing } from './db.js';
+import { appendBriefingHistory, getBriefingHistoryEntries, getSessionBriefing, setSessionBriefing } from './db.js';
 import { DEFAULT_CACHE_TTL_MS, renderLiteralTail } from './literal-tail.js';
 import { log } from '../../log.js';
 import { LOGS_DIR } from '../../config.js';
@@ -87,13 +87,16 @@ export async function compileBriefing(
 ): Promise<string> {
   const prevBriefing = getSessionBriefing(sessionKey);
 
-  // Up to COMPILER_TAIL_TURNS past briefings (oldest-first), folded into the
-  // tail as an uncounted leading block (the single latest one is still also
-  // passed separately as PREV_FILE below, per briefing-host's established
-  // two-arg contract) — this lets the briefer see its own recent history
-  // framed as "already-known context", so its own instructions can tell it
-  // not to restate what's already visible here.
-  const briefingHistory = getBriefingHistoryText(sessionKey, COMPILER_TAIL_TURNS);
+  // Up to COMPILER_TAIL_TURNS past briefings (oldest-first), interleaved by
+  // timestamp with the raw turns inside renderLiteralTail below — not one
+  // leading block — so the briefer sees its own recent history in the same
+  // timeline as the turns it summarized, instead of jumping around (the
+  // single latest one is still also passed separately as PREV_FILE below,
+  // per briefing-host's established two-arg contract) — this lets the
+  // briefer see its own recent history framed as "already-known context",
+  // so its own instructions can tell it not to restate what's already
+  // visible here.
+  const briefingHistory = getBriefingHistoryEntries(sessionKey, COMPILER_TAIL_TURNS);
   // Compiler lane shells out to a fresh `claude -p --agent briefer` process
   // per call — a real API call each time, so the ephemeral prompt-cache TTL
   // is a real constraint here (see literal-tail.ts's header for why the

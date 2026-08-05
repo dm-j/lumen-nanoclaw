@@ -39,6 +39,16 @@ const TEST_DIR = '/tmp/nanoclaw-test-literal-tail-persist';
 const AG = 'ag-tailpersist';
 const SESS = 'sess-tailpersist';
 
+// renderLiteralTail only surfaces 'completed' inbound rows (a still-pending
+// row is the in-flight batch, already shown separately) — these fixtures
+// simulate a message that's already part of history, so mark it completed
+// the same way session-db.ts's real processing-ack sync does.
+function markCompleted(id: string): void {
+  const db = openInboundDb(path.join(sessionDir(AG, SESS), 'inbound.db'));
+  db.prepare("UPDATE messages_in SET status = 'completed' WHERE id = ?").run(id);
+  db.close();
+}
+
 function now(): string {
   return new Date().toISOString();
 }
@@ -101,6 +111,7 @@ describe('literal-tail lazy re-caption + persist', () => {
         attachments: [{ type: 'image', name: 'photo.jpg', data: Buffer.from('original-bytes').toString('base64') }],
       }),
     });
+    markCompleted('msg-old-image');
 
     mockFetchOnce('A red bicycle leaning against a brick wall.');
 
@@ -132,6 +143,7 @@ describe('literal-tail lazy re-caption + persist', () => {
         attachments: [{ type: 'image', name: 'photo2.jpg', data: Buffer.from('original-bytes-2').toString('base64') }],
       }),
     });
+    markCompleted('msg-old-image-2');
 
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('connect ECONNREFUSED 127.0.0.1:11434')));
 
@@ -152,6 +164,7 @@ describe('literal-tail lazy re-caption + persist', () => {
         attachments: [{ type: 'image', name: 'photo3.jpg', data: Buffer.from('original-bytes-3').toString('base64') }],
       }),
     });
+    markCompleted('msg-old-image-3');
 
     // First render: transient failure — captionError only, no caption yet.
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('connect ECONNREFUSED')));
@@ -185,6 +198,7 @@ describe('literal-tail lazy re-caption + persist', () => {
         attachments: [{ type: 'image', name: 'photo4.jpg', data: Buffer.from('original-bytes-4').toString('base64') }],
       }),
     });
+    markCompleted('msg-old-image-4');
 
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Ollama returned 500 Internal Server Error')));
 

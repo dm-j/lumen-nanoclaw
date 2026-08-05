@@ -46,7 +46,9 @@ import type Database from 'better-sqlite3';
 import { inboundDbPath, outboundDbPath, sessionDir } from '../../session-manager.js';
 import { openInboundDb, openOutboundDb } from '../../db/session-db.js';
 import { captionImage, isContentionError, isImageAttachment } from '../attachment-caption/caption.js';
-import { getTailAnchor, setTailAnchor, type TailLane } from './db.js';
+import { resolveAssistantName, resolveGroupTimezone } from '../../container-config.js';
+import { formatLocalIsoOffset } from '../../timezone.js';
+import { getTailAnchor, setTailAnchor, type BriefingHistoryEntry, type TailLane } from './db.js';
 
 interface TailRow {
   timestamp: string;
@@ -221,7 +223,15 @@ async function readAllTurns(agentGroupId: string, sessionId: string): Promise<Ta
     try {
       const inRows = db
         .prepare(
-          `SELECT id, timestamp, content FROM messages_in WHERE kind IN ('chat','chat-sdk') ORDER BY timestamp DESC LIMIT ?`,
+          // status = 'completed' only — a still-pending/staged row is the
+          // in-flight batch, already shown separately as "## New message"
+          // (readPendingBatchText in db.ts). Without this filter, a message
+          // not yet marked completed by the time this tail renders shows up
+          // twice in the same prompt: once here as "already-handled
+          // history", once in the new-message section as "brand-new" — a
+          // contradiction that plausibly reads to the model as "nothing new
+          // to add" even when the rest of the batch genuinely is.
+          `SELECT id, timestamp, content FROM messages_in WHERE kind IN ('chat','chat-sdk') AND status = 'completed' ORDER BY timestamp DESC LIMIT ?`,
         )
         .all(SAFETY_CAP) as Array<{ id: string; timestamp: string; content: string }>;
       for (const r of inRows) {
@@ -246,8 +256,12 @@ async function readAllTurns(agentGroupId: string, sessionId: string): Promise<Ta
       const outRows = db
         .prepare(`SELECT timestamp, content FROM messages_out WHERE kind = 'chat' ORDER BY timestamp DESC LIMIT ?`)
         .all(SAFETY_CAP) as Array<{ timestamp: string; content: string }>;
+      // The agent's configured display name, not a hardcoded role label —
+      // same resolution delivery.ts already uses for the vault transcript
+      // export (assistant_name override → group name → "Assistant").
+      const assistantName = resolveAssistantName(agentGroupId);
       for (const r of outRows) {
-        rows.push({ timestamp: r.timestamp, sender: 'assistant', text: parseText(r.content) });
+        rows.push({ timestamp: r.timestamp, sender: assistantName, text: parseText(r.content) });
       }
     } finally {
       db.close();
@@ -264,18 +278,23 @@ export async function renderLiteralTail(
   sessionKey: string,
   lane: TailLane,
   n: number,
-  leadingBriefing?: string,
+  briefingHistory?: BriefingHistoryEntry[],
   cacheTtlMs?: number,
 ): Promise<string> {
   const all = await readAllTurns(agentGroupId, sessionId);
 
-  // The briefing (already formatted with its own per-entry headers by
-  // getBriefingHistoryText) is prepended as an uncounted leading block — it
-  // never touches `selected`, the anchor, or the N-turn budget below, so
-  // growth and reset behavior are exactly as before regardless of length.
-  const briefingBlock = leadingBriefing?.trim() ?? '';
+  // Interleaved by timestamp with the turns below, not clumped into one
+  // leading block — a briefing summarizes the turns before it and gets
+  // superseded by the turns after it, so showing all N past briefings
+  // before any turns (the old behavior) presented them out of order: e.g.
+  // a briefing compiled *during* this very turn window would appear to
+  // precede turns that actually came first. Interleaving still never
+  // touches `selected`, the anchor, or the N-turn budget below — those stay
+  // turn-only, so growth/reset/cache-prefix behavior is unchanged; this
+  // only affects final rendering.
+  const briefingEntries = briefingHistory ?? [];
 
-  if (all.length === 0) return briefingBlock;
+  if (all.length === 0 && briefingEntries.length === 0) return '';
 
   const anchor = getTailAnchor(sessionKey, lane);
 
@@ -290,14 +309,33 @@ export async function renderLiteralTail(
   // Anchor missing, past its 2N cap, cache-stale (see CACHE_TTL_MS above), or
   // aged out of SAFETY_CAP (filter came back empty) — reset to the last N
   // turns, fresh cycle.
-  if (selected.length === 0) {
+  if (selected.length === 0 && all.length > 0) {
     selected = all.slice(-n);
   }
 
   const newAnchorTs = selected[0]?.timestamp ?? null;
   setTailAnchor(sessionKey, lane, newAnchorTs, selected.length);
 
-  const turnsBlock = selected.map((r) => `[${r.timestamp}] ${r.sender}: ${r.text}`).join('\n');
+  // Local time + explicit numeric offset, not raw UTC — tells the model
+  // what time it should think "now" is, while staying trivially convertible
+  // back to UTC if needed. Sort key stays the raw UTC ISO timestamp (still
+  // lexicographically ordered); only the rendered text changes.
+  const tz = resolveGroupTimezone(agentGroupId);
+  interface RenderEntry {
+    timestamp: string;
+    text: string;
+  }
+  const entries: RenderEntry[] = [
+    ...selected.map((r) => ({
+      timestamp: r.timestamp,
+      text: `[${formatLocalIsoOffset(r.timestamp, tz)}] ${r.sender}: ${r.text}`,
+    })),
+    ...briefingEntries.map((b) => ({
+      timestamp: b.createdAt,
+      text: `[${formatLocalIsoOffset(b.createdAt, tz)}] Briefing subagent: ${b.content}`,
+    })),
+  ];
+  entries.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 
-  return briefingBlock ? `${briefingBlock}\n\n${turnsBlock}` : turnsBlock;
+  return entries.map((e) => e.text).join('\n\n');
 }
