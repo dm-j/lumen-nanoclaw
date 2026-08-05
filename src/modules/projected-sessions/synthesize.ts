@@ -62,7 +62,7 @@ export async function maybeSynthesizeProjectedContext(agentGroupId: string, sess
     // leading block — still written to briefing.md too (just the latest),
     // so anything reading that file directly is unaffected.
     const briefingHistory = getBriefingHistoryText(sessionKey, RESPONDER_BRIEFING_CAP);
-    const tail = renderLiteralTail(
+    const tail = await renderLiteralTail(
       agentGroupId,
       sessionId,
       sessionKey,

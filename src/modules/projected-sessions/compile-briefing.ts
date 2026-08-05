@@ -28,6 +28,10 @@ const COMPILE_TIMEOUT_MS = 180_000;
 // sides (synthesize.ts imports this same constant for its own cap).
 export const COMPILER_TAIL_TURNS = 5;
 
+function briefingFailureNote(errorDetail: string): string {
+  return `Briefing generation failed with error: ${errorDetail}. Inform your user if they are not aware of this issue.`;
+}
+
 export function sessionBriefingKey(
   agentGroupId: string,
   messagingGroupId: string | null,
@@ -56,7 +60,7 @@ export async function compileBriefing(
   // per call — a real API call each time, so the ephemeral prompt-cache TTL
   // is a real constraint here (see literal-tail.ts's header for why the
   // responder lane deliberately omits this).
-  const tail = renderLiteralTail(
+  const tail = await renderLiteralTail(
     agentGroupId,
     sessionId,
     sessionKey,
@@ -78,7 +82,9 @@ export async function compileBriefing(
     const result = await execHostShim(agentGroupId, 'briefing', [prevFile, batchFile], COMPILE_TIMEOUT_MS);
 
     if (!result.ok || result.exitCode !== 0 || !result.stdout.trim()) {
-      log.warn('compile-briefing: falling back to stored briefing', {
+      const errorDetail =
+        result.refusalReason || result.stderr?.trim().slice(0, 300) || `briefing-host exited ${result.exitCode}`;
+      log.warn('compile-briefing: failed, passing message through with a failure note', {
         agentGroupId,
         sessionKey,
         ok: result.ok,
@@ -87,7 +93,10 @@ export async function compileBriefing(
         stderr: result.stderr?.slice(0, 500),
         stdout: result.stdout?.slice(0, 500),
       });
-      return prevBriefing;
+      // Not persisted via setSessionBriefing/appendBriefingHistory — the last
+      // known-good briefing stays in place for the *next* turn's compile to
+      // build on. This note is only what's shown to the responder right now.
+      return briefingFailureNote(errorDetail);
     }
 
     const content = result.stdout.trim();
@@ -95,8 +104,13 @@ export async function compileBriefing(
     appendBriefingHistory(sessionKey, content, COMPILER_TAIL_TURNS);
     return content;
   } catch (err) {
-    log.warn('compile-briefing: threw, falling back to stored briefing', { agentGroupId, sessionKey, err });
-    return prevBriefing;
+    const errorDetail = err instanceof Error ? err.message : String(err);
+    log.warn('compile-briefing: threw, passing message through with a failure note', {
+      agentGroupId,
+      sessionKey,
+      err,
+    });
+    return briefingFailureNote(errorDetail);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

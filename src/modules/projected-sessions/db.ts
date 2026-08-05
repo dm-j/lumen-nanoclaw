@@ -5,6 +5,7 @@
 import { getDb } from '../../db/connection.js';
 import { inboundDbPath } from '../../session-manager.js';
 import { openInboundDb } from '../../db/session-db.js';
+import { combineTextAndAttachments } from './literal-tail.js';
 import fs from 'fs';
 
 export function isEnabled(agentGroupId: string): boolean {
@@ -144,14 +145,22 @@ export function readPendingBatchText(agentGroupId: string, sessionId: string): s
   try {
     const rows = db
       .prepare(
-        `SELECT content FROM messages_in WHERE status = 'pending' AND kind IN ('chat','chat-sdk')
+        `SELECT content FROM messages_in WHERE status IN ('pending', 'staged') AND kind IN ('chat','chat-sdk')
          ORDER BY seq ASC LIMIT ?`,
       )
       .all(BATCH_READ_CAP) as Array<{ content: string }>;
     return rows
       .map((r) => {
         try {
-          return (JSON.parse(r.content) as { text?: string }).text ?? r.content;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const parsed = JSON.parse(r.content) as { text?: string; attachments?: any[] };
+          // A caption and any user-supplied text are both kept — text alone
+          // says nothing about what's in the image, and dropping it in favor
+          // of the placeholder loses what the user actually said. This is a
+          // read-only render (no lazy caption/persist here); renderLiteralTail's
+          // own pass over the same row, called moments later by
+          // compileBriefing, does the lazy captioning.
+          return combineTextAndAttachments(parsed.text, parsed.attachments) ?? r.content;
         } catch {
           return r.content;
         }

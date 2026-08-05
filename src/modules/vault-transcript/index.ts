@@ -31,10 +31,14 @@
  * above, never worse.
  */
 import fs from 'fs';
+import os from 'os';
+import path from 'path';
 
 import { execHostShim } from '../host-shim/exec.js';
-import { inboundDbPath } from '../../session-manager.js';
+import { inboundDbPath, sessionDir } from '../../session-manager.js';
 import { openInboundDb } from '../../db/session-db.js';
+import { isImageAttachment, resizeToBuffer } from '../attachment-caption/caption.js';
+import { combineTextAndAttachments } from '../projected-sessions/literal-tail.js';
 import { log } from '../../log.js';
 
 const lastExportedSeq = new Map<string, number>();
@@ -44,11 +48,14 @@ async function appendTranscriptTurn(
   speaker: string,
   timestampIso: string,
   text: string,
+  imagePath?: string,
 ): Promise<void> {
   const trimmed = text.trim();
   if (!trimmed) return;
   try {
-    const result = await execHostShim(agentGroupId, 'transcript-append', [speaker, timestampIso, trimmed]);
+    const args = [speaker, timestampIso, trimmed];
+    if (imagePath) args.push(imagePath);
+    const result = await execHostShim(agentGroupId, 'transcript-append', args);
     if (!result.ok && result.refusalReason?.startsWith('no whitelisted shim named')) return; // expected — script absent
     if (!result.ok || result.exitCode !== 0) {
       log.warn('transcript-append failed', {
@@ -69,13 +76,102 @@ function parseChatContent(content: string): { sender: string; text: string } {
       sender?: string;
       author?: { fullName?: string; userName?: string };
       text?: string;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      attachments?: any[];
     };
-    return {
-      sender: parsed.sender || parsed.author?.fullName || parsed.author?.userName || 'Unknown',
-      text: parsed.text ?? content,
-    };
+    const sender = parsed.sender || parsed.author?.fullName || parsed.author?.userName || 'Unknown';
+    // A user-supplied caption and the attachment placeholder are both kept —
+    // same reasoning as literal-tail.ts's combineTextAndAttachments: text
+    // alone says nothing about what's in the image, and dropping it in
+    // favor of the placeholder loses what the user actually said.
+    return { sender, text: combineTextAndAttachments(parsed.text, parsed.attachments) ?? content };
   } catch {
     return { sender: 'Unknown', text: content };
+  }
+}
+
+/** Resize a staged attachment's bytes to a throwaway temp file for transcript-append-host to copy into the vault. Caller deletes it after the call. */
+async function stageResizedImage(agentGroupId: string, sessionId: string, localPath: string): Promise<string | null> {
+  try {
+    const filePath = path.join(sessionDir(agentGroupId, sessionId), localPath);
+    const bytes = fs.readFileSync(filePath);
+    const resized = await resizeToBuffer(bytes);
+    const tempPath = path.join(
+      os.tmpdir(),
+      `nanoclaw-vault-img-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`,
+    );
+    fs.writeFileSync(tempPath, resized);
+    return tempPath;
+  } catch (err) {
+    log.warn('Failed to stage vault image attachment', { agentGroupId, sessionId, localPath, err });
+    return null;
+  }
+}
+
+/**
+ * If the row's content has exactly one caption-gated image attachment
+ * (captioned successfully, staged to disk) *already*, resize it to a temp
+ * file for transcript-append-host to copy into the vault. Caption-gated
+ * only — a captionError'd image isn't copied; the transcript line already
+ * carries the failure text. Returns null when there's nothing to attach.
+ *
+ * In the common case this misses: captioning now runs asynchronously,
+ * kicked off from message delivery (attachment-caption/notify.ts) — well
+ * after this function's caller (appendPendingInboundTurns) has already run
+ * at wake time, before a container even starts. This synchronous path only
+ * catches the rare case a caption already landed by wake time (e.g. a lazy
+ * recapture from a previous render). The reliable path is
+ * `appendCaptionedAttachment` below, called once notify.ts's job actually
+ * has a result.
+ */
+async function stageVaultImage(agentGroupId: string, sessionId: string, content: string): Promise<string | null> {
+  let parsed: { attachments?: Array<Record<string, unknown>> };
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return null;
+  }
+  const attachments = parsed.attachments;
+  if (!Array.isArray(attachments)) return null;
+
+  const att = attachments.find(
+    (a) => typeof a.caption === 'string' && a.caption && typeof a.localPath === 'string' && isImageAttachment(a),
+  );
+  if (!att) return null;
+
+  return stageResizedImage(agentGroupId, sessionId, att.localPath as string);
+}
+
+/**
+ * Appends a vault transcript line for an image once captioning has actually
+ * concluded — success or exhausted-retries failure alike (called from
+ * attachment-caption/notify.ts's runCaptioning after its retry loop
+ * settles). The line always references the attachment's `captionId`, so a
+ * later reader (human or agent) can correlate a transcript entry back to the
+ * exact attachment even across a captionless run, a retry, or a resend under
+ * a different message id. The resized image itself is attached via
+ * transcript-append-host's optional image-path arg whenever staging
+ * succeeds — including on a captioning failure, since the bytes are already
+ * on disk regardless of whether a description was produced. No-op if the
+ * group has no transcript-append-host script (execHostShim's usual no-op).
+ */
+export async function appendCaptionedAttachment(
+  agentGroupId: string,
+  sessionId: string,
+  sender: string,
+  timestampIso: string,
+  localPath: string,
+  captionId: string,
+  result: { ok: boolean; text: string },
+): Promise<void> {
+  const line = result.ok
+    ? `[image id: ${captionId}] ${result.text}`
+    : `[image id: ${captionId}] could not be described: ${result.text}`;
+  const imagePath = await stageResizedImage(agentGroupId, sessionId, localPath);
+  try {
+    await appendTranscriptTurn(agentGroupId, sender, timestampIso, line, imagePath ?? undefined);
+  } finally {
+    if (imagePath) fs.rmSync(imagePath, { force: true });
   }
 }
 
@@ -89,14 +185,29 @@ export async function appendPendingInboundTurns(agentGroupId: string, sessionId:
     const sinceSeq = lastExportedSeq.get(sessionId) ?? 0;
     const rows = db
       .prepare(
-        `SELECT seq, timestamp, content FROM messages_in
+        `SELECT id, seq, timestamp, content FROM messages_in
          WHERE status = 'pending' AND kind IN ('chat','chat-sdk') AND seq > ?
          ORDER BY seq ASC`,
       )
-      .all(sinceSeq) as Array<{ seq: number; timestamp: string; content: string }>;
+      .all(sinceSeq) as Array<{ id: string; seq: number; timestamp: string; content: string }>;
     for (const row of rows) {
+      // The captioning job's own completion notice (attachment-caption/notify.ts,
+      // id prefix 'caption-') is a synthetic chat-kind row so the agent-runner
+      // poll loop actually delivers it — but it already gets its own vault line
+      // (with the image attached) via appendCaptionedAttachment below, called
+      // right when the caption lands. Exporting it here too would double up
+      // the same description as a second, image-less line.
+      if (row.id.startsWith('caption-')) {
+        lastExportedSeq.set(sessionId, row.seq);
+        continue;
+      }
       const { sender, text } = parseChatContent(row.content);
-      await appendTranscriptTurn(agentGroupId, sender, row.timestamp, text);
+      const imagePath = await stageVaultImage(agentGroupId, sessionId, row.content);
+      try {
+        await appendTranscriptTurn(agentGroupId, sender, row.timestamp, text, imagePath ?? undefined);
+      } finally {
+        if (imagePath) fs.rmSync(imagePath, { force: true });
+      }
       lastExportedSeq.set(sessionId, row.seq);
     }
   } finally {

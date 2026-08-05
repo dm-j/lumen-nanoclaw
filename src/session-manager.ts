@@ -17,8 +17,10 @@ import path from 'path';
 import { deriveAttachmentName } from './attachment-naming.js';
 import { isSafeAttachmentName } from './attachment-safety.js';
 import type { OutboundFile } from './channels/adapter.js';
-import { DATA_DIR } from './config.js';
+import { DATA_DIR, GROUPS_DIR } from './config.js';
 import { ensureContainedInboxDir, isPathInside } from './inbox-safety.js';
+import { isImageAttachment } from './modules/attachment-caption/caption.js';
+import { getAgentGroup } from './db/agent-groups.js';
 import { getMessagingGroup } from './db/messaging-groups.js';
 import {
   createSession,
@@ -238,6 +240,15 @@ export function writeSessionMessage(
      * Dying containers (past first poll) skip these rows.
      */
     onWake?: 0 | 1;
+    /**
+     * Write as 'staged' instead of 'pending' — invisible to the container's
+     * poll loop (which only reads status='pending') until releaseStagedMessage
+     * flips it. Used for wake-triggering messages so an already-warm
+     * container can't race the host's own synth/briefing step, which still
+     * needs the row present (readPendingBatchText also accepts 'staged') to
+     * build its batch text from it.
+     */
+    stage?: boolean;
   },
 ): void {
   // Documented reset: operators `rm -rf` a session folder to clear a stuck
@@ -269,11 +280,26 @@ export function writeSessionMessage(
       sourceSessionId: message.sourceSessionId ?? null,
       onWake: message.onWake ?? 0,
     });
+    if (message.stage) {
+      db.prepare("UPDATE messages_in SET status = 'staged' WHERE id = ?").run(message.id);
+    }
   } finally {
     db.close();
   }
 
   updateSession(sessionId, { last_active: new Date().toISOString() });
+}
+
+/** Flips a 'staged' row (see writeSessionMessage's `stage` option) back to
+ *  'pending' so the container's poll loop can finally see it. No-op if the
+ *  row was never staged (already 'pending') or doesn't exist. */
+export function releaseStagedMessage(agentGroupId: string, sessionId: string, messageId: string): void {
+  const db = openInboundDb(agentGroupId, sessionId);
+  try {
+    db.prepare("UPDATE messages_in SET status = 'pending' WHERE id = ? AND status = 'staged'").run(messageId);
+  } finally {
+    db.close();
+  }
 }
 
 /**
@@ -345,11 +371,12 @@ function extractAttachmentFiles(
     if (!inboxDir) break;
 
     const filePath = path.join(inboxDir, filename);
+    const bytes = Buffer.from(att.data as string, 'base64');
     try {
       // wx = exclusive create. Refuses to follow a pre existing symlink or
       // overwrite any existing file. The host expects to be the sole writer
       // of these attachments.
-      fs.writeFileSync(filePath, Buffer.from(att.data as string, 'base64'), { flag: 'wx' });
+      fs.writeFileSync(filePath, bytes, { flag: 'wx' });
     } catch (err: unknown) {
       const e = err as NodeJS.ErrnoException;
       if (e.code === 'EEXIST') {
@@ -367,6 +394,27 @@ function extractAttachmentFiles(
     delete att.data;
     changed = true;
     log.debug('Saved attachment to inbox', { messageId, filename, size: att.size });
+
+    // Session inbox is per-thread and may not outlive the session. Images
+    // also get resized to 512px for captioning/vault-export — mirror the
+    // full-resolution original into the agent group's persistent workspace
+    // (survives session lifecycle) in case the resize crunches too much
+    // detail. Not the Obsidian vault — that only ever gets the resized copy.
+    // Best-effort: a failure here must not block message delivery.
+    // ponytail: local-disk only for now; an offsite store (Dropbox etc.) can
+    // replace this path later without touching the inbox-write above.
+    if (isImageAttachment(att)) {
+      try {
+        const folder = getAgentGroup(agentGroupId)?.folder;
+        if (folder) {
+          const archiveDir = path.join(path.resolve(GROUPS_DIR, folder), 'attachments', messageId);
+          fs.mkdirSync(archiveDir, { recursive: true });
+          fs.writeFileSync(path.join(archiveDir, filename), bytes, { flag: 'wx' });
+        }
+      } catch (err) {
+        log.warn('Failed to archive original attachment to group workspace', { messageId, filename, err });
+      }
+    }
   }
 
   return changed ? JSON.stringify(parsed) : contentStr;

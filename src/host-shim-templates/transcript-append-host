@@ -6,11 +6,19 @@
 #
 # Calling contract (docs/host-shims.md; src/modules/vault-transcript/index.ts):
 # invoked once per delivered/inbound chat turn as
-#   transcript-append-host <speaker> <utc-iso-timestamp> <text>
+#   transcript-append-host <speaker> <utc-iso-timestamp> <text> [image-path]
 # and appends one turn to that local calendar day's
 # 07-Daily/Transcripts-readonly/YYYY/MM/DD.md, creating the file (with
 # frontmatter) on first turn of the day. No stdout contract — NanoClaw
 # only checks the exit code.
+#
+# The optional 4th arg is a host-local path to a resized (512px) JPEG for a
+# captioned inbound image attachment. If present, it's copied into this
+# vault's attachments/ folder and embedded as an Obsidian image link. This
+# arg was added after this template was first seeded — an already-deployed,
+# user-edited copy of this script simply never reads $4 and keeps working
+# exactly as before. Groups that want vault image attachments need to
+# manually re-merge this block from a fresh copy of the template.
 #
 # Anchor/blockquote format matches this vault's own existing
 # Meta/scripts/assemble-transcript exactly (same slugify/compact_ts
@@ -23,7 +31,7 @@ case "${1:-}" in
     cat <<'EOF'
 transcript-append — append one conversation turn to today's transcript.
 
-Usage: transcript-append <speaker> <utc-iso-timestamp> <text>
+Usage: transcript-append <speaker> <utc-iso-timestamp> <text> [image-path]
 EOF
     exit 0
     ;;
@@ -44,6 +52,7 @@ fi
 SPEAKER="$1"
 UTC_TS="$2"
 TEXT="$3"
+IMAGE_PATH="${4:-}"
 
 # Strip fractional seconds (JS toISOString() emits them; BSD date -f can't
 # parse them) before converting UTC -> local with an explicit offset.
@@ -78,10 +87,23 @@ SLUG=$(echo "$SPEAKER" | tr '[:upper:]' '[:lower:]' | tr -s ' ' '-' | tr -cd 'a-
 # "2026-07-23T02:52:32-05:00" -> "20260723t025232-0500"
 COMPACT_TS=$(echo "$LOCAL_TS" | tr -d ':' | sed -E 's/^([0-9]{4})-([0-9]{2})-([0-9]{2})/\1\2\3/' | tr 'T' 't')
 
+EMBED=""
+if [ -n "$IMAGE_PATH" ] && [ -f "$IMAGE_PATH" ]; then
+  ATTACH_DIR="$DEST_DIR/attachments"
+  mkdir -p "$ATTACH_DIR"
+  ATTACH_NAME="${SLUG}-${COMPACT_TS}.jpg"
+  cp "$IMAGE_PATH" "$ATTACH_DIR/$ATTACH_NAME"
+  EMBED="![[attachments/${ATTACH_NAME}]]"
+fi
+
 {
   echo "> **${SPEAKER} — ${LOCAL_TS}**"
   # Quote every line of the text (blank lines become a bare '>').
   echo "$TEXT" | sed -E 's/^$/>/; s/^([^>])/> \1/'
+  if [ -n "$EMBED" ]; then
+    echo ">"
+    echo "> $EMBED"
+  fi
   echo
   echo "^${SLUG}-${COMPACT_TS}"
   echo
