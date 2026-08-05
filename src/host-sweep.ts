@@ -68,6 +68,14 @@ export const ABSOLUTE_CEILING_MS = 30 * 60 * 1000;
 // Stuck tolerance window applied per 'processing' claim — "did we see any
 // signs of life since this message was claimed?"
 export const CLAIM_STUCK_MS = 60 * 1000;
+// A 'staged' row (writeSessionMessage's pre-wake state, see session-manager.ts)
+// normally flips to 'pending' within seconds via releaseStagedMessage, right
+// after wakeContainer resolves in router.ts. If the host process dies in that
+// exact window (e.g. a restart mid-flight), the row is orphaned permanently —
+// nothing else ever revisits it. Reusing the container SLA's own ceiling: if
+// something so routine hasn't happened in 30 minutes, it never will on its
+// own.
+export const STUCK_STAGED_MS = ABSOLUTE_CEILING_MS;
 const MAX_TRIES = 5;
 const BACKOFF_BASE_MS = 5000;
 
@@ -217,6 +225,15 @@ async function sweepSession(session: Session): Promise<void> {
       syncProcessingAcks(inDb, outDb);
     }
 
+    // 1.5. Recover any 'staged' row abandoned past STUCK_STAGED_MS — see its
+    // own doc comment. Flips back to 'pending' (not 'completed': we can't
+    // safely know from here whether it was already answered before the
+    // process died, and a message silently vanishing forever is worse than
+    // an occasional late/duplicate-ish reply to one that already was —
+    // matches this file's existing stuck-'processing' recovery, which makes
+    // the same call).
+    recoverStuckStagedRows(inDb, session);
+
     // 2. Wake a container if work is due and nothing is running. Ordered
     // before the crashed-container cleanup so a fresh container gets a chance
     // to clean its own orphan processing_ack rows on startup (see
@@ -329,6 +346,23 @@ function enforceRunningContainerSla(
   });
   killContainer(session.id, 'claim-stuck');
   resetStuckProcessingRows(inDb, outDb, session, 'claim-stuck');
+}
+
+export function _recoverStuckStagedRowsForTesting(inDb: Database.Database, session: Session): void {
+  recoverStuckStagedRows(inDb, session);
+}
+
+function recoverStuckStagedRows(inDb: Database.Database, session: Session): void {
+  const now = Date.now();
+  const staged = inDb.prepare("SELECT id, timestamp FROM messages_in WHERE status = 'staged'").all() as Array<{
+    id: string;
+    timestamp: string;
+  }>;
+  for (const row of staged) {
+    if (now - parseSqliteUtc(row.timestamp) < STUCK_STAGED_MS) continue;
+    inDb.prepare("UPDATE messages_in SET status = 'pending' WHERE id = ? AND status = 'staged'").run(row.id);
+    log.warn('Recovered a message stuck in staged status', { messageId: row.id, sessionId: session.id });
+  }
 }
 
 export function _resetStuckProcessingRowsForTesting(
