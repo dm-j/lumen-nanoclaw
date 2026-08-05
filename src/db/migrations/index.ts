@@ -20,6 +20,7 @@ import { migration018 } from './018-approvals-approver-user-id.js';
 import { migration019 } from './019-wiring-threads.js';
 import { migration020 } from './020-container-config-timezone.js';
 import { migration021 } from './021-host-shims-dir.js';
+import { migration021 as migration021ApprovalQuestion } from './021-approval-question.js';
 import { migration025 } from './025-projected-sessions.js';
 import { migration026 } from './026-host-cron.js';
 import { migration027 } from './027-briefing-history.js';
@@ -60,6 +61,7 @@ export const migrations: Migration[] = [
   migration019,
   migration020,
   migration021,
+  migration021ApprovalQuestion,
   migration025,
   migration026,
   migration027,
