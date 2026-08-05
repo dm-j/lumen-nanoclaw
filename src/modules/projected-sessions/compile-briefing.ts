@@ -1,9 +1,12 @@
 /**
  * Compiler step for projected-lifecycle sessions. Runs this agent group's
  * `briefing-host` shim against the previous briefing + the new inbound
- * batch. Fails closed: any missing shim / non-zero exit / timeout falls
- * back to the previously stored briefing (or empty on first turn) and never
- * blocks the responder turn.
+ * batch. Fails visibly: any missing shim / non-zero exit / timeout / thrown
+ * error returns an explicit failure note instead of the compiled briefing,
+ * so the responder (and the user, via the responder) knows the briefer is
+ * broken rather than silently working from stale context. The last known-good
+ * stored briefing is left untouched either way — never blocks the responder
+ * turn.
  */
 import fs from 'fs';
 import os from 'os';
