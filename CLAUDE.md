@@ -240,16 +240,19 @@ cd container/agent-runner && bun test      # Container tests (bun:test)
 
 Container typecheck is a separate tsconfig — if you edit `container/agent-runner/src/`, run `pnpm exec tsc -p container/agent-runner/tsconfig.json --noEmit` from root (or `bun run typecheck` from `container/agent-runner/`).
 
-Service management:
+Service management: the label/unit name is **slug-scoped**, not literally `com.nanoclaw` — `src/install-slug.ts` derives it as `com.nanoclaw-v2-<sha1(projectRoot)[:8]>` (launchd) / `nanoclaw-v2-<slug>` (systemd), so two checkouts on one host don't collide. Find the actual label before targeting it:
+
 ```bash
 # macOS (launchd)
-launchctl load   ~/Library/LaunchAgents/com.nanoclaw.plist
-launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist
-launchctl kickstart -k gui/$(id -u)/com.nanoclaw  # restart
+launchctl list | grep nanoclaw                           # find the actual label first
+launchctl kickstart -k gui/$(id -u)/com.nanoclaw-v2-<slug>  # restart
 
 # Linux (systemd)
-systemctl --user start|stop|restart nanoclaw
+systemctl --user list-units | grep nanoclaw
+systemctl --user restart nanoclaw-v2-<slug>
 ```
+
+Rebuild before restart matters: `pnpm run dev` runs from source live, but the installed service runs `dist/index.js` — after editing `src/`, `pnpm run build` first or the restart just relaunches stale code.
 
 ## Troubleshooting
 
@@ -334,8 +337,8 @@ grep -q '^INSTALL_CJK_FONTS=' .env && sed -i.bak 's/^INSTALL_CJK_FONTS=.*/INSTAL
 
 # Rebuild and restart so new sessions pick up the new image
 ./container/build.sh
-launchctl kickstart -k gui/$(id -u)/com.nanoclaw   # macOS
-# systemctl --user restart nanoclaw                # Linux
+launchctl kickstart -k gui/$(id -u)/com.nanoclaw-v2-<slug>   # macOS — find <slug> via `launchctl list | grep nanoclaw`
+# systemctl --user restart nanoclaw-v2-<slug>                # Linux
 ```
 
 `container/build.sh` reads `INSTALL_CJK_FONTS` from `.env` and passes it through as a Docker build-arg. Without CJK fonts, Chromium-rendered screenshots and PDFs containing CJK text show tofu (empty rectangles) instead of characters.

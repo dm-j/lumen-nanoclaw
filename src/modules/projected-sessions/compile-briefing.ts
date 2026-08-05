@@ -16,6 +16,41 @@ import { execHostShim } from '../host-shim/exec.js';
 import { appendBriefingHistory, getBriefingHistoryText, getSessionBriefing, setSessionBriefing } from './db.js';
 import { DEFAULT_CACHE_TTL_MS, renderLiteralTail } from './literal-tail.js';
 import { log } from '../../log.js';
+import { LOGS_DIR } from '../../config.js';
+
+// Single-entry rolling log, overwritten on every compile call (success or
+// failure) — not the capped session_briefing_history DB rows, which are
+// context for the briefer/responder, not for a human. This is purely an
+// operator debugging aid: the exact prompt (prev briefing + batch + literal
+// tail) and exact response, so briefing quality can be eyeballed directly
+// when swapping providers/models instead of inferred secondhand from the
+// responder's replies. Lives under logs/, never mounted into containers.
+function writeBriefingDebugLog(agentGroupId: string, prevBriefing: string, promptBody: string, response: string): void {
+  try {
+    const dir = path.join(LOGS_DIR, 'briefing-debug');
+    fs.mkdirSync(dir, { recursive: true });
+    const content = [
+      `# Last briefing call — ${agentGroupId}`,
+      `${new Date().toISOString()}`,
+      '',
+      '## Prompt: previous briefing (PREV_FILE)',
+      '',
+      prevBriefing || '(empty)',
+      '',
+      '## Prompt: new batch + literal tail (BATCH_FILE)',
+      '',
+      promptBody,
+      '',
+      '## Response',
+      '',
+      response,
+      '',
+    ].join('\n');
+    fs.writeFileSync(path.join(dir, `${agentGroupId}.md`), content);
+  } catch (err) {
+    log.warn('writeBriefingDebugLog failed (non-fatal)', { agentGroupId, err });
+  }
+}
 
 // Real Briefer calls run 20-90s in production use (Synthetic Context doc,
 // 2026-07-17); the shared host-shim default (30s) is sized for cheap scripts,
@@ -99,12 +134,15 @@ export async function compileBriefing(
       // Not persisted via setSessionBriefing/appendBriefingHistory — the last
       // known-good briefing stays in place for the *next* turn's compile to
       // build on. This note is only what's shown to the responder right now.
-      return briefingFailureNote(errorDetail);
+      const failureNote = briefingFailureNote(errorDetail);
+      writeBriefingDebugLog(agentGroupId, prevBriefing, batchWithTail, failureNote);
+      return failureNote;
     }
 
     const content = result.stdout.trim();
     setSessionBriefing(sessionKey, content);
     appendBriefingHistory(sessionKey, content, COMPILER_TAIL_TURNS);
+    writeBriefingDebugLog(agentGroupId, prevBriefing, batchWithTail, content);
     return content;
   } catch (err) {
     const errorDetail = err instanceof Error ? err.message : String(err);
@@ -113,7 +151,9 @@ export async function compileBriefing(
       sessionKey,
       err,
     });
-    return briefingFailureNote(errorDetail);
+    const failureNote = briefingFailureNote(errorDetail);
+    writeBriefingDebugLog(agentGroupId, prevBriefing, batchWithTail, failureNote);
+    return failureNote;
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
