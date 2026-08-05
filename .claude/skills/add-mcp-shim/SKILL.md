@@ -25,6 +25,29 @@ its own credentials directly (an env var, a local config file); it is not
 routed through the container's OneCLI egress proxy, since it never runs in
 the container at all.
 
+**A second, easy-to-miss constraint: `PATH` is not your interactive shell's
+`PATH`.** The host process that actually runs these scripts (`execFile`,
+inside the long-running nanoclaw host service) does not inherit your
+terminal's environment. If that service runs under launchd (the normal case
+on macOS), it gets launchd's own minimal default — typically something like
+`/usr/local/bin:/usr/bin:/bin:/Users/<you>/.local/bin`, **no Homebrew
+(`/opt/homebrew/bin`), no nvm, no pyenv shims.** A script that shells out to
+a binary installed via Homebrew/nvm/pyenv/etc. will work perfectly when you
+test it by hand (your shell's `PATH` has all of that) and then fail with
+`<command>: command not found` the moment it actually runs through the host
+service — this is exactly the failure mode that motivated this section, see
+git history for the real incident. Two fixes, pick one per script:
+- Set `PATH` explicitly near the top of the script:
+  `PATH="/opt/homebrew/bin:$PATH"` (adjust to wherever the tool actually
+  lives — `which <tool>` in your own shell to find it).
+- Or hardcode the absolute path to the binary at each call site. Note this
+  alone isn't always enough: a binary installed via `npm install -g` (or
+  similar) is often itself a shebang script (`#!/usr/bin/env node` etc.)
+  that does its *own* `PATH` lookup for its runtime — hardcoding only the
+  outer binary's path can still fail if the runtime it needs isn't found
+  either. Setting `PATH` up front sidesteps this entirely, which is why
+  it's the recommended default over spot-hardcoding individual paths.
+
 ## Workflow
 
 Ask one question at a time with `AskUserQuestion` where noted. Don't skip
@@ -96,11 +119,33 @@ user just prefers it.
 
 ### 6. Determine the behavior
 
+**The calling contract, before anything else:** whatever parameters this
+tool ends up with, the script never receives them as separate positional
+args. This is not an MCP requirement — the model produces normal structured
+parameters like any tool call, and nothing about the protocol forces raw
+JSON text on a script. It's one specific layer underneath: `dynamic-shims.ts`
+re-serializes that already-structured object into a single JSON string and
+hands it to `host-shim` — the same generic "name + one string payload"
+process-exec transport `remember`/`recall` already used, not something
+parameter-aware built for this. So every call passes exactly **one** argv
+element — that JSON string. A tool with `inputSchema.properties: {city:
+...}` gets called as `<script> '{"city":"..."}'`, never `<script> "..."`.
+The script must parse that JSON itself (`jq`, `python3 -c 'import
+json,sys'`, `JSON.parse` in TypeScript) and pull out the fields it needs —
+this is true regardless of which wrapper type or language you picked. A
+script that treats `$1` as the bare value instead of parsing it is the most
+common mistake here: it registers fine, runs fine, produces no error — and
+silently receives literal JSON text instead of the value inside it. (A tool
+with no parameters still gets called with `$1` = `'{}'`; harmless to ignore.)
+See the `mcp-shims` skill's own "calling contract" section for the fuller
+explanation of why this layer exists.
+
 Branch on the answer from step 4:
 
-**CLI wrap:** Which command? How do the tool's future input parameters map
-to that command's args/flags/stdin? Any output post-processing needed
-(the command's raw output isn't always what the agent should see)?
+**CLI wrap:** Which command? How do the tool's future input parameters
+(after JSON-parsing the envelope above) map to that command's args/flags/
+stdin? Any output post-processing needed (the command's raw output isn't
+always what the agent should see)?
 
 **MCP server facade:** How does the script reach the server — a stdio
 command to spawn, or an HTTP endpoint? Which single upstream tool (or small
@@ -162,8 +207,18 @@ mkdir -p groups/<folder>/mcp-shims/<server>
 
 Write `groups/<folder>/mcp-shims/<server>/<name>-host` with:
 - A `--help` branch printing the exact JSON from step 8 to stdout, exit 0.
-- The main logic: read args, apply hardcoding/validation decided in step 6,
-  do the wrapped call or custom logic, print the result to stdout.
+- If the script shells out to anything installed outside the base OS (a
+  Homebrew/nvm/pyenv-managed tool, an npm global), set `PATH` explicitly
+  near the top — see the `PATH` constraint above. Don't rely on it being
+  inherited.
+- **Parse `$1` as JSON first**, per the calling contract in step 6, before
+  doing anything else with it — every parameter this tool has lives inside
+  that one JSON string, never as separate argv. In shell: `jq -r
+  '.fieldname // empty'` per field (`jq` lives at `/usr/bin/jq`, no `PATH`
+  fix needed for it specifically); in Python, `json.loads(sys.argv[1])`; in
+  TypeScript, `JSON.parse(process.argv[2])`.
+- The main logic: apply hardcoding/validation decided in step 6, do the
+  wrapped call or custom logic, print the result to stdout.
 
 Keep stdout to the actual result — anything diagnostic goes to stderr, same
 convention as `briefing-host` and the other host-shim templates in
@@ -191,9 +246,30 @@ Confirm the JSON is well-formed and `inputSchema.type` is `"object"` — a
 schema missing that field silently falls back to the generic `{args:
 string[]}` schema instead of registering (MCP requires it; the engine
 fails closed rather than registering a tool the SDK would reject at call
-time). Then run it with real sample arguments and confirm the actual
-behavior is correct — this is a live test of the wrapped CLI/API/MCP call,
-not a mock.
+time). Then run it **exactly as the real transport will call it — a single
+JSON-string argv**, not bare values:
+
+```bash
+groups/<folder>/mcp-shims/<server>/<name>-host '{"fieldname": "value"}'
+```
+
+Testing with `<script> value` instead of `<script> '{"fieldname":"value"}'`
+will pass even though the real call would fail — the script needs to prove
+it parses the envelope, not just that it works when handed a bare string.
+Confirm the actual behavior is correct — this is a live test of the wrapped
+CLI/API/MCP call, not a mock.
+
+If the script shells out to anything outside the base OS, also test it with
+a stripped-down `PATH` to catch the failure mode above *before* it reaches
+the user, rather than after:
+
+```bash
+env -i PATH=/usr/bin:/bin groups/<folder>/mcp-shims/<server>/<name>-host '{"fieldname": "value"}'
+```
+
+If that fails but running the script normally (your full shell `PATH`)
+succeeds, you've found exactly the gap the `PATH` constraint above warns
+about — fix it there before moving on.
 
 ### 12. Restart the container
 
@@ -226,6 +302,24 @@ directly and check its exit code and stdout.
 **Tool call times out.** Default is 30s. See step 7 — only a server-name
 prefix (`digest`, `recall`, `remember`, `briefing`) gets 180s; there's no
 per-tool override yet.
+
+**Tool creates/writes something with the literal JSON text as its value**
+(a filename or title like `{"description":"..."}` instead of the actual
+description). The script skipped parsing `$1` as JSON and used it as the
+bare value directly — go back to the calling contract in step 6/9: `$1` is
+always a JSON string of the whole arguments object, never a raw value, even
+when the schema only declares one field. Fix by extracting the field with
+`jq`/`json.loads`/`JSON.parse` before using it, and re-test with a real JSON
+argv (step 11), not a bare string.
+
+**Tool call fails with `<command>: command not found` even though the
+script works fine when you run it yourself.** This is the `PATH` constraint
+from above, almost always — the script found a bare command name via your
+interactive shell's `PATH` when you tested it, but the host service's
+`PATH` (launchd's minimal default, no Homebrew/nvm/pyenv) doesn't have it.
+Reproduce with `env -i PATH=/usr/bin:/bin <script> <args>`; fix by setting
+`PATH` explicitly at the top of the script rather than assuming it's
+inherited.
 
 **Tool call fails with a symlink/escape error.** The resolved script must
 live directly inside its `mcp-shims/<server>/` directory with no symlink

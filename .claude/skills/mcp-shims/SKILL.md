@@ -71,6 +71,43 @@ requirement.
 container.json is materialized), separate from the timeout the tool call
 itself gets at runtime.
 
+## The calling contract: one argv, a JSON envelope
+
+This part is **not** an MCP requirement — MCP itself is completely normal
+here: the model produces structured parameters matching the declared
+`inputSchema`, same as any tool call, and the SDK hands the *shim script's
+MCP tool handler* that already-structured arguments object. Nothing about
+MCP forces a script to receive raw JSON text.
+
+What actually produces the JSON-string argv is one specific layer
+underneath: `dynamic-shims.ts`'s handler takes that structured object and
+re-serializes the whole thing into a single JSON string, then calls
+`host-shim <shimId> <that-string>` — because `host-shim` is the same generic
+"name + one string payload" process-exec transport `remember`/`recall`
+already used (`execFile('host-shim', [shimId, payload], ...)`), not a
+typed, parameter-aware CLI invocation built for this. A "normal" CLI tool
+would receive real separate flags (`--city Chicago --country US`); a
+mcp-shim script instead gets one opaque blob
+(`'{"city":"Chicago","country":"US"}'`), because that's what the *reused*
+transport already carries, not because the protocol demands it.
+
+So: the script does **not** receive its parameters as separate positional
+args — it always gets exactly one argv element, the full arguments object as
+a JSON string (`$1` in shell). A tool declared with `inputSchema.properties:
+{city: ..., country: ...}` still only ever gets one argument:
+`'{"city":"...","country":"..."}'`. The script is responsible for parsing
+that JSON itself and pulling out the fields it needs (`jq`, `python3 -c
+'import json,sys; ...'`, whatever the chosen language's stdlib offers) —
+there is no destructuring anywhere upstream of the script. Treating `$1` as
+the bare value (skipping the parse) is the single most common mistake when
+writing one of these; the tool will appear to work — it registers, it runs,
+it doesn't error — while silently receiving the literal JSON text instead of
+the field inside it.
+
+The one exception: a tool with no declared parameters (`properties: {}`)
+still gets called with `$1` set to `'{}'` — safe to ignore if the script
+takes no input.
+
 ## Example: a tiny wrapper
 
 ```sh
@@ -83,7 +120,8 @@ case "${1:-}" in
 EOF
     exit 0 ;;
 esac
-curl -sf "https://api.example.com/weather?city=$1"
+CITY="$(printf '%s' "${1:-}" | jq -r '.city // empty')"
+curl -sf "https://api.example.com/weather?city=$CITY"
 ```
 
 Registers as tool `weather_current`. No manifest to hand-edit, no server
@@ -98,6 +136,17 @@ The facade is invisible to the discovery engine; it just sees an executable
 that takes args and returns output. This is the composition angle: constrain
 what an agent can reach on a large server, hardcode context the agent
 shouldn't control, or combine multiple calls behind one tool.
+
+## Execution environment: it's the host service's `PATH`, not yours
+
+Scripts run inside the long-running nanoclaw host process (via `execFile`),
+not your interactive shell — so they inherit *that* process's environment.
+If it runs under launchd (the normal case on macOS), that's launchd's own
+minimal default `PATH` (typically no Homebrew, no nvm, no pyenv shims). A
+script that works when you run it by hand and then fails with `<command>:
+command not found` once it's actually called through the host is almost
+always this — see the `add-mcp-shim` skill's `PATH` section for the fix and
+how to catch it during testing before it reaches the user.
 
 ## Related to, but distinct from, real MCP servers
 
@@ -119,7 +168,5 @@ all and you're wrapping something else.
 
 ## Current gaps
 
-- No `/add-mcp-shims` distribution skill yet — nothing walks a user through
-  writing their first shim interactively; this doc is the extent of it.
 - No per-group `mcp_shims_dir` override (mirrors `host-shims/`'s
   `host_shims_dir`, which does have one) — add if a real use case needs it.
