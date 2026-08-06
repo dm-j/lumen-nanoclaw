@@ -70,6 +70,12 @@ function briefingFailureNote(errorDetail: string): string {
   return `Briefing generation failed with error: ${errorDetail}. Inform your user if they are not aware of this issue.`;
 }
 
+// Exact sentinel the briefer prompt is instructed to return verbatim when
+// nothing changed (see the group's briefing-prompt.md). Matched literally,
+// not persisted — see the no-op branch below.
+export const NO_BRIEFING_SENTINEL =
+  "No new briefing needed. For anything specific that isn't already covered above, use the recall tool.";
+
 export function sessionBriefingKey(
   agentGroupId: string,
   messagingGroupId: string | null,
@@ -143,8 +149,17 @@ export async function compileBriefing(
     }
 
     const content = result.stdout.trim();
-    setSessionBriefing(sessionKey, content);
-    appendBriefingHistory(sessionKey, content, COMPILER_TAIL_TURNS);
+    // A no-op briefing is shown once (returned below, written into this
+    // turn's briefing.md) but never persisted — otherwise every "nothing
+    // changed" turn adds its own history row and pushes the interleaved
+    // tail further from the real briefings underneath it, for zero
+    // information gain. prevBriefing (last real content) stays in place as
+    // both what the next compile diffs against and what the responder sees
+    // starting next turn.
+    if (content !== NO_BRIEFING_SENTINEL) {
+      setSessionBriefing(sessionKey, content);
+      appendBriefingHistory(sessionKey, content, COMPILER_TAIL_TURNS);
+    }
     writeBriefingDebugLog(agentGroupId, prevBriefing, batchWithTail, content);
     return content;
   } catch (err) {
