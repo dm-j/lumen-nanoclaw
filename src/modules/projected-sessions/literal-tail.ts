@@ -125,6 +125,21 @@ export function combineTextAndAttachments(text: unknown, attachments: unknown[] 
   return placeholder || null;
 }
 
+/**
+ * Render one `[local-time+offset] Sender: text` (or briefing) line as its
+ * own markdown blockquote — every line of a multi-line entry gets the `> `
+ * prefix so it stays one blockquote instead of breaking out of it, and an
+ * empty line becomes a bare `>` rather than `> ` with invisible trailing
+ * whitespace. Callers still join entries with a blank line between them, so
+ * each renders as a visually distinct block instead of one merged quote.
+ */
+export function toQuoteBlock(text: string): string {
+  return text
+    .split('\n')
+    .map((line) => (line ? `> ${line}` : '>'))
+    .join('\n');
+}
+
 // Every open compile-briefing/renderLiteralTail cycle retries every
 // not-yet-captioned legacy attachment (see resolveInboundText below) — with
 // no cap, a genuinely broken caption endpoint gets hammered once per
@@ -337,5 +352,5 @@ export async function renderLiteralTail(
   ];
   entries.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 
-  return entries.map((e) => e.text).join('\n\n');
+  return entries.map((e) => toQuoteBlock(e.text)).join('\n\n');
 }

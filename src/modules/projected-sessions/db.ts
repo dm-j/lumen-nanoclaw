@@ -5,7 +5,7 @@
 import { getDb } from '../../db/connection.js';
 import { inboundDbPath } from '../../session-manager.js';
 import { openInboundDb } from '../../db/session-db.js';
-import { combineTextAndAttachments } from './literal-tail.js';
+import { combineTextAndAttachments, toQuoteBlock } from './literal-tail.js';
 import { resolveGroupTimezone } from '../../container-config.js';
 import { formatLocalIsoOffset } from '../../timezone.js';
 import fs from 'fs';
@@ -208,6 +208,7 @@ export function readPendingBatchText(agentGroupId: string, sessionId: string): s
           return `[${stamp}] ${r.content}`;
         }
       })
+      .map(toQuoteBlock)
       .join('\n\n');
   } finally {
     db.close();
