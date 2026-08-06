@@ -59,3 +59,7 @@ AGENTS.md
 docs/maintainer-guide.md
 docs/drafts/
 forks.md
+
+# Runtime lock state (session id + pid of whichever process holds the
+# scheduled-tasks lock) — regenerated per-process, not install config.
+.claude/scheduled_tasks.lock

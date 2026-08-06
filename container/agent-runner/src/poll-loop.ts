@@ -468,8 +468,13 @@ export async function processQuery(
         if (isCorruptionError(errMsg)) {
           corruptionStreak += 1;
           if (corruptionStreak >= CORRUPTION_STREAK_EXIT) {
+            // DB_RETRY_EXHAUSTED marks a persistent problem (retries
+            // exhausted, poll loop abandoned) — grepped by
+            // host-shims/lumen-dmj/sqlite-corrupt-count-host. The per-attempt
+            // `Follow-up poll error` log above fires on every transient hit
+            // and is intentionally not part of that grep target.
             log(
-              `Follow-up poll: ${corruptionStreak} consecutive '${errMsg}' errors — ` +
+              `DB_RETRY_EXHAUSTED: follow-up poll gave up after ${corruptionStreak} consecutive '${errMsg}' errors — ` +
                 `inbound.db page cache is poisoned. Exiting so host respawns with a fresh mount.`,
             );
             // Stop touching the heartbeat so host-sweep stale detection fires

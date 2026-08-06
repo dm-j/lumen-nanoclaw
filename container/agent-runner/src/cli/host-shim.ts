@@ -116,8 +116,13 @@ function queryPendingRow(requestId: string): { id: string; content: string } | n
       inDb.close();
     }
   }
+  // DB_RETRY_EXHAUSTED marks a persistent problem (retries exhausted, read
+  // abandoned for this poll iteration) — grepped by
+  // host-shims/lumen-dmj/sqlite-corrupt-count-host. Individual SQLITE_CORRUPT
+  // throws inside the retry loop above are transient and intentionally not
+  // logged on their own.
   process.stderr.write(
-    `host-shim: inbound.db read failed after ${CORRUPT_RETRY_DELAYS_MS.length} attempts (likely transient cross-mount corruption), skipping this poll: ${lastErr}\n`,
+    `DB_RETRY_EXHAUSTED: host-shim inbound.db read failed after ${CORRUPT_RETRY_DELAYS_MS.length} attempts, skipping this poll: ${lastErr}\n`,
   );
   return null;
 }
