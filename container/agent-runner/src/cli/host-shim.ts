@@ -88,6 +88,40 @@ function writeRequest(requestId: string, name: string, args: string[]): void {
   }
 }
 
+// A read landing mid-write on a VirtioFS/bind-mount cross-mount boundary can
+// surface as SQLITE_CORRUPT even though nothing on disk is actually damaged
+// (see docker/for-mac#6690, #7494 — known Docker Desktop VirtioFS cache-
+// coherency gap). Retried immediate/+1s/+2s, a fresh connection each time in
+// case the stale state was connection-local; if all three attempts still
+// throw, the row is treated as "not there yet" for this iteration and the
+// outer poll loop's own 500ms cadence tries again — worth logging, not worth
+// failing the whole shim call over.
+const CORRUPT_RETRY_DELAYS_MS = [0, 1000, 2000];
+
+function queryPendingRow(requestId: string): { id: string; content: string } | null {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < CORRUPT_RETRY_DELAYS_MS.length; attempt++) {
+    if (CORRUPT_RETRY_DELAYS_MS[attempt] > 0) Bun.sleepSync(CORRUPT_RETRY_DELAYS_MS[attempt]);
+
+    const inDb = new Database(INBOUND_DB, { readonly: true });
+    inDb.exec('PRAGMA busy_timeout = 5000');
+    inDb.exec('PRAGMA mmap_size = 0');
+    try {
+      return inDb
+        .prepare("SELECT id, content FROM messages_in WHERE status = 'pending' AND content LIKE ?")
+        .get(`%"requestId":"${requestId}"%`) as { id: string; content: string } | null;
+    } catch (err) {
+      lastErr = err;
+    } finally {
+      inDb.close();
+    }
+  }
+  process.stderr.write(
+    `host-shim: inbound.db read failed after ${CORRUPT_RETRY_DELAYS_MS.length} attempts (likely transient cross-mount corruption), skipping this poll: ${lastErr}\n`,
+  );
+  return null;
+}
+
 // Mirrors ncl.ts's pollResponse — fresh connection each poll for cross-mount
 // visibility, marks the row completed via processing_ack so the agent-runner
 // poll loop never surfaces it as a normal message.
@@ -95,31 +129,21 @@ function pollResponse(requestId: string, timeoutMs: number): ShimResponse | null
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
-    const inDb = new Database(INBOUND_DB, { readonly: true });
-    inDb.exec('PRAGMA busy_timeout = 5000');
-    inDb.exec('PRAGMA mmap_size = 0');
+    const row = queryPendingRow(requestId);
 
-    try {
-      const row = inDb
-        .prepare("SELECT id, content FROM messages_in WHERE status = 'pending' AND content LIKE ?")
-        .get(`%"requestId":"${requestId}"%`) as { id: string; content: string } | null;
+    if (row) {
+      const outDb = new Database(OUTBOUND_DB);
+      outDb.exec('PRAGMA journal_mode = DELETE');
+      outDb.exec('PRAGMA busy_timeout = 5000');
+      outDb
+        .prepare(
+          "INSERT OR REPLACE INTO processing_ack (message_id, status, status_changed) VALUES (?, 'completed', ?)",
+        )
+        .run(row.id, new Date().toISOString());
+      outDb.close();
 
-      if (row) {
-        const outDb = new Database(OUTBOUND_DB);
-        outDb.exec('PRAGMA journal_mode = DELETE');
-        outDb.exec('PRAGMA busy_timeout = 5000');
-        outDb
-          .prepare(
-            "INSERT OR REPLACE INTO processing_ack (message_id, status, status_changed) VALUES (?, 'completed', ?)",
-          )
-          .run(row.id, new Date().toISOString());
-        outDb.close();
-
-        const parsed = JSON.parse(row.content);
-        return parsed.response as ShimResponse;
-      }
-    } finally {
-      inDb.close();
+      const parsed = JSON.parse(row.content);
+      return parsed.response as ShimResponse;
     }
 
     Bun.sleepSync(500);
