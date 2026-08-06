@@ -39,6 +39,13 @@ export const DEFAULT_AGENT_PROVIDER = (
   'claude'
 ).toLowerCase();
 
+// Instance-wide default model for newly created groups. Unset (undefined) when
+// not configured, so existing installs and the provider's own default model
+// selection are unaffected. Same "new groups only, stamped once" semantics as
+// DEFAULT_AGENT_PROVIDER — see ensureContainerConfig. Per-group
+// `ncl groups config update --model` still overrides it.
+export const DEFAULT_AGENT_MODEL = process.env.DEFAULT_AGENT_MODEL || envConfig.DEFAULT_AGENT_MODEL || undefined;
+
 /**
  * @deprecated WhatsApp adapter copies now read the ASSISTANT_HAS_OWN_NUMBER
  * .env key directly. Re-export retained one release for stale adapter copies

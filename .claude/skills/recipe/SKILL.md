@@ -33,7 +33,7 @@ runnable end-to-end.
 - [add-host-scripts](../add-host-scripts/SKILL.md) — applied 2026-08-01 — per-agent-group whitelisted host script execution; prerequisite for add-projected-sessions
 - [add-host-cron](../add-host-cron/SKILL.md) — applied 2026-08-01 — schedule host-shim scripts on a cron, no container spawn; foundation for the vault memory pipeline's export/digest jobs
 - [add-mbif-vault](../add-mbif-vault/SKILL.md) — applied 2026-08-01 — MBIF vault tooling underlying the memory pipeline's export/digest/librarian jobs
-- [add-vault-memory-pipeline](../add-vault-memory-pipeline/SKILL.md) — applied 2026-08-01 — live per-turn transcript export + scheduled daily/weekly/monthly digest generation via MBIF's librarian
+- [add-vault-memory-pipeline](../add-vault-memory-pipeline/SKILL.md) — applied 2026-08-01, patched 2026-08-06 — live per-turn transcript export + scheduled daily/weekly/monthly digest generation via MBIF's librarian; patch gated live export behind an explicit `ncl vault-transcripts enable` per group (migration 030) instead of firing unconditionally for every group including `create_agent` subagents — see SKILL.md step 5b
 - [add-projected-sessions](../add-projected-sessions/SKILL.md) — applied 2026-08-01 — self-contained briefing-agent module; interleaves briefing history, real names, local timestamps into projected session context
 - [add-telegram](../add-telegram/SKILL.md) — applied 2026-08-02 — Telegram channel adapter via Chat SDK
 - [add-mcp-shim](../add-mcp-shim/SKILL.md) — applied 2026-08-04 — mcp-shims v1: auto-register whitelisted host scripts as real MCP tools, guided per-tool authoring workflow

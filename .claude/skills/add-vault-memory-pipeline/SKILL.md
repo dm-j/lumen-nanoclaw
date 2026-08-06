@@ -176,6 +176,50 @@ Edit `src/group-init.ts` — extend the existing host-shim seeding loop
   for (const shimName of ['briefing-host', 'transcript-append-host', 'digest-daily-host', 'digest-rollup-host']) {
 ```
 
+Seeding the script is not the same as enabling export — see step 5b.
+
+### 5b. Gate live export behind an explicit per-group enable flag
+
+**Fork-local addition (2026-08-06), not yet in origin/vault-memory-pipeline
+— reapply this step by hand if re-pulling the branch source.** The
+original design fired `transcript-append-host` unconditionally for every
+group that had the script seeded (every group, per step 5), relying on an
+unset `VAULT_PATH` to fail quietly. In practice this meant every new
+group — including `create_agent` subagents, which inherit no config from
+their parent — logged `transcript-append failed: VAULT_PATH not
+configured` on every turn until someone noticed.
+
+Fix: own migration + own table + own CLI resource, same shape as
+`add-projected-sessions`'s `projected_sessions_enabled`:
+
+- Migration `src/db/migrations/030-vault-transcript-enabled.ts` — table
+  `vault_transcript_enabled (agent_group_id PK, enabled_at)`.
+- `src/modules/vault-transcript/db.ts` — `isEnabled` / `setEnabled` /
+  `listEnabled`.
+- `src/modules/vault-transcript/index.ts` — barrel entry point
+  (registered in `src/modules/index.ts`), registers `ncl vault-transcripts
+  enable|disable|list|status` and re-exports the runtime functions the
+  call sites in `container-runner.ts`/`delivery.ts` import.
+- The module's actual per-turn logic (old `index.ts`) moved to
+  `src/modules/vault-transcript/transcript.ts`; its shared
+  `appendTranscriptTurn` now returns immediately, before ever calling
+  `execHostShim`, unless `isEnabled(agentGroupId)` is true.
+
+**A group with no row in `vault_transcript_enabled` gets no export at
+all, even if `transcript-append-host` is seeded and configured.** The
+script still gets seeded into every new group per step 5 (so enabling
+later needs no restart-and-reseed step) — it's just inert until the flag
+is set:
+
+```bash
+ncl vault-transcripts enable --id <group-id>
+ncl vault-transcripts status --id <group-id>
+ncl vault-transcripts list          # every currently-enabled group
+```
+
+No container restart needed — `isEnabled` is checked live on every turn,
+same as `projected_sessions_enabled`.
+
 ### 6. Build and test
 
 ```bash
@@ -232,15 +276,26 @@ the week is actually over" logic work).
 | Backfill / manual digest run | `groups/<folder>/host-shims/digest-daily-host YYYY-MM-DD` (direct invocation) or `ncl host-cron-jobs run --job-id <id>` | Digest a specific past date instead of "yesterday". |
 | Rollup schedule | `ncl host-cron-jobs create --name digest-rollup --cron "<expr>"` | When the weekly/monthly rollup runs. Default example mirrors the live crontab: daily at 4am, not just once a week — that's what lets the week file fill in incrementally each day. |
 | The rollup prompt itself | `digest-rollup-host`'s embedded prompt string | Everything about what "roll up" means — which folders, the anchor format, the month-boundary rule — lives in this one string, not in code. Edit it directly to change behavior; no agent-file edit needed since `librarian` is unmodified MBIF stock. |
-| Whether a turn gets exported at all | Presence of `transcript-append-host` in a group's whitelist folder | No table/flag — delete the script to turn transcript export off for a group; the call sites no-op cleanly. |
+| Whether a turn gets exported at all | `vault_transcript_enabled` row for the group — `ncl vault-transcripts enable/disable --id <group-id>` | Default is **off** for every group, including `create_agent` subagents. `transcript-append-host` being present and configured is necessary but not sufficient — see step 5b. |
 
 ## Troubleshooting
 
-- **Transcript file never appears.** Confirm `transcript-append-host`
-  exists and is executable in the group's whitelist folder, and that
-  `VAULT_PATH` was actually edited (it refuses to run on the placeholder).
-  Check `logs/nanoclaw.log` for `transcript-append failed` (a real error)
-  vs. no log line at all (script genuinely absent — expected no-op).
+- **A new agent group (especially a `create_agent` subagent) has no
+  transcript behavior at all — nothing in the vault, no error either.**
+  Check this first: `ncl vault-transcripts status --id <group-id>`. New
+  groups are opt-in-off by default (see step 5b) — `transcript-append-host`
+  being seeded and even fully configured with a real `VAULT_PATH` does
+  nothing until you run `ncl vault-transcripts enable --id <group-id>`.
+  This is the single most common reason a group "should have" transcript
+  export but doesn't: it never inherited the flag from its parent group,
+  because there's nothing to inherit from — enablement is per-group, not
+  per-fork.
+- **Transcript file never appears** (group is confirmed `enabled: true`).
+  Confirm `transcript-append-host` exists and is executable in the
+  group's whitelist folder, and that `VAULT_PATH` was actually edited (it
+  refuses to run on the placeholder). Check `logs/nanoclaw.log` for
+  `transcript-append failed` (a real error) vs. no log line at all
+  (script genuinely absent — expected no-op).
 - **Digest never runs.** Check `ncl host-cron-jobs list --id <group-id>` —
   confirm a job exists and `next_run_at` is sane. See `/add-host-cron`'s
   own troubleshooting for the scheduling layer itself.
@@ -282,5 +337,6 @@ paragraph.
 
 ## Removal
 
-See [REMOVE.md](REMOVE.md). Does not roll back any migration (this
-module doesn't own one — no table, by design).
+See [REMOVE.md](REMOVE.md). Rolling back migration 030
+(`vault_transcript_enabled`, added by step 5b) is a manual step — see
+REMOVE.md; the migration runner has no automatic down-migration.

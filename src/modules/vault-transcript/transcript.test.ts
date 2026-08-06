@@ -29,6 +29,7 @@ import { initTestDb, closeDb, runMigrations, createAgentGroup } from '../../db/i
 import { createSession } from '../../db/sessions.js';
 import { initSessionFolder, writeSessionMessage } from '../../session-manager.js';
 import { appendPendingInboundTurns, appendDeliveredOutboundTurn } from './index.js';
+import { setEnabled } from './db.js';
 import type { Session } from '../../types.js';
 
 const TEST_DIR = '/tmp/nanoclaw-test-vault-transcript';
@@ -63,6 +64,7 @@ beforeEach(() => {
     agent_provider: null,
     created_at: now(),
   });
+  setEnabled(AG, true);
   const sess: Session = {
     id: SESS,
     agent_group_id: AG,
@@ -196,6 +198,20 @@ describe('appendPendingInboundTurns', () => {
         sender: 'System',
         text: 'Image "photo.jpg" (id: image-ab12) has been described:\n\nA red bicycle.',
       }),
+    });
+
+    await appendPendingInboundTurns(AG, SESS);
+
+    expect(execHostShimMock).not.toHaveBeenCalled();
+  });
+
+  it('skips export entirely for a group without vault_transcript_enabled', async () => {
+    setEnabled(AG, false);
+    writeSessionMessage(AG, SESS, {
+      id: 'msg-disabled-1',
+      kind: 'chat',
+      timestamp: now(),
+      content: JSON.stringify({ sender: 'User', text: 'hello' }),
     });
 
     await appendPendingInboundTurns(AG, SESS);

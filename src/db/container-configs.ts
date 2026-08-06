@@ -1,4 +1,4 @@
-import { DEFAULT_AGENT_PROVIDER } from '../config.js';
+import { DEFAULT_AGENT_MODEL, DEFAULT_AGENT_PROVIDER } from '../config.js';
 import type { ContainerConfigRow } from '../types.js';
 import { getDb } from './connection.js';
 
@@ -69,10 +69,10 @@ export function ensureContainerConfig(agentGroupId: string, provider?: string | 
   const stamped = normalized && normalized !== 'claude' ? normalized : null;
   getDb()
     .prepare(
-      `INSERT OR IGNORE INTO container_configs (agent_group_id, provider, updated_at)
-       VALUES (?, ?, ?)`,
+      `INSERT OR IGNORE INTO container_configs (agent_group_id, provider, model, updated_at)
+       VALUES (?, ?, ?, ?)`,
     )
-    .run(agentGroupId, stamped, new Date().toISOString());
+    .run(agentGroupId, stamped, DEFAULT_AGENT_MODEL ?? null, new Date().toISOString());
 }
 
 /** Update scalar fields on a config row. Only touches fields present in `updates`. */

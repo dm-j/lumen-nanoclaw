@@ -26,6 +26,7 @@ import { migration026 } from './026-host-cron.js';
 import { migration027 } from './027-briefing-history.js';
 import { migration028 } from './028-tail-anchor-last-call.js';
 import { migration029 } from './029-mcp-shims-dir.js';
+import { migration030 } from './030-vault-transcript-enabled.js';
 
 export interface Migration {
   version: number;
@@ -68,6 +69,7 @@ export const migrations: Migration[] = [
   migration027,
   migration028,
   migration029,
+  migration030,
 ];
 
 /** Row shape of PRAGMA foreign_key_check. Child rowids are stable across a

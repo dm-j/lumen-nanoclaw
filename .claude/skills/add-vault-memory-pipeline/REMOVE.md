@@ -1,7 +1,8 @@
 # Remove Vault Memory Pipeline
 
-Every step is idempotent — safe to re-run. No migration to roll back;
-this feature owns no table.
+Every step is idempotent — safe to re-run. Migration 030
+(`vault_transcript_enabled`, fork-local addition 2026-08-06) does own a
+table — step 1b below.
 
 **First:** remove any scheduled digest job so it isn't left calling a
 script you're about to delete:
@@ -19,6 +20,17 @@ rm -f src/host-shim-templates/transcript-append-host
 rm -f src/host-shim-templates/digest-daily-host
 rm -f src/host-shim-templates/digest-rollup-host
 ```
+
+## 1b. Remove the migration and un-register the module
+
+- Delete `src/db/migrations/030-vault-transcript-enabled.ts` and its
+  import + array entry in `src/db/migrations/index.ts`.
+- Remove the `import './vault-transcript/index.js';` line from
+  `src/modules/index.ts`.
+- The `vault_transcript_enabled` table itself has no down-migration —
+  drop it by hand if you want it gone from an already-migrated DB
+  (`pnpm exec tsx scripts/q.ts data/v2.db "DROP TABLE vault_transcript_enabled"`);
+  otherwise it's just an orphaned, harmless table.
 
 ## 2. Remove `resolveAssistantName`
 
