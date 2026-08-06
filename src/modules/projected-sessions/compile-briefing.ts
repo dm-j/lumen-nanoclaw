@@ -156,7 +156,7 @@ export async function compileBriefing(
     // information gain. prevBriefing (last real content) stays in place as
     // both what the next compile diffs against and what the responder sees
     // starting next turn.
-    if (content !== NO_BRIEFING_SENTINEL) {
+    if (!content.startsWith('No new briefing needed.')) {
       setSessionBriefing(sessionKey, content);
       appendBriefingHistory(sessionKey, content, COMPILER_TAIL_TURNS);
     }

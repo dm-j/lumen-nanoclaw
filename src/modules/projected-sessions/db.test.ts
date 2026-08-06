@@ -55,7 +55,7 @@ afterEach(() => {
 });
 
 describe('readPendingBatchText', () => {
-  it('returns plain text for a normal message', () => {
+  it('prefixes a normal message with its local timestamp and sender', () => {
     writeSessionMessage(AG, SESS, {
       id: 'm1',
       kind: 'chat',
@@ -63,9 +63,23 @@ describe('readPendingBatchText', () => {
       platformId: 'telegram:1',
       channelType: 'telegram',
       threadId: null,
+      content: JSON.stringify({ sender: 'David', text: 'hello' }),
+    });
+    const result = readPendingBatchText(AG, SESS);
+    expect(result).toMatch(/^\[.+\] David: hello$/);
+  });
+
+  it('defaults to "user" when the message carries no sender field', () => {
+    writeSessionMessage(AG, SESS, {
+      id: 'm0',
+      kind: 'chat',
+      timestamp: now(),
+      platformId: 'telegram:1',
+      channelType: 'telegram',
+      threadId: null,
       content: JSON.stringify({ text: 'hello' }),
     });
-    expect(readPendingBatchText(AG, SESS)).toBe('hello');
+    expect(readPendingBatchText(AG, SESS)).toMatch(/^\[.+\] user: hello$/);
   });
 
   it('renders a bracketed placeholder instead of dumping raw JSON for a captionless image', () => {
@@ -81,6 +95,19 @@ describe('readPendingBatchText', () => {
         attachments: [{ type: 'image', name: 'photo.jpg', data: Buffer.from('bytes').toString('base64') }],
       }),
     });
-    expect(readPendingBatchText(AG, SESS)).toBe('[image: photo.jpg]');
+    expect(readPendingBatchText(AG, SESS)).toMatch(/^\[.+\] David: \[image: photo\.jpg\]$/);
+  });
+
+  it('labels a scheduled task with a "Scheduled task" sender', () => {
+    writeSessionMessage(AG, SESS, {
+      id: 'm3',
+      kind: 'task',
+      timestamp: now(),
+      platformId: null,
+      channelType: null,
+      threadId: null,
+      content: JSON.stringify({ prompt: 'Check the mail' }),
+    });
+    expect(readPendingBatchText(AG, SESS)).toMatch(/^\[.+\] Scheduled task: Check the mail$/);
   });
 });

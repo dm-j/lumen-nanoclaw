@@ -6,6 +6,8 @@ import { getDb } from '../../db/connection.js';
 import { inboundDbPath } from '../../session-manager.js';
 import { openInboundDb } from '../../db/session-db.js';
 import { combineTextAndAttachments } from './literal-tail.js';
+import { resolveGroupTimezone } from '../../container-config.js';
+import { formatLocalIsoOffset } from '../../timezone.js';
 import fs from 'fs';
 
 export function isEnabled(agentGroupId: string): boolean {
@@ -156,31 +158,57 @@ export function readPendingBatchText(agentGroupId: string, sessionId: string): s
     // kind list includes 'task' so a due reminder still gives the briefer
     // something to work with — otherwise a task wake looks identical to a
     // bare respawn (empty batch) and the briefer is skipped even though the
-    // agent is about to act on real content.
+    // agent is about to act on real content. 'system' deliberately excluded:
+    // it's the host-shim/caption request-response transport, consumed
+    // directly by a dedicated polling CLI process via raw content match (see
+    // container/agent-runner/src/cli/host-shim.ts) — never acked through the
+    // normal claim/processing_ack pipeline, so an orphaned row (issuing CLI
+    // process died before the response landed) stays 'pending' forever and
+    // would otherwise resurface as a "new" message on every future compile,
+    // no matter how old. Same filter the live agent's own poll-loop already
+    // applies (see attachment-caption/notify.ts's doc comment).
     const rows = db
       .prepare(
-        `SELECT kind, content FROM messages_in WHERE status IN ('pending', 'staged') AND kind IN ('chat','chat-sdk','task','webhook','system')
+        `SELECT kind, content, timestamp FROM messages_in WHERE status IN ('pending', 'staged') AND kind IN ('chat','chat-sdk','task','webhook')
          ORDER BY seq ASC LIMIT ?`,
       )
-      .all(BATCH_READ_CAP) as Array<{ kind: string; content: string }>;
+      .all(BATCH_READ_CAP) as Array<{ kind: string; content: string; timestamp: string }>;
+
+    // Same "[local-time+offset] Sender: text" shape renderLiteralTail uses
+    // for "Recent turns" — the briefer was reading an unattributed, undated
+    // blob here otherwise, one format inconsistency away from misreading
+    // who said what or mistiming a claim it later cites.
+    const tz = resolveGroupTimezone(agentGroupId);
     return rows
       .map((r) => {
+        const stamp = formatLocalIsoOffset(r.timestamp, tz);
         try {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const parsed = JSON.parse(r.content) as { text?: string; attachments?: any[]; prompt?: string };
-          if (r.kind === 'task') return parsed.prompt ?? r.content;
+          const parsed = JSON.parse(r.content) as {
+            text?: string;
+            attachments?: any[];
+            prompt?: string;
+            sender?: string;
+            source?: string;
+            payload?: unknown;
+          };
+          if (r.kind === 'task') return `[${stamp}] Scheduled task: ${parsed.prompt ?? r.content}`;
+          if (r.kind === 'webhook') {
+            return `[${stamp}] Webhook (${parsed.source ?? 'unknown'}): ${JSON.stringify(parsed.payload ?? parsed)}`;
+          }
           // A caption and any user-supplied text are both kept — text alone
           // says nothing about what's in the image, and dropping it in favor
           // of the placeholder loses what the user actually said. This is a
           // read-only render (no lazy caption/persist here); renderLiteralTail's
           // own pass over the same row, called moments later by
           // compileBriefing, does the lazy captioning.
-          return combineTextAndAttachments(parsed.text, parsed.attachments) ?? r.content;
+          const text = combineTextAndAttachments(parsed.text, parsed.attachments) ?? r.content;
+          return `[${stamp}] ${parsed.sender ?? 'user'}: ${text}`;
         } catch {
-          return r.content;
+          return `[${stamp}] ${r.content}`;
         }
       })
-      .join('\n');
+      .join('\n\n');
   } finally {
     db.close();
   }
