@@ -211,6 +211,10 @@ Four types of skills. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full taxono
 
 Before creating a PR, adding a skill, or preparing any contribution, you MUST read [CONTRIBUTING.md](CONTRIBUTING.md). It covers accepted change types, the four skill types and their guidelines, `SKILL.md` format rules, and the pre-submission checklist.
 
+## Git Hooks
+
+This repo uses **husky** with `core.hooksPath` set to `.husky/_` — `.git/hooks/*` is bypassed entirely and any script written there is dead code. Add hook logic to `.husky/<hookname>` (e.g. `.husky/pre-commit`, `.husky/post-commit`); husky's dispatcher shims in `.husky/_/` invoke it automatically. See [docs/instance-repo-split.md](docs/instance-repo-split.md) for the pre-commit/post-commit pair that syncs `groups/`/`mcp-shims/`/`host-shims/` into the private instance repo.
+
 ## PR Hygiene
 
 Before creating a PR, run these checks:
