@@ -44,3 +44,4 @@ the commit, no git involved.
 - `add-mcp-shim` / `add-host-scripts` skill docs may still describe these
   directories as if they're tracked inside `lumen-nanoclaw` directly; worth
   a pass to point at the instance repo instead.
+
