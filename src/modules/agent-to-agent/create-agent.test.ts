@@ -9,9 +9,18 @@
  * delivery action (the only reachable path) and the approve continuation's
  * grant-carrying re-entry.
  */
+import fs from 'fs';
+import path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { PendingApproval, Session } from '../../types.js';
+
+const { TEST_GROUPS_DIR } = vi.hoisted(() => ({ TEST_GROUPS_DIR: '/tmp/nanoclaw-create-agent-test/groups' }));
+
+vi.mock('../../config.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../config.js')>()),
+  GROUPS_DIR: TEST_GROUPS_DIR,
+}));
 
 // Mocks for the collaborators the branch decides between / depends on.
 // vi.hoisted: the module barrel import below runs before this file's const
@@ -125,10 +134,13 @@ function liveGrant(approvalId: string, payload: Record<string, unknown>): Pendin
 beforeEach(() => {
   vi.clearAllMocks();
   liveApprovals.clear();
+  fs.rmSync(TEST_GROUPS_DIR, { recursive: true, force: true });
+  fs.mkdirSync(TEST_GROUPS_DIR, { recursive: true });
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
+  fs.rmSync(TEST_GROUPS_DIR, { recursive: true, force: true });
 });
 
 describe('create_agent — guard-based authorization (wrapped delivery action)', () => {
@@ -169,6 +181,41 @@ describe('create_agent — guard-based authorization (wrapped delivery action)',
       expect.anything(),
       expect.objectContaining({ provider: 'claude' }),
     );
+  });
+
+  it("child inherits the parent's env/blockedHosts (e.g. local model routing) via container.json", async () => {
+    // env/blockedHosts are host-local, never DB-backed — materializeContainerJson
+    // only preserves what's already on disk, never invents it. Without this
+    // seed step a fresh child silently falls back to the provider's default
+    // inference URL instead of the parent's (e.g. a local PrefixRouter).
+    mockGetContainerConfig.mockReturnValue({ cli_scope: 'global' });
+    fs.mkdirSync(path.join(TEST_GROUPS_DIR, 'ag-1'), { recursive: true });
+    fs.writeFileSync(
+      path.join(TEST_GROUPS_DIR, 'ag-1', 'container.json'),
+      JSON.stringify({
+        env: { ANTHROPIC_BASE_URL: 'http://host.docker.internal:8787', ANTHROPIC_API_KEY: 'ollama' },
+        blockedHosts: ['api.anthropic.com'],
+      }),
+    );
+    // initGroupFilesystem is mocked (no-op) — simulate the child dir it would create.
+    fs.mkdirSync(path.join(TEST_GROUPS_DIR, 'scout'), { recursive: true });
+
+    await runCreateAgent({ name: 'Scout', instructions: 'help' });
+
+    const childConfig = JSON.parse(fs.readFileSync(path.join(TEST_GROUPS_DIR, 'scout', 'container.json'), 'utf8'));
+    expect(childConfig.env).toEqual({
+      ANTHROPIC_BASE_URL: 'http://host.docker.internal:8787',
+      ANTHROPIC_API_KEY: 'ollama',
+    });
+    expect(childConfig.blockedHosts).toEqual(['api.anthropic.com']);
+  });
+
+  it('parent with no container.json (or no env/blockedHosts): child gets none, no crash', async () => {
+    mockGetContainerConfig.mockReturnValue({ cli_scope: 'global' });
+    fs.mkdirSync(path.join(TEST_GROUPS_DIR, 'scout'), { recursive: true });
+
+    await expect(runCreateAgent({ name: 'Scout', instructions: 'help' })).resolves.not.toThrow();
+    expect(fs.existsSync(path.join(TEST_GROUPS_DIR, 'scout', 'container.json'))).toBe(false);
   });
 
   it('group scope (default): requires approval, does NOT create directly', async () => {
