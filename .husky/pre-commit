@@ -3,3 +3,19 @@ pnpm run format:fix
 if [ -n "$staged" ]; then
   echo "$staged" | xargs git add
 fi
+
+# ponytail: strip zero-width/invisible chars from staged text files; naive perl scan, add to skip list if it ever trips on a legit binary.
+all_staged=$(git diff --cached --name-only --diff-filter=ACMR | grep -vE '\.(png|jpg|jpeg|gif|ico|pdf|dll|exe)$')
+if [ -n "$all_staged" ]; then
+  echo "$all_staged" | while IFS= read -r f; do
+    [ -f "$f" ] || continue
+    perl -pi -e 's/[\x{200B}-\x{200D}\x{2060}\x{FEFF}\x{00AD}]//g' "$f"
+  done
+  echo "$all_staged" | xargs git add
+fi
+
+# ponytail: stage everything in the private instance repo too; post-commit commits it.
+INSTANCE_REPO="/Users/lumen/Projects/lumen-nanoclaw-instance"
+if [ -d "$INSTANCE_REPO/.git" ]; then
+  git -C "$INSTANCE_REPO" add -A
+fi
