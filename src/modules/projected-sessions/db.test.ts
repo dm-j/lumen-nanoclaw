@@ -66,7 +66,7 @@ describe('readPendingBatchText', () => {
       content: JSON.stringify({ sender: 'David', text: 'hello' }),
     });
     const result = readPendingBatchText(AG, SESS);
-    expect(result).toMatch(/^> \[.+\] David: hello$/);
+    expect(result).toMatch(/^> \[.+\] David:\n> hello$/);
   });
 
   it('defaults to "user" when the message carries no sender field', () => {
@@ -79,7 +79,7 @@ describe('readPendingBatchText', () => {
       threadId: null,
       content: JSON.stringify({ text: 'hello' }),
     });
-    expect(readPendingBatchText(AG, SESS)).toMatch(/^> \[.+\] user: hello$/);
+    expect(readPendingBatchText(AG, SESS)).toMatch(/^> \[.+\] user:\n> hello$/);
   });
 
   it('renders a bracketed placeholder instead of dumping raw JSON for a captionless image', () => {
@@ -95,7 +95,7 @@ describe('readPendingBatchText', () => {
         attachments: [{ type: 'image', name: 'photo.jpg', data: Buffer.from('bytes').toString('base64') }],
       }),
     });
-    expect(readPendingBatchText(AG, SESS)).toMatch(/^> \[.+\] David: \[image: photo\.jpg\]$/);
+    expect(readPendingBatchText(AG, SESS)).toMatch(/^> \[.+\] David:\n> \[image: photo\.jpg\]$/);
   });
 
   it('labels a scheduled task with a "Scheduled task" sender', () => {
@@ -108,6 +108,6 @@ describe('readPendingBatchText', () => {
       threadId: null,
       content: JSON.stringify({ prompt: 'Check the mail' }),
     });
-    expect(readPendingBatchText(AG, SESS)).toMatch(/^> \[.+\] Scheduled task: Check the mail$/);
+    expect(readPendingBatchText(AG, SESS)).toMatch(/^> \[.+\] Scheduled task:\n> Check the mail$/);
   });
 });

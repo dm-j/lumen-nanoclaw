@@ -126,7 +126,7 @@ export function combineTextAndAttachments(text: unknown, attachments: unknown[] 
 }
 
 /**
- * Render one `[local-time+offset] Sender: text` (or briefing) line as its
+ * Render one `[local-time+offset] Sender:\ntext` (or briefing) line as its
  * own markdown blockquote — every line of a multi-line entry gets the `> `
  * prefix so it stays one blockquote instead of breaking out of it, and an
  * empty line becomes a bare `>` rather than `> ` with invisible trailing
@@ -343,11 +343,11 @@ export async function renderLiteralTail(
   const entries: RenderEntry[] = [
     ...selected.map((r) => ({
       timestamp: r.timestamp,
-      text: `[${formatLocalIsoOffset(r.timestamp, tz)}] ${r.sender}: ${r.text}`,
+      text: `[${formatLocalIsoOffset(r.timestamp, tz)}] ${r.sender}:\n${r.text}`,
     })),
     ...briefingEntries.map((b) => ({
       timestamp: b.createdAt,
-      text: `[${formatLocalIsoOffset(b.createdAt, tz)}] Briefing subagent: ${b.content}`,
+      text: `[${formatLocalIsoOffset(b.createdAt, tz)}] Briefing subagent:\n${b.content}`,
     })),
   ];
   entries.sort((a, b) => a.timestamp.localeCompare(b.timestamp));

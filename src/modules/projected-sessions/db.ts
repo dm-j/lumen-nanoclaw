@@ -174,7 +174,7 @@ export function readPendingBatchText(agentGroupId: string, sessionId: string): s
       )
       .all(BATCH_READ_CAP) as Array<{ kind: string; content: string; timestamp: string }>;
 
-    // Same "[local-time+offset] Sender: text" shape renderLiteralTail uses
+    // Same "[local-time+offset] Sender:\ntext" shape renderLiteralTail uses
     // for "Recent turns" — the briefer was reading an unattributed, undated
     // blob here otherwise, one format inconsistency away from misreading
     // who said what or mistiming a claim it later cites.
@@ -192,9 +192,9 @@ export function readPendingBatchText(agentGroupId: string, sessionId: string): s
             source?: string;
             payload?: unknown;
           };
-          if (r.kind === 'task') return `[${stamp}] Scheduled task: ${parsed.prompt ?? r.content}`;
+          if (r.kind === 'task') return `[${stamp}] Scheduled task:\n${parsed.prompt ?? r.content}`;
           if (r.kind === 'webhook') {
-            return `[${stamp}] Webhook (${parsed.source ?? 'unknown'}): ${JSON.stringify(parsed.payload ?? parsed)}`;
+            return `[${stamp}] Webhook (${parsed.source ?? 'unknown'}):\n${JSON.stringify(parsed.payload ?? parsed)}`;
           }
           // A caption and any user-supplied text are both kept — text alone
           // says nothing about what's in the image, and dropping it in favor
@@ -203,7 +203,7 @@ export function readPendingBatchText(agentGroupId: string, sessionId: string): s
           // own pass over the same row, called moments later by
           // compileBriefing, does the lazy captioning.
           const text = combineTextAndAttachments(parsed.text, parsed.attachments) ?? r.content;
-          return `[${stamp}] ${parsed.sender ?? 'user'}: ${text}`;
+          return `[${stamp}] ${parsed.sender ?? 'user'}:\n${text}`;
         } catch {
           return `[${stamp}] ${r.content}`;
         }
