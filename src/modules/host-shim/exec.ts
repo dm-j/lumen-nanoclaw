@@ -42,7 +42,7 @@ const MAX_BUFFER = 1024 * 1024; // 1MB cap on captured stdout/stderr
 // now shared from here) — revisit if a shim needs a timeout between these
 // two bands. Exported so any execHostShim caller gets the same default
 // without re-deriving its own list.
-const LONG_TIMEOUT_MS = 180_000;
+const LONG_TIMEOUT_MS = 300_000;
 const LONG_RUNNING_PREFIXES = ['digest', 'recall', 'remember', 'briefing'];
 
 export function timeoutFor(name: string): number {

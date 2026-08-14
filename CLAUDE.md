@@ -297,6 +297,7 @@ This project uses pnpm with `minimumReleaseAge: 4320` (3 days) in `pnpm-workspac
 | [docs/db.md](docs/db.md) | DB architecture overview: three-DB model, cross-mount rules, readers/writers map |
 | [docs/db-central.md](docs/db-central.md) | Central DB (`data/v2.db`) — every table + migration system |
 | [docs/db-session.md](docs/db-session.md) | Per-session `inbound.db` + `outbound.db` schemas + seq parity |
+| [docs/session-sync-transport.md](docs/session-sync-transport.md) | In-progress replacement for bind-mounted session DBs (macOS SQLite corruption) — what was tried and ruled out, the sync design, transport-layer decisions, status |
 | [docs/agent-runner-details.md](docs/agent-runner-details.md) | Agent-runner internals + MCP tool interface |
 | [docs/isolation-model.md](docs/isolation-model.md) | Three-level channel isolation model |
 | [docs/setup-wiring.md](docs/setup-wiring.md) | What's wired, what's open in the setup flow |
@@ -306,6 +307,7 @@ This project uses pnpm with `minimumReleaseAge: 4320` (3 days) in `pnpm-workspac
 | [docs/migration-dev.md](docs/migration-dev.md) | Migration development guide — testing, debugging, dev loop |
 | [docs/provider-migration.md](docs/provider-migration.md) | Switching a live agent group between providers (e.g. Claude → Codex) — what carries over, rollback |
 | [docs/customizing.md](docs/customizing.md) | Short intro to customizing via skills |
+| [docs/roadmap.md](docs/roadmap.md) | Open items / planning list |
 | [docs/skills-model.md](docs/skills-model.md) | The skills model in full: recipes, tests, upgrades, migrations |
 | [docs/skill-guidelines.md](docs/skill-guidelines.md) | Authoritative checklist for writing a skill |
 | [docs/skill-directives.md](docs/skill-directives.md) | `nc:` directive reference: fence grammar, the eight kinds, effects, guards, lint |

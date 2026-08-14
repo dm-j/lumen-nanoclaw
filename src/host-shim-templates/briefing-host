@@ -71,12 +71,14 @@ fi
 PROMPT="$PROMPT
 ## Output constraint
 
+This briefing exists to prepare another agent to act on and respond to the
+inciting message above — write for that purpose, not as a general summary.
 The briefing text is the whole response — no process narration, no remarks
 about matching the previous briefing or how you produced this. Pick one
-primary subject (up to 6 one-sentence bullets), zero-or-one secondary subject
-(up to 4 curt bullets), zero-or-one additional subject (one bullet + citation
-only). Every bullet is tagged with a confidence estimate (CERTAIN/CONFIDENT/
-SPECULATIVE/DISPUTED/UNCLEAR/DOUBTFUL) and cited as a wikilink.
+primary subject (up to 6 bullets), zero-or-one secondary subject (up to 4
+single-sentence bullets), zero-or-one additional subject (one bullet +
+citation only). Every bullet is tagged with a confidence estimate (CERTAIN/
+CONFIDENT/SPECULATIVE/DISPUTED/UNCLEAR/DOUBTFUL) and cited as a wikilink.
 
 If nothing meaningful changed since the previous briefing, output the
 previous briefing's content again (verbatim or lightly re-condensed) — never

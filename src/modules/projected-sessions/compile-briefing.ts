@@ -52,12 +52,61 @@ function writeBriefingDebugLog(agentGroupId: string, prevBriefing: string, promp
   }
 }
 
+// Blocking sanity check: on a hit, the caller must NOT persist or forward
+// this content — it's replaced with the standard failure note instead. This
+// matters more than an ordinary bad-output case because the stored briefing
+// is Lumen's only durable memory across turns (her own conversational
+// context is short-lived); persisting garbage here doesn't just show up
+// once, it becomes the "previous briefing" fed into every subsequent turn
+// and compounds. A real briefing (per the briefing skill's output contract)
+// is subject-organized prose/bullets with wikilink citations; it never
+// opens as a direct first-person reply, and it never leaves a task
+// half-narrated ("Searching the vault for X now.") instead of finishing it.
+const PECULIAR_OPENING_RE = /^(i\b|i'|i’)/i;
+const NARRATION_STUB_RE = /\b(now|next)\.?\s*$/i;
+
+function checkPeculiar(content: string): string[] {
+  const trimmed = content.trim();
+  const reasons: string[] = [];
+  if (PECULIAR_OPENING_RE.test(trimmed)) reasons.push('first-person opening');
+  if (!trimmed.includes('[[')) reasons.push('no wikilink citation');
+  if (trimmed.length < 200 && NARRATION_STUB_RE.test(trimmed)) reasons.push('looks like an unfinished narration stub');
+  return reasons;
+}
+
+function logPeculiar(
+  agentGroupId: string,
+  sessionKey: string,
+  incitingMessage: string,
+  content: string,
+  reasons: string[],
+): void {
+  try {
+    const dir = path.join(LOGS_DIR, 'briefing-anomalies');
+    fs.mkdirSync(dir, { recursive: true });
+    const entry = [
+      `## ${new Date().toISOString()} — ${agentGroupId} — ${sessionKey}`,
+      `Blocked: ${reasons.join(', ')}`,
+      '',
+      '### Inciting message',
+      incitingMessage,
+      '',
+      '### Briefing content (not persisted/forwarded)',
+      content,
+      '',
+    ].join('\n');
+    fs.appendFileSync(path.join(dir, `${agentGroupId}.md`), entry);
+  } catch (err) {
+    log.warn('logPeculiar failed (non-fatal)', { agentGroupId, err });
+  }
+}
+
 // Real Briefer calls run 20-90s in production use (Synthetic Context doc,
 // 2026-07-17); the shared host-shim default (30s) is sized for cheap scripts,
 // not a subagent dispatch. compile-briefing is the one caller that needs more.
 // Bumped from 120s once briefing-host started routing through
 // PrefixRouter/Ollama, whose round-trips run slower than Anthropic's.
-const COMPILE_TIMEOUT_MS = 180_000;
+const COMPILE_TIMEOUT_MS = 300_000;
 
 // Compiler's own tail is tone/continuity only — small on purpose so it
 // doesn't crowd out what the compiler is supposed to be freshly looking up.
@@ -149,6 +198,21 @@ export async function compileBriefing(
     }
 
     const content = result.stdout.trim();
+
+    const peculiarReasons = checkPeculiar(content);
+    if (peculiarReasons.length > 0) {
+      logPeculiar(agentGroupId, sessionKey, newBatchText, content, peculiarReasons);
+      // Never persist or forward this — it's not a real briefing, and
+      // persisting it would make it the *next* turn's "previous briefing"
+      // too, compounding. prevBriefing (last known-good) stays in place.
+      // Not a briefingFailureNote either: that phrasing ("briefing generation
+      // failed") is misleading here — the call succeeded, the content is
+      // just not usable — so this gets its own note.
+      const note = `Briefing generation produced unusable output (${peculiarReasons.join(', ')}) and was discarded. Inform your user if they are not aware of this issue.`;
+      writeBriefingDebugLog(agentGroupId, prevBriefing, batchWithTail, note);
+      return note;
+    }
+
     // A no-op briefing is shown once (returned below, written into this
     // turn's briefing.md) but never persisted — otherwise every "nothing
     // changed" turn adds its own history row and pushes the interleaved
