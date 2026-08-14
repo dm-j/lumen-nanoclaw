@@ -156,6 +156,8 @@ export interface ContainerConfig {
   env?: Record<string, string>;
   blockedHosts?: string[];
   mcpShims: McpShimManifestEntry[];
+  /** Session DB transport: 'file' (bind-mounted, default) or 'sync' (host/container-local DBs over WebSocket). */
+  transport: 'file' | 'sync';
 }
 
 /**
@@ -195,6 +197,7 @@ export function configFromDb(row: ContainerConfigRow, group: AgentGroup): Contai
     effort: row.effort ?? undefined,
     timezone: row.timezone && isValidTimezone(row.timezone) ? row.timezone : undefined,
     mcpShims: [],
+    transport: row.transport === 'sync' ? 'sync' : 'file',
   };
 }
 

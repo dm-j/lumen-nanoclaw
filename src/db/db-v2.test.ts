@@ -480,6 +480,7 @@ describe('container configs', () => {
       timezone: null,
       host_shims_dir: null,
       mcp_shims_dir: null,
+      transport: null,
       updated_at: now(),
     });
     const row = getContainerConfig('ag-full');

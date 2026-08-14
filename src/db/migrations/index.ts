@@ -27,6 +27,7 @@ import { migration027 } from './027-briefing-history.js';
 import { migration028 } from './028-tail-anchor-last-call.js';
 import { migration029 } from './029-mcp-shims-dir.js';
 import { migration030 } from './030-vault-transcript-enabled.js';
+import { migration031 } from './031-container-transport.js';
 
 export interface Migration {
   version: number;
@@ -78,6 +79,7 @@ export const migrations: Migration[] = [
   migration028,
   migration029,
   migration030,
+  migration031,
 ];
 
 /**

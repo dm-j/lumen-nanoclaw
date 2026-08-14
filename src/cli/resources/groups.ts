@@ -60,6 +60,7 @@ function presentConfig(row: ContainerConfigRow): Record<string, unknown> {
     timezone: row.timezone,
     host_shims_dir: row.host_shims_dir,
     mcp_shims_dir: row.mcp_shims_dir,
+    transport: row.transport ?? 'file',
     updated_at: row.updated_at,
   };
 }
@@ -311,7 +312,8 @@ registerResource({
         'Use --id <group-id> and any of: --provider, --model, --effort, --image-tag, --assistant-name, --max-messages-per-prompt, --cli-scope, ' +
         '--timezone (IANA id like "Europe/Lisbon"; "" clears back to the install default; scheduled-task times follow it immediately, message display after restart), ' +
         '--host-shims-dir (path to this group\'s host-shim whitelist directory; "" clears back to the default groups/<folder>/host-shims/), ' +
-        '--mcp-shims-dir (path to this group\'s mcp-shims whitelist directory; "" clears back to the default mcp-shims/<folder>/, never mounted into the container).',
+        '--mcp-shims-dir (path to this group\'s mcp-shims whitelist directory; "" clears back to the default mcp-shims/<folder>/, never mounted into the container), ' +
+        '--transport (session DB transport: "file" [default, bind-mounted inbound.db/outbound.db] or "sync" [host-local + container-local DBs reconciled over WebSocket, macOS-only, opt-in — see docs/db.md]).',
       handler: async (args) => {
         const id = args.id as string;
         if (!id) throw new Error('--id is required');
@@ -331,6 +333,7 @@ registerResource({
             | 'timezone'
             | 'host_shims_dir'
             | 'mcp_shims_dir'
+            | 'transport'
           >
         > = {};
         if (args.provider !== undefined) updates.provider = args.provider as string;
@@ -354,6 +357,15 @@ registerResource({
             throw new Error('--cli-scope must be one of: disabled, group, global');
           }
           updates.cli_scope = scope;
+        }
+        if (args.transport !== undefined) {
+          const transport = args.transport as string;
+          if (!['file', 'sync'].includes(transport)) {
+            throw new Error('--transport must be one of: file, sync');
+          }
+          // 'file' is the column's NULL default — store NULL, not the literal
+          // string, so existing rows and freshly-defaulted rows read identically.
+          updates.transport = transport === 'file' ? null : transport;
         }
 
         if (Object.keys(updates).length === 0) {

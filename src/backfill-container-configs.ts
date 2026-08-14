@@ -68,6 +68,7 @@ export function backfillContainerConfigs(): void {
       timezone: null,
       host_shims_dir: null,
       mcp_shims_dir: null,
+      transport: null,
       updated_at: new Date().toISOString(),
     };
 

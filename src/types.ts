@@ -28,6 +28,7 @@ export interface ContainerConfigRow {
   timezone: string | null; // IANA id; NULL = follow the install-global timezone
   host_shims_dir: string | null; // NULL = default to groups/<folder>/host-shims/
   mcp_shims_dir: string | null; // NULL = default to groups/<folder>/mcp-shims/
+  transport: string | null; // 'file' | 'sync'; NULL = 'file' (bind-mounted session DBs)
   updated_at: string;
 }
 
