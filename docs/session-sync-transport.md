@@ -52,6 +52,7 @@ Noted so the idea isn't lost, and so it isn't quietly reinvented under time pres
 
 ## 6. Status
 
-- **Phase 0 (scaffolding)**: done. `container_configs.transport` column (migration 031), `ContainerConfig.transport`, `ncl groups config update --transport`, `src/session-sync/protocol.ts` + container mirror with tests. Nothing wired into a live spawn path — every existing group resolves to `'file'`, unchanged behavior. Branch: `feat/session-sync-transport-phase0`.
-- **Phase 1 (host WebSocket server)**: designed (§3, §4), not built.
+- **Phase 0 (scaffolding)**: done, merged to `main`. `container_configs.transport` column (migration 031), `ContainerConfig.transport`, `ncl groups config update --transport`, `src/session-sync/protocol.ts` + container mirror with tests. Nothing wired into a live spawn path — every existing group resolves to `'file'`, unchanged behavior.
+- **Phase 1 (host WebSocket server)**: designed (§3, §4), **start here next**. New files: `src/session-sync/transport.ts` (generic `wss://`-only connection layer — TLS, signed-token auth, channel-tagged envelope, connection registry) and `src/session-sync/server.ts` (session-sync-specific: resync-from-seq, chain verification via the already-built `protocol.ts`, writes synced rows into `outbound.db`). Mirrors on the container side per §3/§4. Verify each piece standalone before wiring into a live spawn path, same discipline as Phase 0 and the pre-build stress tests in §2.
+- **Phase 2-5**: designed at a high level (container sync client, resync bookkeeping, verification-before-cutover, rollout), not built.
 - **Phase 2-5**: designed at a high level (container sync client, resync bookkeeping, verification-before-cutover, rollout), not built.
