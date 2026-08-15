@@ -19,10 +19,27 @@ export interface Envelope {
 
 export type ChannelHandler = (body: unknown) => void;
 
+/** Mirror of the host's AUTH_CHANNEL constant — must match exactly. */
+const AUTH_CHANNEL = 'session-sync-auth';
+
+interface TokenRefresh {
+  type: 'token_refresh';
+  token: string;
+}
+
 export interface SyncClient {
   ws: WebSocket;
   send(channel: string, body: unknown): void;
   close(): void;
+  /**
+   * The most recently issued token — the host pushes a fresh one over
+   * AUTH_CHANNEL well before the current one expires (see host-side
+   * transport.ts). A future reconnect should call connectSyncClient with
+   * this instead of the token baked into container.json at spawn time,
+   * so a session outliving one token's TTL doesn't require a full respawn
+   * to keep syncing.
+   */
+  currentToken(): string;
 }
 
 /**
@@ -37,6 +54,7 @@ export function connectSyncClient(
 ): Promise<SyncClient> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(url, token);
+    let latestToken = token;
 
     ws.addEventListener('open', () => {
       resolve({
@@ -46,6 +64,9 @@ export function connectSyncClient(
         },
         close(): void {
           ws.close();
+        },
+        currentToken(): string {
+          return latestToken;
         },
       });
     });
@@ -59,6 +80,13 @@ export function connectSyncClient(
       try {
         envelope = JSON.parse(String(event.data));
       } catch {
+        return;
+      }
+      if (envelope.channel === AUTH_CHANNEL) {
+        const refresh = envelope.body as TokenRefresh;
+        if (refresh?.type === 'token_refresh' && typeof refresh.token === 'string') {
+          latestToken = refresh.token;
+        }
         return;
       }
       const handler = handlers[envelope.channel];

@@ -19,6 +19,18 @@ export interface Envelope {
 
 export type ChannelHandler = (sessionId: string, ws: WebSocket, body: unknown) => void;
 
+/**
+ * Reserved channel for token refresh — separate from 'session-sync' so
+ * auth/connection lifecycle never mixes into sync-semantic message handling
+ * (same separation of concerns as §4.4 in docs/session-sync-transport.md).
+ */
+export const AUTH_CHANNEL = 'session-sync-auth';
+
+export interface TokenRefresh {
+  type: 'token_refresh';
+  token: string;
+}
+
 /** HMAC-signed token: `<sessionId>.<expiryMs>.<hex signature>`. */
 export function signToken(sessionId: string, secret: string, ttlMs: number): string {
   const expiry = Date.now() + ttlMs;
@@ -54,8 +66,20 @@ export interface SyncServer {
  * `Sec-WebSocket-Protocol` header (`sign Token(sessionId, secret, ttl)`,
  * expected as the subprotocol value) — verified on upgrade, before any
  * channel handler runs.
+ *
+ * While connected, each session gets a fresh token pushed over
+ * `AUTH_CHANNEL` at `tokenTtlMs / 2` — well before the current token
+ * expires, so a reconnect (network blip, host restart) always has a live
+ * token to hand rather than requiring a full container respawn to get a
+ * new one. The client mirror (container-side transport.ts) tracks the
+ * latest pushed token for exactly that purpose.
  */
-export function createSyncServer(port: number, secret: string, handlers: Record<string, ChannelHandler>): SyncServer {
+export function createSyncServer(
+  port: number,
+  secret: string,
+  tokenTtlMs: number,
+  handlers: Record<string, ChannelHandler>,
+): SyncServer {
   const { cert, key } = getInstallCert();
   const httpsServer = createHttpsServer({ cert, key });
   const wss = new WebSocketServer({ noServer: true });
@@ -70,7 +94,17 @@ export function createSyncServer(port: number, secret: string, handlers: Record<
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
       connections.set(sessionId, ws);
+
+      const refreshTimer = setInterval(() => {
+        if (ws.readyState !== ws.OPEN) return;
+        sendEnvelope(ws, AUTH_CHANNEL, {
+          type: 'token_refresh',
+          token: signToken(sessionId, secret, tokenTtlMs),
+        } satisfies TokenRefresh);
+      }, tokenTtlMs / 2);
+
       ws.on('close', () => {
+        clearInterval(refreshTimer);
         if (connections.get(sessionId) === ws) connections.delete(sessionId);
       });
       // Required: an unhandled 'error' event on any EventEmitter (ws sockets

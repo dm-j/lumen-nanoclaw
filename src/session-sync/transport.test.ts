@@ -1,6 +1,18 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { WebSocket as NodeWebSocket } from 'ws';
 
-import { signToken, verifyToken } from './transport.js';
+const { TEST_DIR } = vi.hoisted(() => {
+  const nodePath = require('path') as typeof import('path');
+  const nodeOs = require('os') as typeof import('os');
+  return { TEST_DIR: nodePath.join(nodeOs.tmpdir(), `nanoclaw-session-sync-transport-${Date.now()}`) };
+});
+
+vi.mock('../config.js', async () => {
+  const actual = await vi.importActual<typeof import('../config.js')>('../config.js');
+  return { ...actual, DATA_DIR: TEST_DIR };
+});
+
+const { AUTH_CHANNEL, createSyncServer, signToken, verifyToken } = await import('./transport.js');
 
 describe('signToken/verifyToken', () => {
   it('round-trips a valid token', () => {
@@ -27,5 +39,37 @@ describe('signToken/verifyToken', () => {
     const token = signToken('sess-1', 'secret-a', 60_000);
     const [, expiry, sig] = token.split('.');
     expect(verifyToken(`sess-evil.${expiry}.${sig}`, 'secret-a')).toBeNull();
+  });
+});
+
+describe('createSyncServer token refresh', () => {
+  it('pushes a fresh, valid token over AUTH_CHANNEL before the current one expires', async () => {
+    const secret = 'refresh-secret';
+    const ttlMs = 100; // refresh fires at ttlMs / 2 = 50ms
+    const server = createSyncServer(0, secret, ttlMs, {});
+    const port = (server.httpsServer.address() as { port: number }).port;
+    const initialToken = signToken('sess-refresh', secret, ttlMs);
+
+    const client = new NodeWebSocket(`wss://127.0.0.1:${port}`, initialToken, { rejectUnauthorized: false });
+
+    try {
+      const refreshed = await new Promise<string>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('no refresh received in time')), 2000);
+        client.on('message', (raw) => {
+          const envelope = JSON.parse(raw.toString());
+          if (envelope.channel === AUTH_CHANNEL && envelope.body?.type === 'token_refresh') {
+            clearTimeout(timeout);
+            resolve(envelope.body.token);
+          }
+        });
+        client.on('error', reject);
+      });
+
+      expect(refreshed).not.toBe(initialToken);
+      expect(verifyToken(refreshed, secret)).toBe('sess-refresh');
+    } finally {
+      client.close();
+      await server.close();
+    }
   });
 });
