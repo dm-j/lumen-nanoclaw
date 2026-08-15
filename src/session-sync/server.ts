@@ -10,8 +10,10 @@
  * transport outbound.db is never mounted into the container at all (see
  * docs/session-sync-transport.md §3), so there's no concurrent-writer risk.
  *
- * Chain checkpoint is persisted into outbound.db's own `session_state`
- * table (key CHAIN_STATE_KEY) after every applied message, not just kept
+ * Chain checkpoint is persisted into outbound.db's dedicated
+ * `session_sync_state` table (schema.ts — deliberately not the container's
+ * own `session_state` table, to avoid a future keyspace collision if that
+ * table ever gets synced too) after every applied message, not just kept
  * in memory — a host restart re-derives it from there instead of resetting
  * to GENESIS_CHAIN, which would otherwise force a full-history resync on
  * every restart.
@@ -27,24 +29,26 @@ interface ChainState {
   outbound: { seq: number; chain: string };
 }
 
-const CHAIN_STATE_KEY = 'session_sync_outbound_chain';
-
 const chainStateBySession = new Map<string, ChainState>();
 
 function loadChainState(db: import('better-sqlite3').Database): ChainState {
-  const row = db.prepare('SELECT value FROM session_state WHERE key = ?').get(CHAIN_STATE_KEY) as
-    | { value: string }
+  const row = db.prepare('SELECT outbound_seq, outbound_chain FROM session_sync_state WHERE id = 1').get() as
+    | { outbound_seq: number; outbound_chain: string }
     | undefined;
   if (!row) return { outbound: { seq: 0, chain: GENESIS_CHAIN } };
-  return { outbound: JSON.parse(row.value) };
+  return { outbound: { seq: row.outbound_seq, chain: row.outbound_chain } };
 }
 
 function persistChainState(db: import('better-sqlite3').Database, state: ChainState): void {
   db.prepare(
-    `INSERT INTO session_state (key, value, updated_at)
-     VALUES (@key, @value, @updated_at)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-  ).run({ key: CHAIN_STATE_KEY, value: JSON.stringify(state.outbound), updated_at: new Date().toISOString() });
+    `INSERT INTO session_sync_state (id, outbound_seq, outbound_chain, updated_at)
+     VALUES (1, @outbound_seq, @outbound_chain, @updated_at)
+     ON CONFLICT(id) DO UPDATE SET outbound_seq = excluded.outbound_seq, outbound_chain = excluded.outbound_chain, updated_at = excluded.updated_at`,
+  ).run({
+    outbound_seq: state.outbound.seq,
+    outbound_chain: state.outbound.chain,
+    updated_at: new Date().toISOString(),
+  });
 }
 
 function getChainState(sessionId: string, db: import('better-sqlite3').Database): ChainState {

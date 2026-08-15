@@ -15,7 +15,7 @@ export type SyncMessageKind = 'inbound' | 'outbound' | 'ack' | 'ack_processing';
 export interface SyncMessage {
   seq: number;
   kind: SyncMessageKind;
-  /** Hash-chain value at this message: hash(prevChain + canonicalize(payload)). */
+  /** Hash-chain value at this message: hash(prevChain + seq + canonicalize(payload)). */
   chain: string;
   payload: unknown;
 }
@@ -44,9 +44,15 @@ function sortKeysDeep(value: unknown): unknown {
   return value;
 }
 
-/** Next chain value given the previous chain value and this message's payload. */
-export function nextChain(prevChain: string, payload: unknown): string {
-  return createHash('sha256').update(prevChain).update(canonicalize(payload)).digest('hex');
+/**
+ * Next chain value given the previous chain value, this message's seq, and
+ * its payload. `seq` is folded in (not just the payload) so a message with
+ * a correct payload chain but a forged/wrong `seq` is rejected too — seq is
+ * what callers use as the resync bookmark, so it must be as tamper-evident
+ * as the payload itself.
+ */
+export function nextChain(prevChain: string, seq: number, payload: unknown): string {
+  return createHash('sha256').update(prevChain).update(String(seq)).update(canonicalize(payload)).digest('hex');
 }
 
 /**
@@ -56,6 +62,6 @@ export function nextChain(prevChain: string, payload: unknown): string {
  * known-good seq/chain.
  */
 export function verifyChain(prevChain: string, message: SyncMessage): string | null {
-  const expected = nextChain(prevChain, message.payload);
+  const expected = nextChain(prevChain, message.seq, message.payload);
   return expected === message.chain ? expected : null;
 }

@@ -48,7 +48,7 @@ describe('makeSessionSyncHandler', () => {
       thread_id: null,
       content: '{}',
     };
-    const chain = nextChain(GENESIS_CHAIN, payload);
+    const chain = nextChain(GENESIS_CHAIN, 1, payload);
     handler('sess-1', ws, { seq: 1, kind: 'outbound', chain, payload });
 
     const db = new Database(dbPath, { readonly: true });
@@ -98,7 +98,7 @@ describe('makeSessionSyncHandler', () => {
       thread_id: null,
       content: '{}',
     };
-    const chain = nextChain(GENESIS_CHAIN, payload);
+    const chain = nextChain(GENESIS_CHAIN, 1, payload);
     handler('sess-1', ws, { seq: 1, kind: 'outbound', chain, payload });
 
     // Simulate a host restart: drop the in-memory cache only.

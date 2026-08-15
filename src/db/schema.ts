@@ -251,6 +251,20 @@ CREATE TABLE IF NOT EXISTS processing_ack (
   status_changed TEXT NOT NULL
 );
 
+-- Host-internal bookkeeping for the 'sync' session transport (see
+-- src/session-sync/server.ts) — the hash-chain checkpoint the host has
+-- durably applied, so a host restart resumes from here instead of
+-- resetting to GENESIS_CHAIN. Deliberately a separate table from
+-- session_state below, which is container-owned app state (SDK session ID,
+-- etc.); keeping sync-internal bookkeeping out of that keyspace avoids a
+-- future collision if session_state itself ever gets synced too.
+CREATE TABLE IF NOT EXISTS session_sync_state (
+  id             INTEGER PRIMARY KEY CHECK (id = 1),
+  outbound_seq   INTEGER NOT NULL,
+  outbound_chain TEXT NOT NULL,
+  updated_at     TEXT NOT NULL
+);
+
 -- Persistent key/value state owned by the container. Used (among other things)
 -- to store the SDK session ID so the agent's conversation resumes across
 -- container restarts. Cleared by /clear.

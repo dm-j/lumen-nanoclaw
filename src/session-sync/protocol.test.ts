@@ -15,7 +15,7 @@ describe('session-sync protocol: hash chain', () => {
       { seq: 3, text: 'ok' },
     ];
     for (const payload of payloads) {
-      const expected = nextChain(chain, payload);
+      const expected = nextChain(chain, payload.seq, payload);
       const verified = verifyChain(chain, { seq: payload.seq, kind: 'inbound', chain: expected, payload });
       expect(verified).toBe(expected);
       chain = verified!;
@@ -23,7 +23,7 @@ describe('session-sync protocol: hash chain', () => {
   });
 
   it('detects a tampered payload', () => {
-    const chain = nextChain(GENESIS_CHAIN, { text: 'original' });
+    const chain = nextChain(GENESIS_CHAIN, 1, { text: 'original' });
     const result = verifyChain(GENESIS_CHAIN, {
       seq: 1,
       kind: 'inbound',
@@ -34,11 +34,19 @@ describe('session-sync protocol: hash chain', () => {
   });
 
   it('detects a chain broken by a missing/reordered predecessor', () => {
-    const chainA = nextChain(GENESIS_CHAIN, { i: 1 });
-    const chainB = nextChain(chainA, { i: 2 });
+    const chainA = nextChain(GENESIS_CHAIN, 1, { i: 1 });
+    const chainB = nextChain(chainA, 2, { i: 2 });
     // Verifying message B against GENESIS instead of chainA (as if message A
     // never arrived) must fail, not silently accept.
     const result = verifyChain(GENESIS_CHAIN, { seq: 2, kind: 'inbound', chain: chainB, payload: { i: 2 } });
+    expect(result).toBeNull();
+  });
+
+  it('detects a forged seq with an otherwise-correct payload chain', () => {
+    const chain = nextChain(GENESIS_CHAIN, 1, { text: 'hello' });
+    // Same payload, same resulting chain value, but claiming a different seq —
+    // must not verify, since seq is the resync bookmark and must be tamper-evident.
+    const result = verifyChain(GENESIS_CHAIN, { seq: 999, kind: 'inbound', chain, payload: { text: 'hello' } });
     expect(result).toBeNull();
   });
 });

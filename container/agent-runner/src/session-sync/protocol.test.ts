@@ -11,7 +11,7 @@ describe('session-sync protocol: hash chain (container)', () => {
     let chain = GENESIS_CHAIN;
     const payloads = [{ seq: 1, text: 'hello' }, { seq: 2, text: 'world' }, { seq: 3, text: 'ok' }];
     for (const payload of payloads) {
-      const expected = nextChain(chain, payload);
+      const expected = nextChain(chain, payload.seq, payload);
       const verified = verifyChain(chain, { seq: payload.seq, kind: 'outbound', chain: expected, payload });
       expect(verified).toBe(expected);
       chain = verified!;
@@ -19,13 +19,19 @@ describe('session-sync protocol: hash chain (container)', () => {
   });
 
   it('detects a tampered payload', () => {
-    const chain = nextChain(GENESIS_CHAIN, { text: 'original' });
+    const chain = nextChain(GENESIS_CHAIN, 1, { text: 'original' });
     const result = verifyChain(GENESIS_CHAIN, {
       seq: 1,
       kind: 'outbound',
       chain,
       payload: { text: 'tampered' },
     });
+    expect(result).toBeNull();
+  });
+
+  it('detects a forged seq with an otherwise-correct payload chain', () => {
+    const chain = nextChain(GENESIS_CHAIN, 1, { text: 'hello' });
+    const result = verifyChain(GENESIS_CHAIN, { seq: 999, kind: 'outbound', chain, payload: { text: 'hello' } });
     expect(result).toBeNull();
   });
 });
