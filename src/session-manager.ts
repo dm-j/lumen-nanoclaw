@@ -41,6 +41,7 @@ import {
   migrateMessagesInTable,
 } from './db/session-db.js';
 import { log } from './log.js';
+import { notifyInboundWrite, type InboundRowPayload } from './session-sync/inbound-push.js';
 import type { Session } from './types.js';
 
 /** Root directory for all session data. */
@@ -264,6 +265,7 @@ export function writeSessionMessage(
   // Extract base64 attachment data, save to inbox, replace with file paths
   const content = extractAttachmentFiles(agentGroupId, sessionId, message.id, message.content);
 
+  let syncPayload: InboundRowPayload | undefined;
   const db = openInboundDb(agentGroupId, sessionId);
   try {
     insertMessage(db, {
@@ -283,9 +285,14 @@ export function writeSessionMessage(
     if (message.stage) {
       db.prepare("UPDATE messages_in SET status = 'staged' WHERE id = ?").run(message.id);
     }
+    // Read back the assigned seq (insertMessage computes it internally) — a
+    // 'sync'-transport push needs the row exactly as it now exists, staged
+    // status included, since that's the shape the container applies verbatim.
+    syncPayload = db.prepare('SELECT * FROM messages_in WHERE id = ?').get(message.id) as InboundRowPayload | undefined;
   } finally {
     db.close();
   }
+  if (syncPayload) notifyInboundWrite(agentGroupId, sessionId, syncPayload);
 
   updateSession(sessionId, { last_active: new Date().toISOString() });
 }

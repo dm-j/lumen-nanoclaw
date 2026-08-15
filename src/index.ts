@@ -23,6 +23,7 @@ import { enforceUpgradeTripwire } from './upgrade-state.js';
 import { getInstallSecret } from './session-sync/secret.js';
 import { createSyncServer, type SyncServer } from './session-sync/transport.js';
 import { makeSessionSyncHandler } from './session-sync/server.js';
+import { registerSyncServer } from './session-sync/inbound-push.js';
 
 const SESSION_SYNC_TOKEN_TTL_MS = 15 * 60 * 1000;
 let syncServer: SyncServer | undefined;
@@ -98,6 +99,7 @@ async function main(): Promise<void> {
       return outboundDbPath(session.agent_group_id, sessionId);
     }),
   });
+  registerSyncServer(syncServer);
   log.info('Session-sync server listening', { port: SESSION_SYNC_PORT });
 
   // 2. Container runtime
