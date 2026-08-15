@@ -10,6 +10,15 @@
  * transport outbound.db is never mounted into the container at all (see
  * docs/session-sync-transport.md §3), so there's no concurrent-writer risk.
  *
+ * Covers all four outbound.db tables, not just messages_out/processing_ack
+ * — session_state (Chat SDK resumption) and container_state (stuck-tool
+ * sweep window) would otherwise silently stop working under 'sync'
+ * transport, since the host's local outbound.db copy would never receive
+ * them (see docs/session-sync-transport.md §6, Phase 2 scope decision).
+ * inbound.db's equivalent gap (delivered/destinations/session_routing)
+ * isn't addressed here — that's the container-side sync client applying
+ * host-sent rows, which doesn't exist yet.
+ *
  * Chain checkpoint is persisted into outbound.db's dedicated
  * `session_sync_state` table (schema.ts — deliberately not the container's
  * own `session_state` table, to avoid a future keyspace collision if that
@@ -106,6 +115,10 @@ export function makeSessionSyncHandler(outboundDbPathFor: (sessionId: string) =>
         applyOutboundRow(db, message);
       } else if (message.kind === 'ack' || message.kind === 'ack_processing') {
         applyProcessingAck(db, message);
+      } else if (message.kind === 'session_state') {
+        applySessionStateRow(db, message);
+      } else if (message.kind === 'container_state') {
+        applyContainerStateRow(db, message);
       }
 
       state.outbound = { seq: message.seq, chain: nextChain };
@@ -132,5 +145,32 @@ function applyProcessingAck(db: import('better-sqlite3').Database, message: Sync
     `INSERT INTO processing_ack (message_id, status, status_changed)
      VALUES (@message_id, @status, @status_changed)
      ON CONFLICT(message_id) DO UPDATE SET status = excluded.status, status_changed = excluded.status_changed`,
+  ).run(row);
+}
+
+function applySessionStateRow(db: import('better-sqlite3').Database, message: SyncMessage): void {
+  const row = message.payload as { key: string; value: string; updated_at: string };
+  db.prepare(
+    `INSERT INTO session_state (key, value, updated_at)
+     VALUES (@key, @value, @updated_at)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+  ).run(row);
+}
+
+function applyContainerStateRow(db: import('better-sqlite3').Database, message: SyncMessage): void {
+  const row = message.payload as {
+    current_tool: string | null;
+    tool_declared_timeout_ms: number | null;
+    tool_started_at: string | null;
+    updated_at: string;
+  };
+  db.prepare(
+    `INSERT INTO container_state (id, current_tool, tool_declared_timeout_ms, tool_started_at, updated_at)
+     VALUES (1, @current_tool, @tool_declared_timeout_ms, @tool_started_at, @updated_at)
+     ON CONFLICT(id) DO UPDATE SET
+       current_tool = excluded.current_tool,
+       tool_declared_timeout_ms = excluded.tool_declared_timeout_ms,
+       tool_started_at = excluded.tool_started_at,
+       updated_at = excluded.updated_at`,
   ).run(row);
 }

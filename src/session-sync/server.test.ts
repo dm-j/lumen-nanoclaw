@@ -108,4 +108,55 @@ describe('makeSessionSyncHandler', () => {
     handler('sess-1', ws2, { type: 'resync_request' });
     expect(ws2.sent).toEqual([{ channel: 'session-sync', body: { type: 'resync_point', seq: 1, chain } }]);
   });
+
+  it('applies a synced session_state row (Chat SDK resumption data)', () => {
+    const handler = makeSessionSyncHandler(() => dbPath);
+    const ws = fakeWs();
+    const payload = { key: 'chat_sdk_session_id', value: 'sdk-abc123', updated_at: '2026-01-01T00:00:00.000Z' };
+    const chain = nextChain(GENESIS_CHAIN, 1, payload);
+    handler('sess-1', ws, { seq: 1, kind: 'session_state', chain, payload });
+
+    const db = new Database(dbPath, { readonly: true });
+    const row = db.prepare('SELECT value FROM session_state WHERE key = ?').get('chat_sdk_session_id') as
+      | { value: string }
+      | undefined;
+    db.close();
+    expect(row?.value).toBe('sdk-abc123');
+  });
+
+  it('upserts a synced session_state row on a repeat key', () => {
+    const handler = makeSessionSyncHandler(() => dbPath);
+    const first = { key: 'k', value: 'v1', updated_at: '2026-01-01T00:00:00.000Z' };
+    const chain1 = nextChain(GENESIS_CHAIN, 1, first);
+    handler('sess-1', fakeWs(), { seq: 1, kind: 'session_state', chain: chain1, payload: first });
+
+    const second = { key: 'k', value: 'v2', updated_at: '2026-01-01T00:00:01.000Z' };
+    const chain2 = nextChain(chain1, 3, second);
+    handler('sess-1', fakeWs(), { seq: 3, kind: 'session_state', chain: chain2, payload: second });
+
+    const db = new Database(dbPath, { readonly: true });
+    const rows = db.prepare('SELECT value FROM session_state WHERE key = ?').all('k');
+    db.close();
+    expect(rows).toEqual([{ value: 'v2' }]);
+  });
+
+  it('applies a synced container_state row (stuck-tool sweep window)', () => {
+    const handler = makeSessionSyncHandler(() => dbPath);
+    const ws = fakeWs();
+    const payload = {
+      current_tool: 'Bash',
+      tool_declared_timeout_ms: 120_000,
+      tool_started_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z',
+    };
+    const chain = nextChain(GENESIS_CHAIN, 1, payload);
+    handler('sess-1', ws, { seq: 1, kind: 'container_state', chain, payload });
+
+    const db = new Database(dbPath, { readonly: true });
+    const row = db.prepare('SELECT current_tool, tool_declared_timeout_ms FROM container_state WHERE id = 1').get() as
+      | { current_tool: string; tool_declared_timeout_ms: number }
+      | undefined;
+    db.close();
+    expect(row).toEqual({ current_tool: 'Bash', tool_declared_timeout_ms: 120_000 });
+  });
 });

@@ -12,7 +12,7 @@
  */
 import { createHash } from 'crypto';
 
-export type SyncMessageKind = 'inbound' | 'outbound' | 'ack' | 'ack_processing';
+export type SyncMessageKind = 'inbound' | 'outbound' | 'ack' | 'ack_processing' | 'session_state' | 'container_state';
 
 export interface SyncMessage {
   seq: number;
