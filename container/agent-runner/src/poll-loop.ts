@@ -41,6 +41,28 @@ const ACTIVE_POLL_INTERVAL_MS = 500;
 const CORRUPTION_STREAK_EXIT = 10;
 
 /**
+ * Projected-session warm-container context reset (docs/roadmap/warm-container-context-accumulation.md).
+ * Projected sessions promise every turn is a fresh, lightweight compile —
+ * but a warm container pushes follow-ups into the same open query
+ * indefinitely, silently growing it like a resumed transcript until it
+ * eventually blows the prompt-size limit. Mirrors the N/2N anchor-growth and
+ * TTL discipline `literal-tail.ts` already applies to what gets *written to
+ * disk* (RESPONDER_TAIL_TURNS=15, DEFAULT_CACHE_TTL_MS=5min) — duplicated
+ * here rather than imported because container/agent-runner is a separate
+ * Bun package tree with no access to host-side src/.
+ *
+ * ponytail: reset is "exit and let host-sweep respawn," not "abort the
+ * in-flight AgentQuery and open a fresh one in-process." The respawn path
+ * already exists (see the corruption-exit branch below) and for free resets
+ * every other per-query variable (archivePrompts, unwrappedNudged,
+ * taskBlockNudged, corruptionStreak) that in-process query surgery would
+ * have to reset by hand. Upgrade to in-process reset only if container
+ * respawn latency becomes a measured problem.
+ */
+const PROJECTED_FOLLOWUP_RESET_COUNT = 30; // 2 * RESPONDER_TAIL_TURNS
+const PROJECTED_QUERY_TTL_MS = 5 * 60 * 1000; // DEFAULT_CACHE_TTL_MS
+
+/**
  * True for SQLite errors that indicate a corrupt READ view — almost always a
  * cross-mount page-cache coherency issue on Docker Desktop macOS rather than
  * actual file damage (host-side integrity_check passes). Reopening the DB
@@ -379,6 +401,11 @@ export async function processQuery(
   let pollInFlight = false;
   let endedForCommand = false;
   let corruptionStreak = 0;
+  const queryOpenedAt = Date.now();
+  let followUpsPushed = 0;
+  const projectedResetDue = () =>
+    isProjectedSession() &&
+    (followUpsPushed >= PROJECTED_FOLLOWUP_RESET_COUNT || Date.now() - queryOpenedAt > PROJECTED_QUERY_TTL_MS);
   const pollHandle = setInterval(() => {
     if (done || pollInFlight || endedForCommand) return;
     pollInFlight = true;
@@ -443,6 +470,22 @@ export async function processQuery(
         // claimed messages get released by the host's processing-claim sweep.
         if (done) return;
 
+        // Projected sessions: don't let a warm container keep growing the
+        // same live query forever (docs/roadmap/warm-container-context-accumulation.md).
+        // Leave these messages pending — same as hitting the 30-min absolute
+        // ceiling mid-conversation — and exit so host-sweep respawns a fresh
+        // container that compiles a small briefing/tail on its next poll.
+        if (projectedResetDue()) {
+          log(
+            `PROJECTED_QUERY_RESET: warm container hit ${followUpsPushed} pushed follow-ups ` +
+              `(or TTL) — exiting so host respawns with a fresh query`,
+          );
+          done = true;
+          clearInterval(pollHandle);
+          setTimeout(() => process.exit(75), 100);
+          return;
+        }
+
         const keptIds = keep.map((m) => m.id);
         const prompt = formatMessages(keep);
         log(`Pushing ${keep.length} follow-up message(s) into active query`);
@@ -450,6 +493,7 @@ export async function processQuery(
         taskBlockNudged = false;
         query.push(prompt);
         archivePrompts.push(prompt);
+        followUpsPushed += 1;
         markCompleted(keptIds);
       } catch (err) {
         // Without this catch the rejection escapes the void IIFE and Node

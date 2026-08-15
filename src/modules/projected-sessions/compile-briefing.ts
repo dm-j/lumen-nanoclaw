@@ -220,7 +220,11 @@ export async function compileBriefing(
     // information gain. prevBriefing (last real content) stays in place as
     // both what the next compile diffs against and what the responder sees
     // starting next turn.
-    if (!content.startsWith('No new briefing needed.')) {
+    // .includes(), not .startsWith(): the group's own briefing-host script
+    // may prepend other sections (e.g. lumen-dmj's working-memory bands)
+    // ahead of the briefer's own text, so the sentinel is no longer
+    // guaranteed to be the first thing in `content`.
+    if (!content.includes(NO_BRIEFING_SENTINEL)) {
       setSessionBriefing(sessionKey, content);
       appendBriefingHistory(sessionKey, content, COMPILER_TAIL_TURNS);
     }

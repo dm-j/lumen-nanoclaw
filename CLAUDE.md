@@ -288,6 +288,12 @@ This project uses pnpm with `minimumReleaseAge: 4320` (3 days) in `pnpm-workspac
 - **`onlyBuiltDependencies`**: Never add packages to this list without human approval — build scripts execute arbitrary code during install.
 - **`pnpm install --frozen-lockfile`** should be used in CI, automation, and container builds. Never run bare `pnpm install` in those contexts.
 
+## Roadmap Maintenance
+
+Whenever a feature or change is discussed and agreed on scope/shape but not implemented in the same session — a "let's do this next time" or "document this so we don't lose it" moment — write it up before the session ends, not just into the conversation. Capture: what was decided, what's still open/undecided, and why (the reasoning, not just the conclusion — future-you needs to judge tradeoffs the same way, not just execute a checklist).
+
+[docs/roadmap.md](docs/roadmap.md) is a thin index only — one line per item, linking out to `docs/roadmap/<item>.md`. Keep it that way: a new item gets its own file plus one new line in the index, not a paragraph inline in the index itself. This keeps the index cheap to scan and lets one item's file be edited without touching any other item's. When a listed item ships, delete its file and remove its index line rather than leaving it stale; when new drift or scope is discovered while working on something else, add a dated addendum to that item's own file (see `roadmap/reconcile-host-shim-templates.md` for the pattern) rather than editing the index. The point is that the roadmap, not anyone's memory of the conversation, is the durable record of what's next and why — don't make the user re-explain a plan that was already agreed on.
+
 ## Docs Index
 
 | Doc | Purpose |

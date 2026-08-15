@@ -17,6 +17,13 @@ function readSource(): MemorySessionStartSource | undefined {
   return undefined;
 }
 
+// Same marker convention as projected-sessions.ts's isProjectedSession()
+// (container/agent-runner/src/projected-sessions.ts), duplicated rather than
+// imported to keep this hook script standalone/dependency-free — see the
+// DECISION comment on memoryContextForSessionStart for why this matters.
+const baseDir = process.argv[2];
+const isProjected = fs.existsSync(`${baseDir ?? '/workspace/agent'}/.projected-sessions-enabled`);
+
 const source = readSource();
-const context = source ? memoryContextForSessionStart(source, process.argv[2]) : undefined;
+const context = source ? memoryContextForSessionStart(source, baseDir, isProjected) : undefined;
 if (context) console.log(context);
