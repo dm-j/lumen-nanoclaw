@@ -19,7 +19,13 @@ const envConfig = readEnvFile([
   'NANOCLAW_EGRESS_LOCKDOWN',
   'NANOCLAW_EGRESS_NETWORK',
   'ONECLI_GATEWAY_CONTAINER',
+  'SESSION_SYNC_PORT',
 ]);
+
+// Host WebSocket port for 'sync'-transport session DB syncing (loopback-only,
+// between the host and its own containers). 58636 = "LUMEN" on a phone
+// keypad; override in .env if it conflicts with something else on the host.
+export const SESSION_SYNC_PORT = Number(process.env.SESSION_SYNC_PORT || envConfig.SESSION_SYNC_PORT || 58636);
 
 /**
  * @deprecated WhatsApp adapter copies now read the ASSISTANT_NAME .env key

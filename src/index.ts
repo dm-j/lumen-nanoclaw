@@ -7,10 +7,12 @@
 import path from 'path';
 
 import { backfillContainerConfigs } from './backfill-container-configs.js';
-import { DATA_DIR } from './config.js';
+import { DATA_DIR, SESSION_SYNC_PORT } from './config.js';
 import { enforceStartupBackoff, resetCircuitBreaker } from './circuit-breaker.js';
 import { initDb } from './db/connection.js';
 import { runMigrations } from './db/migrations/index.js';
+import { getSession } from './db/sessions.js';
+import { outboundDbPath } from './session-manager.js';
 import { ensureContainerRuntimeRunning, cleanupOrphans } from './container-runtime.js';
 import { startActiveDeliveryPoll, startSweepDeliveryPoll, setDeliveryAdapter, stopDeliveryPolls } from './delivery.js';
 import { startHostSweep, stopHostSweep } from './host-sweep.js';
@@ -18,6 +20,12 @@ import { startHostModules, stopHostModules } from './host-lifecycle.js';
 import { routeInbound } from './router.js';
 import { log } from './log.js';
 import { enforceUpgradeTripwire } from './upgrade-state.js';
+import { getInstallSecret } from './session-sync/secret.js';
+import { createSyncServer, type SyncServer } from './session-sync/transport.js';
+import { makeSessionSyncHandler } from './session-sync/server.js';
+
+const SESSION_SYNC_TOKEN_TTL_MS = 15 * 60 * 1000;
+let syncServer: SyncServer | undefined;
 
 // Response registry lives in response-registry.ts to break the
 // circular import cycle: src/index.ts imports src/modules/index.js for side
@@ -79,6 +87,18 @@ async function main(): Promise<void> {
   // 1b. Backfill container_configs from legacy container.json files.
   // Idempotent — skips groups that already have a config row.
   backfillContainerConfigs();
+
+  // 1c. Session-sync WebSocket server — started unconditionally, idle until a
+  // group's container_config sets transport: 'sync' (none do yet). Cheap to
+  // keep running: one loopback wss:// listener.
+  syncServer = createSyncServer(SESSION_SYNC_PORT, getInstallSecret(), SESSION_SYNC_TOKEN_TTL_MS, {
+    'session-sync': makeSessionSyncHandler((sessionId) => {
+      const session = getSession(sessionId);
+      if (!session) throw new Error(`session-sync: unknown session ${sessionId}`);
+      return outboundDbPath(session.agent_group_id, sessionId);
+    }),
+  });
+  log.info('Session-sync server listening', { port: SESSION_SYNC_PORT });
 
   // 2. Container runtime
   ensureContainerRuntimeRunning();
@@ -175,6 +195,7 @@ async function shutdown(signal: string): Promise<void> {
   stopDeliveryPolls();
   stopHostSweep();
   await stopCliServer();
+  await syncServer?.close();
   try {
     await teardownChannelAdapters();
   } finally {
