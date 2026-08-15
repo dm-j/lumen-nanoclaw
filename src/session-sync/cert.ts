@@ -42,6 +42,11 @@ export function getInstallCert(): TlsMaterial {
     '3650',
     '-subj',
     '/CN=nanoclaw-session-sync',
+    // Required, not cosmetic: Node/Bun's TLS client checks the peer cert's
+    // SAN against the connection hostname even when `ca` is pinned
+    // explicitly — a cert with no SAN fails every connection outright.
+    '-addext',
+    'subjectAltName=DNS:localhost,IP:127.0.0.1',
   ]);
   fs.chmodSync(KEY_PATH, 0o600);
   return { cert: fs.readFileSync(CERT_PATH, 'utf8'), key: fs.readFileSync(KEY_PATH, 'utf8') };

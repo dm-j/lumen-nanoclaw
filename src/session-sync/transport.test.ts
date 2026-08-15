@@ -13,6 +13,7 @@ vi.mock('../config.js', async () => {
 });
 
 const { AUTH_CHANNEL, createSyncServer, signToken, verifyToken } = await import('./transport.js');
+const { getInstallCert } = await import('./cert.js');
 
 describe('signToken/verifyToken', () => {
   it('round-trips a valid token', () => {
@@ -69,6 +70,55 @@ describe('createSyncServer token refresh', () => {
       expect(verifyToken(refreshed, secret)).toBe('sess-refresh');
     } finally {
       client.close();
+      await server.close();
+    }
+  });
+});
+
+describe('cert pinning (mirrors how the container client trusts the host)', () => {
+  it("connects when the client pins the host's actual cert as its sole CA", async () => {
+    const server = createSyncServer(0, 'pin-secret', 60_000, {});
+    const port = (server.httpsServer.address() as { port: number }).port;
+    const token = signToken('sess-pin', 'pin-secret', 60_000);
+    const { cert } = getInstallCert();
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const client = new NodeWebSocket(`wss://127.0.0.1:${port}`, token, {
+          ca: [cert],
+          rejectUnauthorized: true,
+        });
+        client.on('open', () => {
+          client.close();
+          resolve();
+        });
+        client.on('error', reject);
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('rejects the connection when the client has no pin for the self-signed cert', async () => {
+    const server = createSyncServer(0, 'pin-secret', 60_000, {});
+    const port = (server.httpsServer.address() as { port: number }).port;
+    const token = signToken('sess-pin', 'pin-secret', 60_000);
+
+    try {
+      await expect(
+        new Promise<void>((resolve, reject) => {
+          // No `ca` pin — full TLS validation against the system trust store,
+          // which a self-signed cert always fails. Proves pinning is load-bearing:
+          // without it, this connection cannot succeed by accident.
+          const client = new NodeWebSocket(`wss://127.0.0.1:${port}`, token, { rejectUnauthorized: true });
+          client.on('open', () => {
+            client.close();
+            resolve();
+          });
+          client.on('error', reject);
+        }),
+      ).rejects.toThrow();
+    } finally {
       await server.close();
     }
   });
