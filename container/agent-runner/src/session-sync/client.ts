@@ -140,10 +140,17 @@ export function createSyncClient(outboundDb: Database, applyInboundRow: (payload
     // it is.
     const syncMsg = msg as SyncMessage;
     const nextInboundChain = verifyChain(state.inbound.chain, syncMsg);
-    if (nextInboundChain === null) return;
+    if (nextInboundChain === null) {
+      // Mirror server.ts's own rejection reply: report our last known-good
+      // point instead of applying, so the host can decide how to resync
+      // (Phase 3+ — no automatic resend built on either side yet).
+      send?.('session-sync', { type: 'resync_point', seq: state.inbound.seq, chain: state.inbound.chain });
+      return;
+    }
     applyInboundRow(syncMsg.payload);
     state.inbound = { seq: syncMsg.seq, chain: nextInboundChain };
     persistChainState(outboundDb, state);
+    send?.('session-sync', { type: 'ack', seq: syncMsg.seq });
   }
 
   function push(kind: SyncMessageKind, payload: unknown): Promise<void> {

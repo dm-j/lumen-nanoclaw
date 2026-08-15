@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ensureSchema } from '../db/session-db.js';
 import { GENESIS_CHAIN, nextChain } from './protocol.js';
-import { clearChainState, makeSessionSyncHandler } from './server.js';
+import { clearChainState, makeSessionSyncHandler, pushInboundRow } from './server.js';
 
 function fakeWs() {
   const sent: unknown[] = [];
@@ -158,5 +158,57 @@ describe('makeSessionSyncHandler', () => {
       | undefined;
     db.close();
     expect(row).toEqual({ current_tool: 'Bash', tool_declared_timeout_ms: 120_000 });
+  });
+
+  describe('pushInboundRow', () => {
+    it('resolves once the container replies with an ack', async () => {
+      const handler = makeSessionSyncHandler(() => dbPath);
+      const ws = fakeWs();
+      const payload = { id: 'in-1', content: 'hi' };
+      const pushPromise = pushInboundRow('sess-1', ws, () => dbPath, 'inbound', payload);
+
+      expect(ws.sent).toEqual([
+        {
+          channel: 'session-sync',
+          body: { seq: 1, kind: 'inbound', chain: nextChain(GENESIS_CHAIN, 1, payload), payload },
+        },
+      ]);
+
+      // Simulate the container's ack coming back in on the same handler.
+      handler('sess-1', ws, { type: 'ack', seq: 1 });
+      await pushPromise;
+
+      const db = new Database(dbPath, { readonly: true });
+      const row = db.prepare('SELECT inbound_seq, inbound_chain FROM session_sync_state WHERE id = 1').get() as {
+        inbound_seq: number;
+        inbound_chain: string;
+      };
+      db.close();
+      expect(row.inbound_seq).toBe(1);
+    });
+
+    it('rejects when the container reports a chain mismatch instead of acking', async () => {
+      const handler = makeSessionSyncHandler(() => dbPath);
+      const ws = fakeWs();
+      const pushPromise = pushInboundRow('sess-1', ws, () => dbPath, 'inbound', { id: 'in-1' });
+
+      handler('sess-1', ws, { type: 'resync_point', seq: 0, chain: GENESIS_CHAIN });
+
+      await expect(pushPromise).rejects.toThrow('inbound chain resync required');
+    });
+
+    it('advances the inbound seq across successive pushes', async () => {
+      const handler = makeSessionSyncHandler(() => dbPath);
+      const ws = fakeWs();
+
+      const p1 = pushInboundRow('sess-1', ws, () => dbPath, 'inbound', { id: 'in-1' });
+      handler('sess-1', ws, { type: 'ack', seq: 1 });
+      await p1;
+
+      const p2 = pushInboundRow('sess-1', ws, () => dbPath, 'inbound', { id: 'in-2' });
+      expect(ws.sent[1]).toMatchObject({ channel: 'session-sync', body: { seq: 2, kind: 'inbound' } });
+      handler('sess-1', ws, { type: 'ack', seq: 2 });
+      await p2;
+    });
   });
 });

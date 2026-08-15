@@ -258,10 +258,17 @@ CREATE TABLE IF NOT EXISTS processing_ack (
 -- session_state below, which is container-owned app state (SDK session ID,
 -- etc.); keeping sync-internal bookkeeping out of that keyspace avoids a
 -- future collision if session_state itself ever gets synced too.
+-- inbound_seq/inbound_chain track the host's own push-to-container direction
+-- (host is chain authority there, mirroring how outbound_seq/outbound_chain
+-- track container-to-host pushes) — added after the column-less initial
+-- version shipped, so server.ts ALTERs existing rows/tables forward-compat
+-- rather than assuming a fresh CREATE TABLE ran.
 CREATE TABLE IF NOT EXISTS session_sync_state (
   id             INTEGER PRIMARY KEY CHECK (id = 1),
   outbound_seq   INTEGER NOT NULL,
   outbound_chain TEXT NOT NULL,
+  inbound_seq    INTEGER NOT NULL DEFAULT 0,
+  inbound_chain  TEXT NOT NULL DEFAULT '',
   updated_at     TEXT NOT NULL
 );
 

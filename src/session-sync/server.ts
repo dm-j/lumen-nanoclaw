@@ -30,32 +30,65 @@
 import type { WebSocket } from 'ws';
 
 import { openOutboundDbRw } from '../db/session-db.js';
-import type { SyncMessage } from './protocol.js';
-import { GENESIS_CHAIN, verifyChain } from './protocol.js';
+import type { SyncMessage, SyncMessageKind } from './protocol.js';
+import { GENESIS_CHAIN, nextChain, verifyChain } from './protocol.js';
 import { sendEnvelope } from './transport.js';
 
 interface ChainState {
+  /** Container-to-host direction: container is chain authority, this side verifies. */
   outbound: { seq: number; chain: string };
+  /** Host-to-container direction: host is chain authority — see pushInboundRow. */
+  inbound: { seq: number; chain: string };
 }
 
 const chainStateBySession = new Map<string, ChainState>();
 
+/**
+ * inbound_seq/inbound_chain were added after session_sync_state's initial
+ * release (see schema.ts) — ALTER existing rows/tables forward, same
+ * PRAGMA-guarded pattern used elsewhere for inbound.db/outbound.db columns
+ * (e.g. session-db.ts's `delivered`/`messages_in` columns).
+ */
+function ensureInboundChainColumns(db: import('better-sqlite3').Database): void {
+  const cols = new Set(
+    (db.prepare("PRAGMA table_info('session_sync_state')").all() as Array<{ name: string }>).map((c) => c.name),
+  );
+  if (!cols.has('inbound_seq')) {
+    db.exec(`ALTER TABLE session_sync_state ADD COLUMN inbound_seq INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!cols.has('inbound_chain')) {
+    db.exec(`ALTER TABLE session_sync_state ADD COLUMN inbound_chain TEXT NOT NULL DEFAULT ''`);
+  }
+}
+
 function loadChainState(db: import('better-sqlite3').Database): ChainState {
-  const row = db.prepare('SELECT outbound_seq, outbound_chain FROM session_sync_state WHERE id = 1').get() as
-    | { outbound_seq: number; outbound_chain: string }
-    | undefined;
-  if (!row) return { outbound: { seq: 0, chain: GENESIS_CHAIN } };
-  return { outbound: { seq: row.outbound_seq, chain: row.outbound_chain } };
+  ensureInboundChainColumns(db);
+  const row = db
+    .prepare('SELECT outbound_seq, outbound_chain, inbound_seq, inbound_chain FROM session_sync_state WHERE id = 1')
+    .get() as { outbound_seq: number; outbound_chain: string; inbound_seq: number; inbound_chain: string } | undefined;
+  if (!row) return { outbound: { seq: 0, chain: GENESIS_CHAIN }, inbound: { seq: 0, chain: GENESIS_CHAIN } };
+  return {
+    outbound: { seq: row.outbound_seq, chain: row.outbound_chain },
+    // Empty string covers rows written before inbound_chain existed (ALTER
+    // default) — genesis is the correct "nothing pushed yet" state either way.
+    inbound: { seq: row.inbound_seq, chain: row.inbound_chain || GENESIS_CHAIN },
+  };
 }
 
 function persistChainState(db: import('better-sqlite3').Database, state: ChainState): void {
+  ensureInboundChainColumns(db);
   db.prepare(
-    `INSERT INTO session_sync_state (id, outbound_seq, outbound_chain, updated_at)
-     VALUES (1, @outbound_seq, @outbound_chain, @updated_at)
-     ON CONFLICT(id) DO UPDATE SET outbound_seq = excluded.outbound_seq, outbound_chain = excluded.outbound_chain, updated_at = excluded.updated_at`,
+    `INSERT INTO session_sync_state (id, outbound_seq, outbound_chain, inbound_seq, inbound_chain, updated_at)
+     VALUES (1, @outbound_seq, @outbound_chain, @inbound_seq, @inbound_chain, @updated_at)
+     ON CONFLICT(id) DO UPDATE SET
+       outbound_seq = excluded.outbound_seq, outbound_chain = excluded.outbound_chain,
+       inbound_seq = excluded.inbound_seq, inbound_chain = excluded.inbound_chain,
+       updated_at = excluded.updated_at`,
   ).run({
     outbound_seq: state.outbound.seq,
     outbound_chain: state.outbound.chain,
+    inbound_seq: state.inbound.seq,
+    inbound_chain: state.inbound.chain,
     updated_at: new Date().toISOString(),
   });
 }
@@ -82,11 +115,46 @@ interface ResyncPoint {
   seq: number;
   chain: string;
 }
+interface Ack {
+  type: 'ack';
+  seq: number;
+}
+
+/**
+ * Pending host-initiated inbound pushes awaiting the container's ack, keyed
+ * by sessionId then seq — mirrors the container-side `pending` map in
+ * client.ts's push(), one level up since the host serves many sessions.
+ */
+const pendingInboundBySession = new Map<string, Map<number, { resolve: () => void; reject: (err: Error) => void }>>();
 
 /** Builds the session-sync channel handler for a given session's outbound.db path. */
 export function makeSessionSyncHandler(outboundDbPathFor: (sessionId: string) => string) {
   return function handleSessionSync(sessionId: string, ws: WebSocket, body: unknown): void {
-    const msg = body as SyncMessage | ResyncRequest;
+    const msg = body as SyncMessage | ResyncRequest | Ack | ResyncPoint;
+
+    // Replies to a host-initiated inbound push (pushInboundRow below) — these
+    // don't touch outbound.db, so handle them before opening it.
+    if ((msg as Ack).type === 'ack') {
+      const pending = pendingInboundBySession.get(sessionId);
+      const waiter = pending?.get((msg as Ack).seq);
+      if (waiter) {
+        pending!.delete((msg as Ack).seq);
+        waiter.resolve();
+      }
+      return;
+    }
+    if ((msg as ResyncPoint).type === 'resync_point' && (msg as SyncMessage).kind === undefined) {
+      // Container rejected an inbound push (chain mismatch). Divergence
+      // recovery (resending from the container's reported point) is
+      // Phase 3+ — reject the outstanding push so the caller surfaces it.
+      const pending = pendingInboundBySession.get(sessionId);
+      if (pending) {
+        for (const [, waiter] of pending) waiter.reject(new Error('session-sync: inbound chain resync required'));
+        pending.clear();
+      }
+      return;
+    }
+
     const db = openOutboundDbRw(outboundDbPathFor(sessionId));
     try {
       const state = getChainState(sessionId, db);
@@ -101,8 +169,8 @@ export function makeSessionSyncHandler(outboundDbPathFor: (sessionId: string) =>
       }
 
       const message = msg as SyncMessage;
-      const nextChain = verifyChain(state.outbound.chain, message);
-      if (nextChain === null) {
+      const advanced = verifyChain(state.outbound.chain, message);
+      if (advanced === null) {
         sendEnvelope(ws, 'session-sync', {
           type: 'resync_point',
           seq: state.outbound.seq,
@@ -121,13 +189,65 @@ export function makeSessionSyncHandler(outboundDbPathFor: (sessionId: string) =>
         applyContainerStateRow(db, message);
       }
 
-      state.outbound = { seq: message.seq, chain: nextChain };
+      state.outbound = { seq: message.seq, chain: advanced };
       persistChainState(db, state);
       sendEnvelope(ws, 'session-sync', { type: 'ack', seq: message.seq });
     } finally {
       db.close();
     }
   };
+}
+
+/**
+ * Pushes one row to the container in the host-to-container direction (host
+ * is chain authority). Resolves once the container acks; rejects if the
+ * container reports a chain mismatch (`resync_point`) — same "surface it,
+ * don't auto-recover" contract as client.ts's push(). No caller wires this
+ * to a live inbound.db write path yet (see docs/session-sync-transport.md §6)
+ * — `sessionId` must already have an open connection in `connections`.
+ */
+export function pushInboundRow(
+  sessionId: string,
+  ws: WebSocket,
+  outboundDbPathFor: (sessionId: string) => string,
+  kind: SyncMessageKind,
+  payload: unknown,
+): Promise<void> {
+  const db = openOutboundDbRw(outboundDbPathFor(sessionId));
+  let state: ChainState;
+  try {
+    state = getChainState(sessionId, db);
+  } finally {
+    db.close();
+  }
+
+  const seq = state.inbound.seq + 1;
+  const chain = nextChain(state.inbound.chain, seq, payload);
+
+  return new Promise((resolve, reject) => {
+    let pending = pendingInboundBySession.get(sessionId);
+    if (!pending) {
+      pending = new Map();
+      pendingInboundBySession.set(sessionId, pending);
+    }
+    pending.set(seq, {
+      resolve: () => {
+        // `state` is the cached object getChainState hands out — mutating it
+        // here keeps the in-memory cache and the persisted row in agreement,
+        // same as handleSessionSync does for the outbound direction above.
+        state.inbound = { seq, chain };
+        const persistDb = openOutboundDbRw(outboundDbPathFor(sessionId));
+        try {
+          persistChainState(persistDb, state);
+        } finally {
+          persistDb.close();
+        }
+        resolve();
+      },
+      reject,
+    });
+    sendEnvelope(ws, 'session-sync', { seq, kind, chain, payload } satisfies SyncMessage);
+  });
 }
 
 function applyOutboundRow(db: import('better-sqlite3').Database, message: SyncMessage): void {
