@@ -112,6 +112,21 @@ export function getOutboundDb(): Database {
         updated_at               TEXT NOT NULL
       );
     `);
+    // session-sync chain checkpoints (container side, 'sync' transport only —
+    // unused under the default 'file' transport). Two directions in one row:
+    // outbound_* is this container's own send chain (verified by the host);
+    // inbound_* is the last host-pushed row this container has applied. See
+    // container/agent-runner/src/session-sync/client.ts.
+    _outbound.exec(`
+      CREATE TABLE IF NOT EXISTS session_sync_state (
+        id             INTEGER PRIMARY KEY CHECK (id = 1),
+        outbound_seq   INTEGER NOT NULL DEFAULT 0,
+        outbound_chain TEXT NOT NULL,
+        inbound_seq    INTEGER NOT NULL DEFAULT 0,
+        inbound_chain  TEXT NOT NULL,
+        updated_at     TEXT NOT NULL
+      );
+    `);
   }
   return _outbound;
 }
@@ -251,6 +266,14 @@ export function initTestSessionDb(): { inbound: Database; outbound: Database } {
       tool_declared_timeout_ms INTEGER,
       tool_started_at          TEXT,
       updated_at               TEXT NOT NULL
+    );
+    CREATE TABLE session_sync_state (
+      id             INTEGER PRIMARY KEY CHECK (id = 1),
+      outbound_seq   INTEGER NOT NULL DEFAULT 0,
+      outbound_chain TEXT NOT NULL,
+      inbound_seq    INTEGER NOT NULL DEFAULT 0,
+      inbound_chain  TEXT NOT NULL,
+      updated_at     TEXT NOT NULL
     );
   `);
 
