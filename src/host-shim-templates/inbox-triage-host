@@ -1,0 +1,57 @@
+#!/bin/sh
+# inbox-triage-host — check the vault inbox and dispatch a Sorter agent if
+# anything needs processing.
+#
+# The first async host-shim in the family: unlike briefing-host/recall-host
+# (which block on a subagent result and relay it back to the container),
+# this one returns immediately after counting the inbox and backgrounding
+# the Sorter. The caller never waits.
+#
+# Calling contract: inbox-triage-host
+# Prints "Success" or "N items — dispatched Sorter" to stdout, exits 0.
+
+case "${1:-}" in
+  -h|--help)
+    cat <<'EOF'
+inbox-triage — check 00-Inbox, dispatch the Sorter if non-empty.
+
+Usage: inbox-triage-host
+
+Returns "Success" if the inbox is empty or doesn't exist, or
+"N items in 00-Inbox — dispatched Sorter" if items were found and
+the vault's Sorter agent was invoked in the background.
+EOF
+    exit 0
+    ;;
+esac
+
+set -eu
+
+# --- Per-group configuration — edit this for your vault ---
+VAULT_PATH="/CHANGE/ME/path/to/this/groups/obsidian/vault"
+# --- end configuration ---
+
+if [ ! -d "$VAULT_PATH" ] || [ "$VAULT_PATH" = "/CHANGE/ME/path/to/this/groups/obsidian/vault" ]; then
+  echo "inbox-triage-host: VAULT_PATH not configured — edit $0" >&2
+  exit 1
+fi
+
+INBOX_DIR="$VAULT_PATH/00-Inbox"
+
+if [ ! -d "$INBOX_DIR" ]; then
+  echo "Success"
+  exit 0
+fi
+
+COUNT="$(find "$INBOX_DIR" -maxdepth 1 -type f | wc -l | tr -d ' ')"
+
+if [ "$COUNT" -eq 0 ]; then
+  echo "Success"
+  exit 0
+fi
+
+echo "$COUNT items in 00-Inbox — dispatched Sorter"
+cd "$VAULT_PATH"
+claude -p --agent sorter --permission-mode bypassPermissions \
+  "Process everything in 00-Inbox. Triage and file each note where it belongs." \
+  > /dev/null 2>&1 &

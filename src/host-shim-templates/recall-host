@@ -1,0 +1,168 @@
+#!/bin/sh
+# recall-host — vault question-answering for a "recall" MCP tool. Mirrors
+# briefing-host's shape (claude -p --agent <X> --output-format json,
+# sanitize, jq-extract) but invokes a Q&A agent (here: `seeker`) instead of
+# `briefer`, and — because that agent's tools are read-only (Read/Glob/Grep/
+# WebSearch/WebFetch, no Write) — this script, not the agent, performs the
+# actual file write for `detail=note` (same division of labor as
+# remember-host: the subagent produces content, the host script persists
+# it). Uses the real Anthropic API (`--agent`, no spoofed key) — unlike
+# briefing-host this isn't routed through a local model proxy, so the
+# `--agent` background-dispatch auth issue documented there doesn't apply
+# here; if you do route this through a spoofed-key proxy, switch to the
+# same `--system-prompt-file` pattern briefing-host uses.
+#
+# Calling contract: recall-host <json>
+#   json: {"query": "...", "ask_as": "...", "detail": "sentence|paragraph|bullets|note",
+#          "research": false}
+# detail=note: files the note to 00-Inbox and prints its path.
+# otherwise: prints the answer text directly.
+
+case "${1:-}" in
+  -h|--help)
+    cat <<'EOF'
+recall — ask a question and get an answer sourced from the vault.
+
+Usage: recall <json>
+  json: {"query": "...", "ask_as": "...", "research": false,
+         "detail": "sentence|paragraph|bullets|note"}
+
+detail=note: files the answer as a note in the inbox and prints its path.
+Any other detail: prints the answer text directly.
+EOF
+    exit 0
+    ;;
+esac
+
+set -eu
+
+# --- Per-group configuration — edit this for your vault ---
+VAULT_PATH="/CHANGE/ME/path/to/this/groups/obsidian/vault"
+# --- end configuration ---
+
+if [ ! -d "$VAULT_PATH" ] || [ "$VAULT_PATH" = "/CHANGE/ME/path/to/this/groups/obsidian/vault" ]; then
+  echo "recall-host: VAULT_PATH not configured — edit $0" >&2
+  exit 1
+fi
+
+JSON="$1"
+
+QUERY="$(printf '%s' "$JSON" | jq -r '.query // empty')"
+ASK_AS="$(printf '%s' "$JSON" | jq -r '.ask_as // "the user"')"
+DETAIL="$(printf '%s' "$JSON" | jq -r '.detail // "paragraph"')"
+RESEARCH="$(printf '%s' "$JSON" | jq -r '.research // false')"
+
+if [ -z "$QUERY" ]; then
+  echo "recall-host: query is required" >&2
+  exit 1
+fi
+
+case "$DETAIL" in
+  sentence|paragraph|bullets|note) ;;
+  *)
+    echo "recall-host: detail must be one of sentence, paragraph, bullets, note (got \"$DETAIL\")" >&2
+    exit 1
+    ;;
+esac
+
+case "$DETAIL" in
+  sentence) LENGTH_INSTRUCTION="Answer in exactly one sentence." ;;
+  paragraph) LENGTH_INSTRUCTION="Answer in one short paragraph (3-6 sentences)." ;;
+  bullets) LENGTH_INSTRUCTION="Answer as a short bulleted list, one point per bullet." ;;
+  note)
+    LENGTH_INSTRUCTION="Answer as the complete Markdown content of a standalone vault note: YAML frontmatter (type: fact, status: inbox, date: \"$(date +%Y-%m-%d)\", source, confidence), then a single '# Title' header, then the answer as body prose/sections as appropriate. This is the ENTIRE response, written as RAW markdown text — it must start literally with the frontmatter's opening '---' line. Do NOT wrap any of it in a \`\`\` code fence — this is not a code sample, it is the literal file content."
+    ;;
+esac
+
+RESEARCH_INSTRUCTION=""
+if [ "$RESEARCH" = "true" ]; then
+  RESEARCH_INSTRUCTION="This question has research: true — you may use WebSearch/WebFetch in addition to the vault if the vault doesn't fully answer it. Say explicitly which parts of the answer came from the web vs. the vault."
+fi
+
+PROMPT="## Question — asked as ${ASK_AS}
+
+${QUERY}
+
+## Detail level
+
+${LENGTH_INSTRUCTION}
+
+${RESEARCH_INSTRUCTION}
+
+## Output constraint
+
+Every claim is tagged with a confidence estimate in parentheses — one of
+CERTAIN, UNCERTAIN, DOUBTFUL, SPECULATIVE — and cited as a wikilink. If
+nothing in the vault (or the web, when research is enabled) answers the
+question, say so plainly instead of guessing. Your output is the answer
+itself — no process narration, no restating the question, no closing
+remarks."
+
+cd "$VAULT_PATH"
+RESULT_JSON="$(claude -p --agent seeker \
+  --output-format json \
+  --permission-mode bypassPermissions \
+  --no-session-persistence \
+  "$PROMPT")"
+
+# See briefing-host for why this sanitize step exists: claude's
+# --output-format json occasionally emits raw unescaped control bytes
+# inside a string value on long/complex responses.
+RESULT_JSON="$(printf '%s' "$RESULT_JSON" | python3 -c '
+import sys, re
+data = sys.stdin.read()
+esc = {"\n": "\\n", "\r": "\\r", "\t": "\\t"}
+sys.stdout.write(re.sub(r"[\x00-\x1f]", lambda m: esc.get(m.group(0), ""), data))
+')"
+
+TOKEN_LOG="$(cd "$(dirname "$0")" && pwd)/.recall-tokens.log"
+TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+printf '%s' "$RESULT_JSON" | jq -r --arg ts "$TS" --arg detail "$DETAIL" '
+  [$ts, $detail,
+   (.usage.input_tokens // 0),
+   (.usage.cache_creation_input_tokens // 0),
+   (.usage.cache_read_input_tokens // 0),
+   (.usage.output_tokens // 0),
+   (.total_cost_usd // 0)] | @tsv
+' >> "$TOKEN_LOG" 2>/dev/null || true
+
+ANSWER="$(printf '%s' "$RESULT_JSON" | jq -r '.result')"
+
+if [ "$DETAIL" != "note" ]; then
+  printf '%s\n' "$ANSWER"
+  exit 0
+fi
+
+# Defensive: strip a leading/trailing ``` fence if the model wrapped the
+# note content in one despite the prompt saying not to (observed in
+# testing) — real frontmatter can't live inside a code fence. Plain shell,
+# not sed block syntax — BSD sed (macOS) and GNU sed disagree on that.
+FIRST_LINE="$(printf '%s\n' "$ANSWER" | head -n1)"
+case "$FIRST_LINE" in
+  '```'*)
+    ANSWER="$(printf '%s\n' "$ANSWER" | tail -n +2)"
+    LAST_LINE="$(printf '%s\n' "$ANSWER" | tail -n1)"
+    case "$LAST_LINE" in
+      '```') ANSWER="$(printf '%s\n' "$ANSWER" | sed '$d')" ;;
+    esac
+    ;;
+esac
+
+# Note mode: extract the title from the first '# ' header to build the
+# filename, same collision handling as remember-host.
+TITLE="$(printf '%s\n' "$ANSWER" | grep -m1 '^# ' | sed -E 's/^# +//')"
+[ -n "$TITLE" ] || TITLE="Recall — $QUERY"
+SAFE_TITLE="$(printf '%s' "$TITLE" | tr -cd 'A-Za-z0-9 _-' | sed -E 's/  +/ /g; s/^ +| +$//g')"
+[ -n "$SAFE_TITLE" ] || SAFE_TITLE="Untitled"
+
+DEST_DIR="$VAULT_PATH/00-Inbox"
+mkdir -p "$DEST_DIR"
+DEST="$DEST_DIR/$SAFE_TITLE.md"
+SUFFIX=2
+while [ -e "$DEST" ]; do
+  DEST="$DEST_DIR/$SAFE_TITLE-$SUFFIX.md"
+  SUFFIX=$((SUFFIX + 1))
+done
+
+printf '%s\n' "$ANSWER" > "$DEST"
+echo "Filed: 00-Inbox/$(basename "$DEST")"

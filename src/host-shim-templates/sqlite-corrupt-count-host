@@ -1,0 +1,54 @@
+#!/bin/sh
+# sqlite-corrupt-count-host — count DB_RETRY_EXHAUSTED occurrences logged
+# since the last check: a db read that exhausted its retries against the
+# transient VirtioFS/bind-mount cross-mount corruption (docker/for-
+# mac#6690, #7494) and was abandoned. Individual SQLITE_CORRUPT throws that
+# get retried and succeed are transient noise and are not logged at all, so
+# every match here is a persistent problem worth surfacing. Backs an "alert
+# watch" task — see poll-loop.ts's corruptionStreak give-up log for where
+# DB_RETRY_EXHAUSTED is emitted. Not vault-specific — this reads the host's
+# own error log, not anything under VAULT_PATH.
+#
+# Checkpoint-based, not timestamp-parsed: nanoclaw.error.log lines carry no
+# date, only a HH:MM:SS.mmm time-of-day, so windowing by wall-clock time
+# would need extra bookkeeping across midnight for no real benefit — the
+# calling task's own cadence already defines the window as "since last run."
+# Checkpoint is a byte offset into the log, stored next to this script
+# (host-shims/, never mounted into any container, same as the script
+# itself). Resets to 0 if the log file has shrunk (rotated/truncated).
+#
+# LOG_FILE is relative — host-shim scripts run with the NanoClaw host
+# process's own cwd (repo root), not this script's directory. If your
+# install invokes host-shims with a different cwd, hardcode an absolute
+# path here instead.
+#
+# Calling contract: sqlite-corrupt-count-host
+# Prints {"count": N, "samples": [...]} to stdout, exits 0.
+
+set -eu
+
+LOG_FILE="logs/nanoclaw.error.log"
+CHECKPOINT_FILE="$(dirname "$0")/.sqlite-corrupt-checkpoint"
+
+if [ ! -f "$LOG_FILE" ]; then
+  echo '{"count": 0, "samples": []}'
+  exit 0
+fi
+
+CURRENT_SIZE="$(wc -c < "$LOG_FILE" | tr -d ' ')"
+LAST_OFFSET="$(cat "$CHECKPOINT_FILE" 2>/dev/null || echo 0)"
+case "$LAST_OFFSET" in ''|*[!0-9]*) LAST_OFFSET=0 ;; esac
+if [ "$LAST_OFFSET" -gt "$CURRENT_SIZE" ]; then
+  LAST_OFFSET=0
+fi
+
+echo "$CURRENT_SIZE" > "$CHECKPOINT_FILE"
+
+tail -c "+$((LAST_OFFSET + 1))" "$LOG_FILE" | grep "DB_RETRY_EXHAUSTED" > /tmp/sqlite-corrupt-count.$$ || true
+
+python3 -c '
+import json, sys
+lines = [l.rstrip("\n") for l in open(sys.argv[1], encoding="utf-8", errors="replace")]
+print(json.dumps({"count": len(lines), "samples": lines[:3]}))
+' /tmp/sqlite-corrupt-count.$$
+rm -f /tmp/sqlite-corrupt-count.$$

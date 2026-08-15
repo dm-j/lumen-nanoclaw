@@ -305,6 +305,7 @@ Whenever a feature or change is discussed and agreed on scope/shape but not impl
 | [docs/db-session.md](docs/db-session.md) | Per-session `inbound.db` + `outbound.db` schemas + seq parity |
 | [docs/session-sync-transport.md](docs/session-sync-transport.md) | In-progress replacement for bind-mounted session DBs (macOS SQLite corruption) — what was tried and ruled out, the sync design, transport-layer decisions, status |
 | [docs/agent-runner-details.md](docs/agent-runner-details.md) | Agent-runner internals + MCP tool interface |
+| [docs/host-shims.md](docs/host-shims.md) | The vault-integration host-shim family (briefing/digest/recall/remember/etc.) — what each one is for, trunk-template status, shared conventions |
 | [docs/isolation-model.md](docs/isolation-model.md) | Three-level channel isolation model |
 | [docs/setup-wiring.md](docs/setup-wiring.md) | What's wired, what's open in the setup flow |
 | [docs/architecture-diagram.md](docs/architecture-diagram.md) | Diagram version of the architecture |

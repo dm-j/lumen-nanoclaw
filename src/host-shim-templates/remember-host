@@ -1,0 +1,98 @@
+#!/bin/sh
+# remember-host — ad-hoc fact capture for a "remember" MCP tool. Writes a
+# new `type: fact` note into 00-Inbox/ (a triage/sorting step, e.g.
+# inbox-triage-host's Sorter dispatch, files it from there) and prints the
+# filed path to stdout.
+#
+# Calling contract: remember-host <json>
+#   json: {"title": "...", "content": "...", "source": "...",
+#          "confidence": "certain|uncertain|doubtful|speculative", <any extra k/v pairs>}
+
+case "${1:-}" in
+  -h|--help)
+    cat <<'EOF'
+remember — capture an ad-hoc fact as a new note in the inbox.
+
+Usage: remember <json>
+  json: {"title": "...", "content": "...", "source": "...",
+         "confidence": "certain|uncertain|doubtful|speculative", <any extra k/v pairs>}
+
+Prints the filed path.
+EOF
+    exit 0
+    ;;
+esac
+
+set -eu
+
+# --- Per-group configuration — edit this for your vault ---
+VAULT_PATH="/CHANGE/ME/path/to/this/groups/obsidian/vault"
+# --- end configuration ---
+
+if [ ! -d "$VAULT_PATH" ] || [ "$VAULT_PATH" = "/CHANGE/ME/path/to/this/groups/obsidian/vault" ]; then
+  echo "remember-host: VAULT_PATH not configured — edit $0" >&2
+  exit 1
+fi
+
+JSON="$1"
+
+TITLE="$(printf '%s' "$JSON" | jq -r '.title // empty')"
+CONTENT="$(printf '%s' "$JSON" | jq -r '.content // empty')"
+SOURCE="$(printf '%s' "$JSON" | jq -r '.source // empty')"
+CONFIDENCE="$(printf '%s' "$JSON" | jq -r '.confidence // empty')"
+
+if [ -z "$TITLE" ] || [ -z "$CONTENT" ] || [ -z "$SOURCE" ] || [ -z "$CONFIDENCE" ]; then
+  echo "remember-host: title, content, source, and confidence are all required" >&2
+  exit 1
+fi
+
+case "$CONFIDENCE" in
+  certain|uncertain|doubtful|speculative) ;;
+  *)
+    echo "remember-host: confidence must be one of certain, uncertain, doubtful, speculative (got \"$CONFIDENCE\")" >&2
+    exit 1
+    ;;
+esac
+
+# Strip characters filesystems/Obsidian dislike, collapse whitespace.
+SAFE_TITLE="$(printf '%s' "$TITLE" | tr -cd 'A-Za-z0-9 _-' | sed -E 's/  +/ /g; s/^ +| +$//g')"
+[ -n "$SAFE_TITLE" ] || SAFE_TITLE="Untitled"
+
+DEST_DIR="$VAULT_PATH/00-Inbox"
+mkdir -p "$DEST_DIR"
+
+DEST="$DEST_DIR/$SAFE_TITLE.md"
+SUFFIX=2
+while [ -e "$DEST" ]; do
+  DEST="$DEST_DIR/$SAFE_TITLE-$SUFFIX.md"
+  SUFFIX=$((SUFFIX + 1))
+done
+
+DATE="$(date +%Y-%m-%d)"
+
+# Any keys beyond title/content/source/confidence become their own
+# frontmatter lines — `tojson` keeps each value valid YAML (JSON is a
+# YAML subset) regardless of type (string, number, array, object).
+EXTRA_YAML="$(printf '%s' "$JSON" | jq -r '
+  del(.title, .content, .source, .confidence) |
+  to_entries[] | "\(.key): \(.value | tojson)"
+')"
+
+{
+  echo "---"
+  echo "type: fact"
+  echo "status: inbox"
+  echo "date: \"$DATE\""
+  echo "source: \"$SOURCE\""
+  echo "confidence: $CONFIDENCE"
+  if [ -n "$EXTRA_YAML" ]; then
+    printf '%s\n' "$EXTRA_YAML"
+  fi
+  echo "---"
+  echo
+  echo "# $TITLE"
+  echo
+  printf '%s\n' "$CONTENT"
+} > "$DEST"
+
+echo "Filed: 00-Inbox/$(basename "$DEST")"
