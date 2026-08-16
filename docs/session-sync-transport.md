@@ -171,6 +171,12 @@ This is a different bug from §8.6 item 4 (`releaseStagedMessage` not pushing at
 
 Fixed: `INSERT ... ON CONFLICT(id) DO UPDATE SET status = excluded.status` instead of `INSERT OR IGNORE`. Container-side only (`container/agent-runner/src/`, no host rebuild needed) — a container restart picks it up. Verified live: restarted Lumen's container, the previously-stuck staged message and the restart's own on-wake message both processed and replied on the next spawn.
 
+### 8.6.4 Audit for a fourth instance of the same bug class (2026-08-16) — none found, one flagged
+
+After three rounds of "host write raced a missing connection" bugs on three different tables, audited every `writeSessionMessage`/`writeDestinations`/`writeSessionRouting`/`notifyDeliveredWrite` call site in the codebase for a fourth. Every non-destinations/routing inbound write (agent-to-agent routing, approvals, self-mod, host-shim, attachment-caption, container-restart, `create_agent`'s `notifyAgent`) funnels through `writeSessionMessage` → `messages_in`, and `backfillPendingInbound` (§8.6.2) is generic per-table, not per-call-site — so all of these are already covered, confirmed by the second canary message (a different code path than the first) working correctly.
+
+One table shares the underlying fragility in a different shape: `delivered` (`notifyDeliveredWrite`, from `delivery.ts` after a channel adapter confirms send). It can't race the *spawn* — the container must already be connected to have produced the outbound message being marked delivered — but it can race a *disconnect*: if the container is killed (absolute-ceiling, or a short-lived task-triggered container) between sending its reply and the delivery confirmation landing, the push silently no-ops with no backfill to catch it on the next connect. This isn't a new bug class, just the already-documented Phase 3+ resync gap (§8.2.1) landing on the table most likely to actually hit it, given how often task containers are short-lived. Not fixed here — flagged as the next thing to check if something looks desynced after this round of fixes.
+
 ### 8.7 Explicitly not in this plan
 
 - **Automatic transport selection** (e.g. "detect VirtioFS corruption and self-heal onto `'sync'`"). Speculative until `'sync'` itself has a real production track record under 8.4.
