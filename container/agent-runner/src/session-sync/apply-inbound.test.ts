@@ -35,7 +35,7 @@ describe('applyInboundRow', () => {
     expect(row?.id).toBe('m1');
   });
 
-  test("'inbound' kind is idempotent (INSERT OR IGNORE) — a re-applied row doesn't throw", () => {
+  test("'inbound' kind is idempotent — a re-applied identical row doesn't throw", () => {
     const payload = {
       id: 'm1',
       seq: 2,
@@ -55,6 +55,37 @@ describe('applyInboundRow', () => {
     };
     applyInboundRow('inbound', payload);
     expect(() => applyInboundRow('inbound', payload)).not.toThrow();
+  });
+
+  test("'inbound' kind applies a status flip on re-push (staged -> pending), not INSERT OR IGNORE", () => {
+    // Found via a live canary flip: writeSessionMessage's `stage: true` path
+    // pushes the same id twice (insert as 'staged', then releaseStagedMessage
+    // pushes the same id again as 'pending'). INSERT OR IGNORE silently
+    // dropped the second push, leaving the row stuck at 'staged' forever —
+    // invisible to getPendingMessages()'s status='pending' filter.
+    const base = {
+      id: 'm-staged',
+      seq: 2,
+      kind: 'chat',
+      timestamp: '2026-01-01T00:00:00.000Z',
+      process_after: null,
+      recurrence: null,
+      series_id: null,
+      trigger: 1 as const,
+      source_session_id: null,
+      platform_id: 'p1',
+      channel_type: 'test',
+      thread_id: null,
+      content: '{}',
+      on_wake: 0 as const,
+    };
+    applyInboundRow('inbound', { ...base, status: 'staged' });
+    applyInboundRow('inbound', { ...base, status: 'pending' });
+
+    const row = getInboundDb().prepare('SELECT status FROM messages_in WHERE id = ?').get('m-staged') as
+      | { status: string }
+      | undefined;
+    expect(row?.status).toBe('pending');
   });
 
   test("'delivered' kind inserts into delivered", () => {

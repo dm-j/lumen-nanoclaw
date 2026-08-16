@@ -29,12 +29,19 @@ interface InboundRowPayload {
 }
 
 function applyMessageIn(row: InboundRowPayload): void {
+  // ON CONFLICT DO UPDATE status, not INSERT OR IGNORE: writeSessionMessage's
+  // `stage: true` path pushes this same id twice — once at insert
+  // (status='staged'), again from releaseStagedMessage's staged->pending
+  // flip. IGNORE would silently drop the second push, leaving the row stuck
+  // at 'staged' forever (invisible to getPendingMessages' status='pending'
+  // filter) — found via a live canary flip, see docs/session-sync-transport.md §8.6.3.
   getInboundDb()
     .prepare(
-      `INSERT OR IGNORE INTO messages_in
+      `INSERT INTO messages_in
          (id, seq, kind, timestamp, status, process_after, recurrence, series_id, trigger, source_session_id, platform_id, channel_type, thread_id, content, on_wake)
        VALUES
-         ($id, $seq, $kind, $timestamp, $status, $process_after, $recurrence, $series_id, $trigger, $source_session_id, $platform_id, $channel_type, $thread_id, $content, $on_wake)`,
+         ($id, $seq, $kind, $timestamp, $status, $process_after, $recurrence, $series_id, $trigger, $source_session_id, $platform_id, $channel_type, $thread_id, $content, $on_wake)
+       ON CONFLICT(id) DO UPDATE SET status = excluded.status`,
     )
     .run({
       $id: row.id,

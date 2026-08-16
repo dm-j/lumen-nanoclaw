@@ -82,6 +82,7 @@ export function createSyncServer(
   secret: string,
   tokenTtlMs: number,
   handlers: Record<string, ChannelHandler>,
+  onConnect?: (sessionId: string) => void,
 ): SyncServer {
   const { cert, key } = getInstallCert();
   const httpsServer = createHttpsServer({ cert, key });
@@ -127,6 +128,14 @@ export function createSyncServer(
         if (handler) handler(sessionId, ws, envelope.body);
       });
       wss.emit('connection', ws, req);
+      // Fresh connection: the container's local inbound.db (destinations,
+      // session_routing) was only ever populated by pushes made *while*
+      // connected — anything written at spawn time (before the WS handshake
+      // completes) silently no-ops (no live `ws` to push through yet). Push
+      // the current snapshot now so a 'sync'-transport container is never
+      // stuck with an empty local destination map. See
+      // docs/session-sync-transport.md §8.6.
+      onConnect?.(sessionId);
     });
   });
 

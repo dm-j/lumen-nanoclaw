@@ -75,6 +75,34 @@ describe('createSyncServer token refresh', () => {
   });
 });
 
+describe('createSyncServer onConnect', () => {
+  it('fires with the sessionId once the WS handshake completes, so the caller can backfill destinations/session_routing', async () => {
+    const secret = 'onconnect-secret';
+    const onConnect = vi.fn();
+    const server = createSyncServer(0, secret, 60_000, {}, onConnect);
+    const port = (server.httpsServer.address() as { port: number }).port;
+    const token = signToken('sess-onconnect', secret, 60_000);
+
+    const client = new NodeWebSocket(`wss://127.0.0.1:${port}`, token, { rejectUnauthorized: false });
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('no open event received in time')), 2000);
+        client.on('open', () => {
+          clearTimeout(timeout);
+          resolve();
+        });
+        client.on('error', reject);
+      });
+
+      expect(onConnect).toHaveBeenCalledWith('sess-onconnect');
+    } finally {
+      client.close();
+      await server.close();
+    }
+  });
+});
+
 describe('cert pinning (mirrors how the container client trusts the host)', () => {
   it("connects when the client pins the host's actual cert as its sole CA", async () => {
     const server = createSyncServer(0, 'pin-secret', 60_000, {});

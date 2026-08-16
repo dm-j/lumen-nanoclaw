@@ -17,6 +17,7 @@ vi.mock('./config.js', async () => {
 });
 
 import {
+  backfillPendingInbound,
   initSessionFolder,
   inboundDbPath,
   outboundDbPath,
@@ -171,6 +172,67 @@ describe('releaseStagedMessage pushes the status flip under sync transport', () 
     const notify = vi.spyOn(inboundPush, 'notifyInboundWrite');
     releaseStagedMessage(AG, SESS, 'not-staged');
 
+    expect(notify).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Found via a live 'sync'-transport canary flip: routeInbound() writes the
+ * triggering messages_in row and *then* spawns the container, which takes a
+ * real multi-second TLS round trip to connect — so the write always races
+ * the connection, and notifyInboundWrite's push always no-ops (no `ws` yet).
+ * Without a connect-time backfill, the very message that woke a cold
+ * container is invisible to it, and the container hangs forever with no
+ * error (it's just correctly waiting on a message that never arrives).
+ */
+describe('backfillPendingInbound pushes every pending row on connect', () => {
+  beforeEach(() => {
+    const db = initTestDb();
+    runMigrations(db);
+    createAgentGroup({ id: AG, name: AG, folder: AG, agent_provider: null, created_at: new Date().toISOString() });
+    createSession({
+      id: SESS,
+      agent_group_id: AG,
+      messaging_group_id: null,
+      thread_id: null,
+      agent_provider: null,
+      status: 'active',
+      container_status: 'stopped',
+      last_active: null,
+      created_at: new Date().toISOString(),
+    } as Session);
+  });
+
+  afterEach(() => {
+    closeDb();
+    vi.restoreAllMocks();
+  });
+
+  it('pushes pending rows but skips delivered/processing ones', () => {
+    writeSessionMessage(AG, SESS, {
+      id: 'pending-1',
+      kind: 'chat',
+      timestamp: new Date().toISOString(),
+      content: '{}',
+    });
+    writeSessionMessage(AG, SESS, {
+      id: 'staged-1',
+      kind: 'chat',
+      timestamp: new Date().toISOString(),
+      content: '{}',
+      stage: true,
+    });
+
+    const notify = vi.spyOn(inboundPush, 'notifyInboundWrite');
+    backfillPendingInbound(AG, SESS);
+
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith(AG, SESS, expect.objectContaining({ id: 'pending-1', status: 'pending' }));
+  });
+
+  it('does nothing when the inbound.db does not exist yet', () => {
+    const notify = vi.spyOn(inboundPush, 'notifyInboundWrite');
+    expect(() => backfillPendingInbound(AG, 'sess-never-provisioned')).not.toThrow();
     expect(notify).not.toHaveBeenCalled();
   });
 });

@@ -202,6 +202,33 @@ export function writeSessionRouting(agentGroupId: string, sessionId: string): vo
 }
 
 /**
+ * Push every currently-pending messages_in row to a freshly-connected 'sync'
+ * container. Closes the gap sitting right next to the destinations/
+ * session_routing on-connect backfill (see docs/session-sync-transport.md
+ * §8.6.1): routeInbound() writes the triggering message and *then* spawns
+ * the container, so the write races the connection — by the time the WS
+ * handshake completes (a multi-second TLS round trip), the write already
+ * happened with no live `ws` to push through, and the container's local
+ * inbound.db never gets the very message that woke it. Re-reading and
+ * re-pushing every 'pending' row here is idempotent on the container side
+ * (`INSERT OR IGNORE` in apply-inbound.ts), so a reconnect that re-sends an
+ * already-applied row is harmless.
+ */
+export function backfillPendingInbound(agentGroupId: string, sessionId: string): void {
+  const dbPath = inboundDbPath(agentGroupId, sessionId);
+  if (!fs.existsSync(dbPath)) return;
+
+  const db = openInboundDb(agentGroupId, sessionId);
+  let rows: InboundRowPayload[];
+  try {
+    rows = db.prepare("SELECT * FROM messages_in WHERE status = 'pending' ORDER BY seq").all() as InboundRowPayload[];
+  } finally {
+    db.close();
+  }
+  for (const row of rows) notifyInboundWrite(agentGroupId, sessionId, row);
+}
+
+/**
  * Write a message to a session's inbound DB (messages_in). Host-only.
  *
  * ⚠ Opens and closes the DB on every call. Do not refactor to reuse a

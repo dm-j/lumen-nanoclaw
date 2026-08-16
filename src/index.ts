@@ -9,10 +9,10 @@ import path from 'path';
 import { backfillContainerConfigs } from './backfill-container-configs.js';
 import { DATA_DIR, SESSION_SYNC_PORT } from './config.js';
 import { enforceStartupBackoff, resetCircuitBreaker } from './circuit-breaker.js';
-import { initDb } from './db/connection.js';
+import { getDb, hasTable, initDb } from './db/connection.js';
 import { runMigrations } from './db/migrations/index.js';
 import { getSession } from './db/sessions.js';
-import { outboundDbPath } from './session-manager.js';
+import { backfillPendingInbound, outboundDbPath, writeSessionRouting } from './session-manager.js';
 import { ensureContainerRuntimeRunning, cleanupOrphans } from './container-runtime.js';
 import { startActiveDeliveryPoll, startSweepDeliveryPoll, setDeliveryAdapter, stopDeliveryPolls } from './delivery.js';
 import { startHostSweep, stopHostSweep } from './host-sweep.js';
@@ -91,13 +91,29 @@ async function main(): Promise<void> {
   // 1c. Session-sync WebSocket server — started unconditionally, idle until a
   // group's container_config sets transport: 'sync' (none do yet). Cheap to
   // keep running: one loopback wss:// listener.
-  syncServer = createSyncServer(SESSION_SYNC_PORT, getInstallSecret(), SESSION_SYNC_TOKEN_TTL_MS, {
-    'session-sync': makeSessionSyncHandler((sessionId) => {
+  syncServer = createSyncServer(
+    SESSION_SYNC_PORT,
+    getInstallSecret(),
+    SESSION_SYNC_TOKEN_TTL_MS,
+    {
+      'session-sync': makeSessionSyncHandler((sessionId) => {
+        const session = getSession(sessionId);
+        if (!session) throw new Error(`session-sync: unknown session ${sessionId}`);
+        return outboundDbPath(session.agent_group_id, sessionId);
+      }),
+    },
+    (sessionId) => {
       const session = getSession(sessionId);
-      if (!session) throw new Error(`session-sync: unknown session ${sessionId}`);
-      return outboundDbPath(session.agent_group_id, sessionId);
-    }),
-  });
+      if (!session) return;
+      if (hasTable(getDb(), 'agent_destinations')) {
+        import('./modules/agent-to-agent/write-destinations.js')
+          .then(({ writeDestinations }) => writeDestinations(session.agent_group_id, sessionId))
+          .catch((err) => log.error('session-sync: on-connect destinations backfill failed', { sessionId, err }));
+      }
+      writeSessionRouting(session.agent_group_id, sessionId);
+      backfillPendingInbound(session.agent_group_id, sessionId);
+    },
+  );
   registerSyncServer(syncServer);
   log.info('Session-sync server listening', { port: SESSION_SYNC_PORT });
 
