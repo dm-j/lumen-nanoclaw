@@ -169,10 +169,16 @@ export function createSyncClient(
     if (!send) return Promise.reject(new Error('session-sync: client not attached to a connection yet'));
     const seq = state.outbound.seq + 1;
     const chain = nextChain(state.outbound.chain, seq, payload);
+    // Reserve the seq synchronously, before the async ack round trip — two
+    // push() calls in the same tick (e.g. two mcp-tools sends back to back)
+    // must never compute the same seq. Otherwise the second pending.set()
+    // silently overwrites the first, and that first push's promise never
+    // settles (a leaked drain()-blocking waiter — see docs/session-sync-
+    // transport.md's "seq reservation" note).
+    state.outbound = { seq, chain };
     return new Promise((resolve, reject) => {
       pending.set(seq, {
         resolve: () => {
-          state.outbound = { seq, chain };
           persistChainState(outboundDb, state);
           resolve();
         },

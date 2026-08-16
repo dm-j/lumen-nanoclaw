@@ -210,5 +210,22 @@ describe('makeSessionSyncHandler', () => {
       handler('sess-1', ws, { type: 'ack', seq: 2 });
       await p2;
     });
+
+    it('assigns distinct seqs to two pushes fired in the same tick, before either is acked', async () => {
+      const handler = makeSessionSyncHandler(() => dbPath);
+      const ws = fakeWs();
+
+      // Mirrors delivery.ts's undelivered-message loop: two pushInboundRow
+      // calls back to back, neither awaited before the next fires.
+      const p1 = pushInboundRow('sess-1', ws, () => dbPath, 'delivered', { id: 'd-1' });
+      const p2 = pushInboundRow('sess-1', ws, () => dbPath, 'delivered', { id: 'd-2' });
+
+      expect(ws.sent[0]).toMatchObject({ channel: 'session-sync', body: { seq: 1 } });
+      expect(ws.sent[1]).toMatchObject({ channel: 'session-sync', body: { seq: 2 } });
+
+      handler('sess-1', ws, { type: 'ack', seq: 1 });
+      handler('sess-1', ws, { type: 'ack', seq: 2 });
+      await Promise.all([p1, p2]);
+    });
   });
 });

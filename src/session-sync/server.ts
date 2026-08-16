@@ -223,6 +223,14 @@ export function pushInboundRow(
 
   const seq = state.inbound.seq + 1;
   const chain = nextChain(state.inbound.chain, seq, payload);
+  // Reserve the seq synchronously, before the async ack round trip — two
+  // pushInboundRow calls for the same session in one tick (e.g. delivery.ts's
+  // undelivered-message loop firing notifyDeliveredWrite per message) must
+  // never compute the same seq. Otherwise the second pending.set() silently
+  // overwrites the first, and that first push's promise never settles (a
+  // leaked drain()-blocking waiter on the container side, or a resync_point
+  // storm here).
+  state.inbound = { seq, chain };
 
   return new Promise((resolve, reject) => {
     let pending = pendingInboundBySession.get(sessionId);
@@ -232,10 +240,6 @@ export function pushInboundRow(
     }
     pending.set(seq, {
       resolve: () => {
-        // `state` is the cached object getChainState hands out — mutating it
-        // here keeps the in-memory cache and the persisted row in agreement,
-        // same as handleSessionSync does for the outbound direction above.
-        state.inbound = { seq, chain };
         const persistDb = openOutboundDbRw(outboundDbPathFor(sessionId));
         try {
           persistChainState(persistDb, state);

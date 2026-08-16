@@ -87,6 +87,26 @@ describe('createSyncClient', () => {
     await expect(client.pushOutbound({ id: 'm1' })).rejects.toThrow('not attached');
   });
 
+  it('assigns distinct seqs to two pushes fired in the same tick, before either is acked', async () => {
+    const client = createSyncClient(getOutboundDb(), () => {});
+    const sync = fakeSyncClient();
+    client.attach(sync);
+
+    // Mirrors two mcp-tools sends firing back to back, neither awaited
+    // before the next call — must not both claim the same next seq.
+    const p1 = client.pushOutbound({ id: 'm1' });
+    const p2 = client.pushOutbound({ id: 'm2' });
+
+    expect(sync.sent).toEqual([
+      { channel: 'session-sync', body: { seq: 1, kind: 'outbound', chain: nextChain(GENESIS_CHAIN, 1, { id: 'm1' }), payload: { id: 'm1' } } },
+      { channel: 'session-sync', body: { seq: 2, kind: 'outbound', chain: nextChain(nextChain(GENESIS_CHAIN, 1, { id: 'm1' }), 2, { id: 'm2' }), payload: { id: 'm2' } } },
+    ]);
+
+    client.handler({ type: 'ack', seq: 1 });
+    client.handler({ type: 'ack', seq: 2 });
+    await Promise.all([p1, p2]);
+  });
+
   it('applies a host-pushed inbound row once chain-verified', () => {
     const applied: unknown[] = [];
     const client = createSyncClient(getOutboundDb(), (_kind, payload) => applied.push(payload));
