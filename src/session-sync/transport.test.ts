@@ -95,7 +95,7 @@ describe('createSyncServer onConnect', () => {
         client.on('error', reject);
       });
 
-      expect(onConnect).toHaveBeenCalledWith('sess-onconnect');
+      expect(onConnect).toHaveBeenCalledWith('sess-onconnect', expect.anything());
     } finally {
       client.close();
       await server.close();

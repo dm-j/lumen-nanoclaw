@@ -27,7 +27,7 @@ import { log } from './log.js';
 import { enforceUpgradeTripwire } from './upgrade-state.js';
 import { getInstallSecret } from './session-sync/secret.js';
 import { createSyncServer, SESSION_SYNC_TOKEN_TTL_MS, type SyncServer } from './session-sync/transport.js';
-import { makeSessionSyncHandler } from './session-sync/server.js';
+import { makeSessionSyncHandler, replayPendingInbound } from './session-sync/server.js';
 import { registerSyncServer } from './session-sync/inbound-push.js';
 
 let syncServer: SyncServer | undefined;
@@ -107,7 +107,7 @@ async function main(): Promise<void> {
         return outboundDbPath(session.agent_group_id, sessionId);
       }),
     },
-    (sessionId) => {
+    (sessionId, ws) => {
       const session = getSession(sessionId);
       if (!session) return;
       if (hasTable(getDb(), 'agent_destinations')) {
@@ -118,6 +118,14 @@ async function main(): Promise<void> {
       writeSessionRouting(session.agent_group_id, sessionId);
       backfillPendingInbound(session.agent_group_id, sessionId);
       backfillPendingDelivered(session.agent_group_id, sessionId);
+      // General chain-replay resync (docs/session-sync-transport.md §8.2
+      // item 4, option b): any inbound push sent before this connection
+      // dropped, never acked, gets resent now instead of hanging forever.
+      replayPendingInbound(sessionId, ws, (sid) => {
+        const s = getSession(sid);
+        if (!s) throw new Error(`session-sync: unknown session ${sid}`);
+        return outboundDbPath(s.agent_group_id, sid);
+      });
     },
   );
   registerSyncServer(syncServer);

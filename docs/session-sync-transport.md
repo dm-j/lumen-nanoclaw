@@ -189,7 +189,20 @@ Read this first when picking Phase 3 back up — it's the resumption pointer, no
 
 **If it didn't soak clean**: don't touch §8.4 yet. Roll back per §8.5, then decide based on what broke — a chain-mismatch or resync_point log line is a real bug in the sync mechanism itself (start from §8.6's bug list to check whether it's a recurrence); a drain timeout under real load is the trigger for the container-runtime.ts `stopContainer()` grace-period change discussed and deliberately deferred (see chat history 2026-08-16) rather than widening `drain()`'s in-container bound, which cannot outlive `docker stop -t 1`'s SIGKILL regardless.
 
-**Known gaps that are not blockers for widening**, tracked here so they aren't rediscovered as surprises: `cli/host-shim.ts`/`cli/ncl.ts` don't sync under `'sync'` transport (§6 Phase 2, "explicitly out of scope"); the general chain-replay resync (§8.2 item 4's option b) stays deferred unless a fifth instance of the bug class shows up somewhere `delivered.sync_acked`'s per-row pattern doesn't fit.
+**Known gaps that are not blockers for widening**, tracked here so they aren't rediscovered as surprises: `cli/host-shim.ts`/`cli/ncl.ts` don't sync under `'sync'` transport (§6 Phase 2, "explicitly out of scope").
+
+### 8.9 General chain-replay resync (2026-08-16) — built ahead of a concrete driver
+
+§8.2 item 4's option (b) — built on request, not because a fifth bug instance surfaced (§8.6.4's audit found none; every current table already had a working backfill path). Scoped to the one direction that actually needed it: host-to-container ("inbound"), the only direction where a push can be sent, the socket can drop before the ack lands, and nothing else notices — the outbound direction has no equivalent gap because the container is sole writer of its own outbound stream and never queues a push it can't complete before dying (drain, §8.2 item 2).
+
+Mechanism: `session_sync_log` (new table in `outbound.db`, `src/db/schema.ts`) — the host, chain-authority for the inbound direction, durably logs every `pushInboundRow` call (`seq`, `kind`, `chain`, raw JSON `payload`) before sending, alongside the existing in-memory `pendingInboundBySession` waiter map. Two replay triggers, same underlying `replayInboundLog` (`src/session-sync/server.ts`):
+
+1. **Chain-mismatch `resync_point` from the container** — previously just rejected the pending push with an error; now replays everything logged after the container's reported point over the same socket.
+2. **Reconnect** — `createSyncServer`'s `onConnect` callback now also receives the fresh `ws` (signature change, `src/session-sync/transport.ts`); `replayPendingInbound` resends every push still in `pendingInboundBySession` (i.e., sent before the disconnect, never acked) over the new socket, computing the resend floor as the lowest still-pending seq minus one.
+
+No client-side (container) change needed — a replayed row looks identical to a first-time push, so `client.ts`'s existing chain-verify-then-apply-then-ack path handles it with no new logic. `session_sync_log` is unbounded (no trim) — an accepted first-cut tradeoff, noted in the schema comment; revisit if a session's log ever becomes large enough to matter (unlikely: only host-initiated pushes are logged, which are `messages_in`/`delivered`/`destinations`/`session_routing` writes, not every chat turn).
+
+Tests: `src/session-sync/server.test.ts` (`replayPendingInbound resends unacked pushes...`, `...is a no-op when nothing is pending`, and the existing chain-mismatch test rewritten to assert replay instead of rejection); `src/session-sync/transport.test.ts`'s `onConnect` test updated for the new two-arg callback signature.
 
 ### 8.8 Explicitly not in this plan
 

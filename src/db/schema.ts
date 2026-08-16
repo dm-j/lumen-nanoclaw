@@ -276,6 +276,20 @@ CREATE TABLE IF NOT EXISTS session_sync_state (
   updated_at     TEXT NOT NULL
 );
 
+-- Durable log of every host-to-container ('inbound' direction) push, keyed
+-- by seq, so a container-reported resync_point (chain mismatch, or simply
+-- "I missed messages while disconnected") can be answered with a real
+-- replay instead of just surfacing an error. The host is chain authority
+-- for this direction (session_sync_state.inbound_chain), so it's the side
+-- that must retain history to replay from. Unbounded growth is an accepted
+-- tradeoff for a first cut — see src/session-sync/server.ts's replay path.
+CREATE TABLE IF NOT EXISTS session_sync_log (
+  seq     INTEGER PRIMARY KEY,
+  kind    TEXT NOT NULL,
+  chain   TEXT NOT NULL,
+  payload TEXT NOT NULL
+);
+
 -- Persistent key/value state owned by the container. Used (among other things)
 -- to store the SDK session ID so the agent's conversation resumes across
 -- container restarts. Cleared by /clear.

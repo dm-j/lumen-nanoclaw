@@ -82,7 +82,7 @@ export function createSyncServer(
   secret: string,
   tokenTtlMs: number,
   handlers: Record<string, ChannelHandler>,
-  onConnect?: (sessionId: string) => void,
+  onConnect?: (sessionId: string, ws: WebSocket) => void,
 ): SyncServer {
   const { cert, key } = getInstallCert();
   const httpsServer = createHttpsServer({ cert, key });
@@ -135,7 +135,7 @@ export function createSyncServer(
       // the current snapshot now so a 'sync'-transport container is never
       // stuck with an empty local destination map. See
       // docs/session-sync-transport.md §8.6.
-      onConnect?.(sessionId);
+      onConnect?.(sessionId, ws);
     });
   });
 

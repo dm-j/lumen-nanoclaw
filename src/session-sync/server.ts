@@ -144,13 +144,17 @@ export function makeSessionSyncHandler(outboundDbPathFor: (sessionId: string) =>
       return;
     }
     if ((msg as ResyncPoint).type === 'resync_point' && (msg as SyncMessage).kind === undefined) {
-      // Container rejected an inbound push (chain mismatch). Divergence
-      // recovery (resending from the container's reported point) is
-      // Phase 3+ — reject the outstanding push so the caller surfaces it.
-      const pending = pendingInboundBySession.get(sessionId);
-      if (pending) {
-        for (const [, waiter] of pending) waiter.reject(new Error('session-sync: inbound chain resync required'));
-        pending.clear();
+      // Container reported its last-known-good (seq, chain) for the inbound
+      // direction — either a genuine chain mismatch, or just "replay
+      // whatever you have past this point" after a reconnect. Host is chain
+      // authority for this direction, so it replays from its own durable
+      // session_sync_log rather than just erroring out.
+      const point = msg as ResyncPoint;
+      const db = openOutboundDbRw(outboundDbPathFor(sessionId));
+      try {
+        replayInboundLog(sessionId, ws, db, point.seq);
+      } finally {
+        db.close();
       }
       return;
     }
@@ -232,6 +236,17 @@ export function pushInboundRow(
   // storm here).
   state.inbound = { seq, chain };
 
+  {
+    const logDb = openOutboundDbRw(outboundDbPathFor(sessionId));
+    try {
+      logDb
+        .prepare('INSERT OR REPLACE INTO session_sync_log (seq, kind, chain, payload) VALUES (?, ?, ?, ?)')
+        .run(seq, kind, chain, JSON.stringify(payload));
+    } finally {
+      logDb.close();
+    }
+  }
+
   return new Promise((resolve, reject) => {
     let pending = pendingInboundBySession.get(sessionId);
     if (!pending) {
@@ -252,6 +267,63 @@ export function pushInboundRow(
     });
     sendEnvelope(ws, 'session-sync', { seq, kind, chain, payload } satisfies SyncMessage);
   });
+}
+
+/**
+ * Replays every host-to-container push logged with seq > fromSeq, in order,
+ * reusing each row's original seq/chain (the container verifies against
+ * its own chain, which must match exactly what was originally computed).
+ * Doesn't await acks between rows — the container processes them in the
+ * order they arrive over the same socket and acks each via the normal
+ * 'ack' handler, which resolves whatever pushInboundRow waiter is still
+ * pending for that seq.
+ */
+function replayInboundLog(
+  sessionId: string,
+  ws: WebSocket,
+  db: import('better-sqlite3').Database,
+  fromSeq: number,
+): void {
+  const rows = db
+    .prepare('SELECT seq, kind, chain, payload FROM session_sync_log WHERE seq > ? ORDER BY seq ASC')
+    .all(fromSeq) as Array<{ seq: number; kind: SyncMessageKind; chain: string; payload: string }>;
+  for (const row of rows) {
+    sendEnvelope(ws, 'session-sync', {
+      seq: row.seq,
+      kind: row.kind,
+      chain: row.chain,
+      payload: JSON.parse(row.payload),
+    } satisfies SyncMessage);
+  }
+}
+
+/**
+ * Resends every inbound push for this session still awaiting an ack (i.e.
+ * sent before a disconnect and never confirmed) over a freshly (re)connected
+ * socket. Call from onConnect. Reuses replayInboundLog with the container's
+ * last-acked seq — since every entry still in pendingInboundBySession was
+ * pushed after that point by construction (state.inbound only advances once
+ * the row is logged and sent), replaying "everything since last-acked" is
+ * exactly "everything still pending" plus nothing extra.
+ */
+export function replayPendingInbound(
+  sessionId: string,
+  ws: WebSocket,
+  outboundDbPathFor: (sessionId: string) => string,
+): void {
+  const pending = pendingInboundBySession.get(sessionId);
+  if (!pending || pending.size === 0) return;
+  const db = openOutboundDbRw(outboundDbPathFor(sessionId));
+  try {
+    const state = getChainState(sessionId, db);
+    // state.inbound.seq is the *reserved* high-water mark, which includes
+    // whatever's still pending — so replay from the lowest still-pending
+    // seq minus one, not from state.inbound.seq itself.
+    const fromSeq = Math.min(...pending.keys()) - 1;
+    replayInboundLog(sessionId, ws, db, fromSeq);
+  } finally {
+    db.close();
+  }
 }
 
 function applyOutboundRow(db: import('better-sqlite3').Database, message: SyncMessage): void {
