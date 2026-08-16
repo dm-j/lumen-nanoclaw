@@ -20,6 +20,8 @@ export interface RunnerConfig {
   mcpServers: Record<string, McpServerConfig>;
   model?: string;
   effort?: string;
+  /** Session DB transport: 'file' (bind-mounted, default) or 'sync' (WebSocket, opt-in). */
+  transport?: 'file' | 'sync';
 }
 
 const DEFAULT_MAX_MESSAGES = 10;
@@ -49,6 +51,7 @@ export function loadConfig(): RunnerConfig {
     mcpServers: (raw.mcpServers as RunnerConfig['mcpServers']) || {},
     model: (raw.model as string) || undefined,
     effort: (raw.effort as string) || undefined,
+    transport: raw.transport === 'sync' ? 'sync' : 'file',
   };
 
   return _config;

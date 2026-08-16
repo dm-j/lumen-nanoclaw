@@ -26,6 +26,9 @@ export type ChannelHandler = (sessionId: string, ws: WebSocket, body: unknown) =
  */
 export const AUTH_CHANNEL = 'session-sync-auth';
 
+/** Token lifetime — opening bid, short enough to bound a leaked-token impersonation window. Refresh happens at half this via AUTH_CHANNEL. */
+export const SESSION_SYNC_TOKEN_TTL_MS = 15 * 60 * 1000;
+
 export interface TokenRefresh {
   type: 'token_refresh';
   token: string;

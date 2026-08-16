@@ -21,11 +21,10 @@ import { routeInbound } from './router.js';
 import { log } from './log.js';
 import { enforceUpgradeTripwire } from './upgrade-state.js';
 import { getInstallSecret } from './session-sync/secret.js';
-import { createSyncServer, type SyncServer } from './session-sync/transport.js';
+import { createSyncServer, SESSION_SYNC_TOKEN_TTL_MS, type SyncServer } from './session-sync/transport.js';
 import { makeSessionSyncHandler } from './session-sync/server.js';
 import { registerSyncServer } from './session-sync/inbound-push.js';
 
-const SESSION_SYNC_TOKEN_TTL_MS = 15 * 60 * 1000;
 let syncServer: SyncServer | undefined;
 
 // Response registry lives in response-registry.ts to break the

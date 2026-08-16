@@ -26,6 +26,7 @@ import {
 import { materializeContainerJson } from './container-config.js';
 import { getContainerConfig } from './db/container-configs.js';
 import { updateContainerConfigScalars } from './db/container-configs.js';
+import { writeSessionSyncCredentials } from './session-sync/session-credentials.js';
 import { CONTAINER_RUNTIME_BIN, hostGatewayArgs, readonlyMountArgs, stopContainer } from './container-runtime.js';
 import { EGRESS_NETWORK, egressNetworkArgs, ensureEgressNetwork } from './egress-lockdown.js';
 import { composeGroupClaudeMd } from './claude-md-compose.js';
@@ -155,6 +156,11 @@ async function spawnContainer(session: Session): Promise<void> {
   // the config object, threaded through provider resolution, buildMounts,
   // and buildContainerArgs so we don't re-read.
   const containerConfig = materializeContainerJson(agentGroup.id);
+
+  // Session-scoped sync credentials — deliberately separate from the
+  // group-scoped container.json above (see session-credentials.ts header).
+  // No-op (removes any stale file) unless this group is on 'sync' transport.
+  writeSessionSyncCredentials(agentGroup.id, session.id, 'host.docker.internal');
 
   // Per-group filesystem state lives forever after first creation. Init is
   // idempotent: it only writes paths that don't already exist, so this call
