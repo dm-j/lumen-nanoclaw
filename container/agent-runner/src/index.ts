@@ -36,6 +36,7 @@ import './providers/index.js';
 import { createProvider, type ProviderName } from './providers/factory.js';
 import type { McpServerConfig } from './providers/types.js';
 import { runPollLoop } from './poll-loop.js';
+import type { SyncClientHandle } from './session-sync/client.js';
 import { initSessionSync } from './session-sync/startup.js';
 
 function log(msg: string): void {
@@ -43,6 +44,40 @@ function log(msg: string): void {
 }
 
 const CWD = '/workspace/agent';
+
+// ponytail: host's stopContainer() sends SIGTERM then SIGKILL after a 1s
+// grace period (container-runtime.ts's `docker stop -t 1`) — this must fit
+// comfortably inside that, not the other way round. Bump the host-side grace
+// for sync-transport sessions specifically if drains start timing out in
+// practice.
+const DRAIN_TIMEOUT_MS = 600;
+
+/**
+ * On SIGTERM/SIGKILL-imminent (SIGTERM only — SIGKILL can't be caught),
+ * blocks exit until any in-flight session-sync pushes are acked or the
+ * timeout elapses. Container is `--rm`, so a locally-durable-but-unacked
+ * outbound row would otherwise vanish the moment the process exits (see
+ * docs/session-sync-transport.md §8.2.2). No-op when not on 'sync' transport
+ * (`syncClient` is null).
+ */
+function registerShutdownDrain(syncClient: SyncClientHandle | null): void {
+  if (!syncClient) return;
+  let draining = false;
+  const shutdown = (signal: string): void => {
+    if (draining) return;
+    draining = true;
+    log(`received ${signal}, draining session-sync before exit`);
+    syncClient
+      .drain(DRAIN_TIMEOUT_MS)
+      .then(({ pending }) => {
+        if (pending > 0) log(`drain timed out with ${pending} push(es) still unacked — exiting anyway`);
+        process.exit(0);
+      })
+      .catch(() => process.exit(0));
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+}
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -53,7 +88,8 @@ async function main(): Promise<void> {
   // Session-sync bootstrap — no-op unless this group's container.json says
   // transport: 'sync'. Doesn't affect DB reads/writes yet (see startup.ts
   // header); just proves the connection itself works end-to-end.
-  await initSessionSync();
+  const syncClient = await initSessionSync();
+  registerShutdownDrain(syncClient);
 
   // Every provider shares one persistent memory tree. Legacy imports are an
   // operator-run migration and never happen in this normal startup path.

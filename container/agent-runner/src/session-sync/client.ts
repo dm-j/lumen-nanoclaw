@@ -98,6 +98,15 @@ export interface SyncClientHandle {
   pushAck(payload: unknown): Promise<void>;
   pushSessionState(payload: unknown): Promise<void>;
   pushContainerState(payload: unknown): Promise<void>;
+  /**
+   * Waits for all currently in-flight pushes to be acked, up to `timeoutMs`.
+   * For graceful-shutdown drain (docs/session-sync-transport.md §8.2.2) —
+   * the container is `--rm`, so a push that's locally durable but never
+   * acked before the process exits is gone for good. Never rejects: on
+   * timeout it just returns with whatever's still pending, so the caller
+   * can log and exit anyway rather than hang past the kill grace period.
+   */
+  drain(timeoutMs: number): Promise<{ pending: number }>;
 }
 
 /**
@@ -179,5 +188,26 @@ export function createSyncClient(outboundDb: Database, applyInboundRow: (payload
     pushAck: (payload) => push('ack', payload),
     pushSessionState: (payload) => push('session_state', payload),
     pushContainerState: (payload) => push('container_state', payload),
+    drain(timeoutMs: number): Promise<{ pending: number }> {
+      if (pending.size === 0) return Promise.resolve({ pending: 0 });
+      return new Promise((resolve) => {
+        // Poll rather than hook into every pending waiter's resolve — pending
+        // entries can be added mid-drain (a push already in flight when
+        // shutdown started) and this stays correct either way.
+        const interval = setInterval(() => {
+          if (pending.size === 0) {
+            clearTimeout(timer);
+            clearInterval(interval);
+            resolve({ pending: 0 });
+          }
+        }, 20);
+        const timer = setTimeout(() => {
+          clearInterval(interval);
+          resolve({ pending: pending.size });
+        }, timeoutMs);
+        timer.unref?.();
+        interval.unref?.();
+      });
+    },
   };
 }

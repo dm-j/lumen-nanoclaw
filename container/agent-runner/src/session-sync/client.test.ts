@@ -106,4 +106,33 @@ describe('createSyncClient', () => {
 
     expect(applied).toEqual([]);
   });
+
+  it('drain resolves immediately when nothing is in flight', async () => {
+    const client = createSyncClient(getOutboundDb(), () => {});
+    const result = await client.drain(1000);
+    expect(result).toEqual({ pending: 0 });
+  });
+
+  it('drain waits for an in-flight push to be acked', async () => {
+    const client = createSyncClient(getOutboundDb(), () => {});
+    client.attach(fakeSyncClient());
+
+    const pushPromise = client.pushOutbound({ id: 'm1' });
+    const drainPromise = client.drain(1000);
+
+    client.handler({ type: 'ack', seq: 1 });
+    await pushPromise;
+
+    expect(await drainPromise).toEqual({ pending: 0 });
+  });
+
+  it('drain times out and reports the still-pending count instead of hanging', async () => {
+    const client = createSyncClient(getOutboundDb(), () => {});
+    client.attach(fakeSyncClient());
+
+    void client.pushOutbound({ id: 'm1' }).catch(() => {});
+    const result = await client.drain(50);
+
+    expect(result).toEqual({ pending: 1 });
+  });
 });
