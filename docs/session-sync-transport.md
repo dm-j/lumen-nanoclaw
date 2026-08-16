@@ -65,8 +65,69 @@ Noted so the idea isn't lost, and so it isn't quietly reinvented under time pres
   - **What's actually left — the mount-flip + write-path rewrite.** Today, opting a group into `'sync'` transport changes nothing observable: the container still bind-mounts `inbound.db`/`outbound.db` and every read/write call site (`poll-loop.ts`, `mcp-tools` `send_message`/`edit_message`/`add_reaction`, `session_state`, `container_state`) talks to those files directly, exactly as under `'file'` transport — `initSessionSync()` establishes a connection in parallel but nothing routes through it yet (`applyInboundRow` in `startup.ts` currently just logs and drops). Making `'sync'` transport actually do something requires, together, not separately: (a) `container-runner.ts` skips the `inbound.db`/`outbound.db` bind mount for a `'sync'`-transport session, (b) `connection.ts` opens a local, container-owned `inbound.db` (RW — it's no longer host-owned once nothing mounts it) with real schema, and (c) every one of those call sites is rerouted through `client.ts`'s push functions / the local applied copy. Not splittable into smaller safe increments — flipping (a) before (c) is complete means an opted-in group's agent replies are silently never pushed to the host at all. Not started.
   - **`inbound.db`'s full-schema gap** (`delivered`/`destinations`/`session_routing`, beyond the already-covered `messages_in`) is part of the same rewrite, once there's a real local inbound.db to apply them into.
   - **Reconnect loop** (call `connectSyncClient` again with `currentToken()` after a disconnect) is also naturally part of this same piece of work, since a mid-session reconnect only matters once the connection is load-bearing.
-- **Phase 3-5**: designed at a high level (verification-before-cutover, rollout), not built.
+- **Phase 3-5**: real plan below (§8), not built.
 
 ## 7. `session_sync_state` vs. `session_state`
 
 `session_sync_state` (schema.ts) is host-internal bookkeeping for the sync transport itself (currently just the outbound chain checkpoint — see §6 Phase 1). `session_state` is container-owned application state (SDK session ID, etc.), synced or not depending on the Phase 2 scope decision above. Kept as two separate tables specifically so sync-internal bookkeeping never shares a keyspace with app state that Phase 2 might start syncing — a collision there would be silent and hard to trace back to this decision.
+
+## 8. Reversible switchover plan (planned 2026-08-15, not built)
+
+Written before the mount-flip + write-path rewrite (§6 Phase 2's last item) rather than after, so the rewrite is built *to* this plan instead of the plan being reverse-engineered from whatever the rewrite happened to make possible.
+
+### 8.1 The invariant the rewrite must preserve
+
+`'sync'` transport must never become the *only* durable copy of anything. Today, host-side `inbound.db`/`outbound.db` are always the complete record regardless of transport (§6 verified this directly: `writeSessionMessage` inserts unconditionally; `notifyInboundWrite` — and after the rewrite, the container's push — is additive on top; `makeSessionSyncHandler` writes into the exact same `outboundDbPath()` `delivery.ts` always reads). The rewrite must keep that true: the container's local DBs become an additional durable copy for the container's own use, not a replacement for the host's. This is what makes switching transport, in either direction, a config change plus a restart rather than a data migration — there is never a moment where a session's history exists in only one place with no fallback.
+
+The one place this invariant is *not* automatically satisfied is a container's own unpushed writes at the exact moment it's killed — see 8.2.
+
+### 8.2 Hard prerequisites (block any real cutover, not just nice-to-haves)
+
+None of these are optional polish — shipping without them means a transport flip can silently lose data, not just degrade:
+
+1. **Reconnect loop** (§6 Phase 2, still open). Without it, any host restart — routine (`ncl groups restart`, a deploy) or crash — permanently kills a `'sync'` session's connection until the *container* itself is separately respawned. A production group on `'sync'` transport would silently stop syncing on the next ordinary host restart.
+2. **Drain-before-exit on graceful shutdown.** The rewrite gives the container a local-first outbound write (durable in its own DB immediately) that gets pushed+acked to the host asynchronously. If the container is killed (respawn, `docker stop`, the corruption-exit path's `process.exit(75)`) before an outbound row's push is acked, that row is real and locally durable but the host has never seen it — and since the container is `--rm`, it's gone the moment the process exits. The rewrite must add a shutdown hook that blocks on any in-flight `pushOutbound`/`pushAck`/etc. (with a bounded timeout, then logs loudly rather than hanging forever) before allowing the process to exit. `container-restart.ts`'s existing `killContainer(onExit)` grace-period pattern is the natural place this plugs in.
+3. **`inbound.db` full-schema sync** (`delivered`/`destinations`/`session_routing`, §6 Phase 2). Without it, a `'sync'`-transport session silently loses destination resolution and delivery-status tracking — not a crash, a quiet functional regression that's easy to miss in a spot-check.
+
+### 8.3 Mechanism (already exists, nothing new to build)
+
+Switching a group's transport is already just:
+
+```
+ncl groups config update --id <group-id> --transport sync    # or: file
+ncl groups restart --id <group-id> --message "transport changed"
+```
+
+`--message` forces the `on_wake` respawn path (`container-restart.ts`) so the switch takes effect immediately rather than waiting for the next natural wake — and, per 8.2, only after the old container has actually drained and exited (`killContainer`'s existing `onExit` callback already guarantees the old process is gone before the new one spawns).
+
+### 8.4 Staged rollout
+
+1. **Canary group**: one low-stakes agent group (an admin's own personal/test group, not anything a real user depends on) — never the owner agent group, never anything wired to a channel with real traffic, for the first cutover.
+2. **Observation window**: a few days of normal use, not a synthetic load test alone — the corruption this whole effort exists to fix only ever showed up under real, sustained traffic patterns (§1).
+3. **Per-cutover verification checklist** (grep `logs/nanoclaw.log`/`nanoclaw.error.log`):
+   - `Session-sync server listening` at host boot (already always true) and `connected to host session-sync server` from the specific container after its next spawn.
+   - No `session-sync: chain resync required` / `resync_point` lines for that session — any occurrence means the two sides' chains diverged, which after the rewrite should never happen in normal operation and is itself an abort signal (8.5).
+   - No new `DB_RETRY_EXHAUSTED` lines for that session's ID — the existing `sqlite-corrupt-count-host` shim (`docs/host-shims.md`) already tracks this metric and can be pointed at the canary group directly.
+   - A real round-trip: send the canary group a message, confirm the reply, confirm `ncl sessions get` and `ncl tasks list` (if it has scheduled tasks) still behave normally.
+4. **Widen gradually**: one more real (but non-critical) group, then the rest, each getting its own few-day observation window — never a single flip-the-default-for-everyone commit.
+
+### 8.5 Rollback
+
+Because of 8.1, rollback is symmetric to cutover and just as cheap:
+
+```
+ncl groups config update --id <group-id> --transport file
+ncl groups restart --id <group-id> --message "transport changed"
+```
+
+The next container spawns back under `'file'` transport, bind-mounts the host's `inbound.db`/`outbound.db` as always, and — per 8.1 — those files were never anything other than the complete record the whole time. No data migration, no "reconcile the two copies" step, because there was only ever one copy that mattered on the host side.
+
+**Abort criteria** — roll back immediately, don't investigate-in-place on live traffic, if any of these show up for a cutover group:
+- Any `resync_point`/chain-mismatch log line (8.4's checklist item — the rewrite should make this impossible in normal operation, so seeing one means a real bug, not noise).
+- A user-reported message that never arrived or a reply that never sent.
+- The container crash-looping or repeatedly failing to reconnect.
+
+### 8.6 Explicitly not in this plan
+
+- **Automatic transport selection** (e.g. "detect VirtioFS corruption and self-heal onto `'sync'`"). Speculative until `'sync'` itself has a real production track record under 8.4.
+- **A default-flip for macOS.** §3 already states the eventual intent (`'sync'` becomes the macOS default once proven out), but that's a separate, later decision gated on 8.4 actually completing for real groups, not part of building the switch mechanism itself.
