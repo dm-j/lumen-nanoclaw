@@ -2,7 +2,7 @@
 
 Open items, roughly in priority order. Not a commitment or schedule — just what's known to be outstanding. Each item is its own file under `docs/roadmap/` — this index stays a thin list of links on purpose, so adding, reordering, or updating one item never touches the others.
 
-1. [Session-sync WebSocket transport](session-sync-transport.md) — replaces bind-mounted session DBs (recurring macOS SQLite corruption / `DB_RETRY_EXHAUSTED`); host server now starts at boot (port 58636), **Phase 2 (container sync client) is next**
+1. [Session-sync WebSocket transport](session-sync-transport.md) — replaces bind-mounted session DBs (recurring macOS SQLite corruption / `DB_RETRY_EXHAUSTED`); protocol/connection machinery done both sides, **only the mount-flip + write-path rewrite is left** (all-or-nothing, deliberately deferred as its own reviewed pass)
 2. [Container runner as a pluggable interface](roadmap/container-runner-interface.md) — decouple container spawn/lifecycle from `container-runner.ts`'s local-Docker assumption, so a runner can register itself and run anywhere; discussed 2026-08-15, not started, depends on session-sync landing first
 3. [.ics handling](roadmap/ics-handling.md) — no calendar ingestion/generation yet
 4. [Email handling](roadmap/email-handling.md) — no email channel/adapter yet
