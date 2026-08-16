@@ -11,12 +11,14 @@
  * Two processes can race to advance the same outbound chain sequence: the
  * long-running agent-runner poll loop (via its persistent session-sync
  * client, container/agent-runner/src/session-sync/client.ts) and this
- * short-lived CLI invocation. Coordinated with a simple exclusive lock file
- * (O_CREAT|O_EXCL) around the read-chain / connect / push / persist
- * sequence — safe because .sync-local/ is only ever touched from inside
- * this container (never by the host), so there's no cross-mount coherency
- * concern for the lock file either, same reasoning that makes .sync-local/
- * itself safe under 'sync' transport.
+ * short-lived CLI invocation. Coordinated with session-sync/chain-lock.ts's
+ * shared exclusive lock file around the read-chain / connect / push /
+ * persist sequence — the same lock client.ts holds for its own in-flight
+ * pushes, so a burst of CLI and in-process pushes can never interleave and
+ * diverge the chain. Safe because .sync-local/ is only ever touched from
+ * inside this container (never by the host), so there's no cross-mount
+ * coherency concern for the lock file either, same reasoning that makes
+ * .sync-local/ itself safe under 'sync' transport.
  *
  * Self-contained aside from session-sync's own pure protocol/transport
  * modules (no shared modules cross the CLI/agent-runner-core boundary,
@@ -32,6 +34,7 @@ import path from 'path';
 
 import { WebSocket } from 'ws';
 
+import { acquireChainLockAsync, releaseChainLock, tryAcquireChainLockSync } from '../session-sync/chain-lock.js';
 import { GENESIS_CHAIN, nextChain, type SyncMessageKind } from '../session-sync/protocol.js';
 
 // Deliberately not importing connectSyncClient from ../session-sync/
@@ -81,9 +84,6 @@ function connectMinimalSyncClient(
 const DEFAULT_CONFIG_PATH = '/workspace/agent/container.json';
 const DEFAULT_CREDENTIALS_PATH = '/workspace/.session-sync.json';
 const DEFAULT_SYNC_LOCAL_DIR = '/workspace/.sync-local';
-const LOCK_STALE_MS = 15_000;
-const LOCK_RETRY_MS = 50;
-const LOCK_TIMEOUT_MS = 10_000;
 const ACK_TIMEOUT_MS = 10_000;
 
 let _configPath = DEFAULT_CONFIG_PATH;
@@ -95,10 +95,6 @@ export function setPathsForTest(paths: { configPath: string; credentialsPath: st
   _configPath = paths.configPath;
   _credentialsPath = paths.credentialsPath;
   _syncLocalDir = paths.syncLocalDir;
-}
-
-function lockPath(): string {
-  return path.join(_syncLocalDir, '.outbound-chain.lock');
 }
 
 export function readTransport(): 'file' | 'sync' {
@@ -120,37 +116,6 @@ function readCredentials(): Credentials {
   return JSON.parse(fs.readFileSync(_credentialsPath, 'utf8')) as Credentials;
 }
 
-/** Exclusive lock via O_CREAT|O_EXCL. Breaks a lock left behind by a crashed process once it's older than LOCK_STALE_MS. */
-function acquireLock(): void {
-  const deadline = Date.now() + LOCK_TIMEOUT_MS;
-  for (;;) {
-    try {
-      fs.writeFileSync(lockPath(), String(process.pid), { flag: 'wx' });
-      return;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
-      try {
-        if (Date.now() - fs.statSync(lockPath()).mtimeMs > LOCK_STALE_MS) {
-          fs.rmSync(lockPath(), { force: true });
-          continue;
-        }
-      } catch {
-        // Lock vanished between the failed create and this stat — just retry.
-      }
-      if (Date.now() > deadline) throw new Error('sync-outbound-push: timed out waiting for the local chain lock');
-      Bun.sleepSync(LOCK_RETRY_MS);
-    }
-  }
-}
-
-function releaseLock(): void {
-  try {
-    fs.rmSync(lockPath(), { force: true });
-  } catch {
-    // Already gone — fine.
-  }
-}
-
 /**
  * Pushes one row to the host over a short-lived sync connection, under the
  * local chain lock — computes the next outbound seq/chain from the local
@@ -161,7 +126,7 @@ function releaseLock(): void {
  * surfaced as an error rather than silently dropped either way).
  */
 async function pushOverSyncConnection(outDb: InstanceType<typeof Database>, kind: SyncMessageKind, payload: unknown): Promise<void> {
-  acquireLock();
+  if (!tryAcquireChainLockSync(_syncLocalDir)) await acquireChainLockAsync(_syncLocalDir);
   try {
     const row = outDb.prepare('SELECT outbound_seq, outbound_chain FROM session_sync_state WHERE id = 1').get() as
       | { outbound_seq: number; outbound_chain: string }
@@ -212,7 +177,7 @@ async function pushOverSyncConnection(outDb: InstanceType<typeof Database>, kind
       sync.close();
     }
   } finally {
-    releaseLock();
+    releaseChainLock(_syncLocalDir);
   }
 }
 

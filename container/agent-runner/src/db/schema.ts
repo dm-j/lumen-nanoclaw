@@ -100,4 +100,15 @@ CREATE TABLE IF NOT EXISTS session_sync_state (
   inbound_chain  TEXT NOT NULL,
   updated_at     TEXT NOT NULL
 );
+
+-- Durable log of every row this client has pushed to the host in the
+-- outbound direction — mirrors the host's own session_sync_log (see
+-- src/session-sync/server.ts), used to replay after a resync_point instead
+-- of failing permanently. See docs/roadmap/outbound-chain-resync.md.
+CREATE TABLE IF NOT EXISTS session_sync_outbound_log (
+  seq     INTEGER PRIMARY KEY,
+  kind    TEXT NOT NULL,
+  chain   TEXT NOT NULL,
+  payload TEXT NOT NULL
+);
 `;

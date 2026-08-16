@@ -51,6 +51,11 @@ export function setSyncLocalDirForTest(dir: string): void {
   _syncLocalDir = dir;
 }
 
+/** The container-local directory session-sync writes never-host-mounted files into (session_sync_state, the outbound-chain lock, etc). */
+export function getSyncLocalDir(): string {
+  return _syncLocalDir;
+}
+
 /** Test-only: force isSyncTransport() without going through config.ts's load-once container.json singleton. */
 export function setTransportForTest(transport: 'file' | 'sync' | null): void {
   _transportOverride = transport;

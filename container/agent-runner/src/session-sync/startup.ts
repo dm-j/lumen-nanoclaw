@@ -12,7 +12,7 @@
  * host-pushed row gets applied into that same local inbound.db copy.
  */
 import { getConfig } from '../config.js';
-import { getOutboundDb } from '../db/connection.js';
+import { getOutboundDb, getSyncLocalDir } from '../db/connection.js';
 import { applyInboundRow } from './apply-inbound.js';
 import { createSyncClient, type SyncClientHandle } from './client.js';
 import { loadSessionSyncCredentials } from './credentials.js';
@@ -75,7 +75,7 @@ export async function initSessionSync(credentialsPath?: string): Promise<SyncCli
     return null;
   }
 
-  const client = createSyncClient(getOutboundDb(), applyInboundRow);
+  const client = createSyncClient(getOutboundDb(), applyInboundRow, getSyncLocalDir());
 
   try {
     const sync = await connectSyncClient(credentials.url, credentials.token, credentials.pinnedCertPem, {

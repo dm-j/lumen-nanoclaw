@@ -20,6 +20,20 @@
  * resetting to GENESIS_CHAIN, same rationale as the host side (see
  * server.ts's file header and docs/session-sync-transport.md §6).
  *
+ * The OUTBOUND chain is also advanced by short-lived CLI subprocesses
+ * (ncl.ts, host-shim.ts, via cli/sync-outbound-push.ts) over their own
+ * independent connections — this module's in-memory `state.outbound` can go
+ * stale the moment one of those pushes and acks. `push()` guards against
+ * that with chain-lock.ts's cross-process file lock: held for as long as
+ * this client has any unacked outbound push in flight, re-reading the
+ * persisted chain state under the lock before computing the next seq. A
+ * live incident (see docs/session-sync-transport.md) found this the hard
+ * way — a host-shim.ts call advanced the chain, this client's next push
+ * used its stale in-memory seq, the host rejected it as a chain mismatch,
+ * and every push after that failed for the rest of the container's life
+ * (the host doesn't support resync recovery on this direction — see the
+ * resync_point handling below).
+ *
  * Usage: `handler` is registered against `connectSyncClient`'s handlers map
  * *before* connecting (transport.ts's channel-handler contract); `attach` is
  * then called with the resulting SyncClient so `push*()` has something to
@@ -33,6 +47,7 @@
  */
 import type { Database } from 'bun:sqlite';
 
+import { acquireChainLockAsync, releaseChainLock, tryAcquireChainLockSync } from './chain-lock.js';
 import { GENESIS_CHAIN, nextChain, verifyChain, type SyncMessage, type SyncMessageKind } from './protocol.js';
 import type { SyncClient } from './transport.js';
 
@@ -83,9 +98,53 @@ interface ResyncPoint {
   seq: number;
   chain: string;
 }
+interface ResyncRequest {
+  type: 'resync_request';
+}
 interface Ack {
   type: 'ack';
   seq: number;
+}
+
+/**
+ * session_sync_outbound_log is in schema.ts's OUTBOUND_SCHEMA for new
+ * sessions, but existing .sync-local/outbound.db files created before this
+ * table existed have no ALTER-forward migration to pick it up (same gap
+ * server.ts's own ensureSyncLogTable works around for the host's log) —
+ * guard defensively at point of use instead of trusting schema.ts alone.
+ */
+function ensureOutboundLogTable(db: Database): void {
+  db.exec(`CREATE TABLE IF NOT EXISTS session_sync_outbound_log (
+    seq     INTEGER PRIMARY KEY,
+    kind    TEXT NOT NULL,
+    chain   TEXT NOT NULL,
+    payload TEXT NOT NULL
+  )`);
+}
+
+function logOutboundPush(db: Database, seq: number, kind: SyncMessageKind, chain: string, payload: unknown): void {
+  ensureOutboundLogTable(db);
+  db.prepare('INSERT OR REPLACE INTO session_sync_outbound_log (seq, kind, chain, payload) VALUES (?, ?, ?, ?)').run(
+    seq,
+    kind,
+    chain,
+    JSON.stringify(payload),
+  );
+}
+
+interface OutboundLogRow {
+  seq: number;
+  kind: SyncMessageKind;
+  chain: string;
+  payload: string;
+}
+
+/** Every logged push past `fromSeq`, in order — what the host is missing after it reports its own position via a resync_point. */
+function readOutboundLogSince(db: Database, fromSeq: number): OutboundLogRow[] {
+  ensureOutboundLogTable(db);
+  return db
+    .prepare('SELECT seq, kind, chain, payload FROM session_sync_outbound_log WHERE seq > ? ORDER BY seq ASC')
+    .all(fromSeq) as OutboundLogRow[];
 }
 
 export interface SyncClientHandle {
@@ -119,10 +178,23 @@ export interface SyncClientHandle {
 export function createSyncClient(
   outboundDb: Database,
   applyInboundRow: (kind: SyncMessageKind, payload: unknown) => void,
+  syncLocalDir: string,
 ): SyncClientHandle {
   const state = loadChainState(outboundDb);
   const pending = new Map<number, { resolve: () => void; reject: (err: Error) => void }>();
   let send: SyncClient['send'] | null = null;
+  // Held for as long as `pending` is non-empty — see the file header's note
+  // on why the outbound chain needs a cross-process lock. Tracked separately
+  // from `pending.size` because a burst's last waiter can be removed by
+  // either resolve() or reject() and either path must release exactly once.
+  let lockHeld = false;
+
+  function releaseLockIfIdle(): void {
+    if (lockHeld && pending.size === 0) {
+      lockHeld = false;
+      releaseChainLock(syncLocalDir);
+    }
+  }
 
   function handler(body: unknown): void {
     const msg = body as Ack | ResyncPoint | SyncMessage;
@@ -138,12 +210,17 @@ export function createSyncClient(
     }
 
     if ((msg as ResyncPoint).type === 'resync_point') {
-      // Host rejected our last push (chain mismatch) or answered a
-      // resync_request. Divergence recovery (resending from the host's
-      // point) is Phase 3+ — for now, reject any outstanding push so the
-      // caller surfaces the problem instead of hanging silently.
-      for (const [, waiter] of pending) waiter.reject(new Error('session-sync: chain resync required'));
-      pending.clear();
+      // Host reporting its actual outbound position — either because our
+      // last push mismatched, or because we asked (attach()'s
+      // resync_request, sent on every connect/reconnect). Either way, the
+      // fix is the same: replay everything logged past the host's point.
+      // Safe unconditionally — replay starts strictly after what the host
+      // already has, so anything it already applied is never resent (same
+      // "WHERE seq > ?" semantics as server.ts's own replayInboundLog), and
+      // any waiter still in `pending` for a replayed seq resolves normally
+      // once the host's ack for it comes back in.
+      const point = msg as ResyncPoint;
+      replayOutboundLog(point.seq);
       return;
     }
 
@@ -177,8 +254,22 @@ export function createSyncClient(
     send?.('session-sync', { type: 'ack', seq: syncMsg.seq });
   }
 
-  function push(kind: SyncMessageKind, payload: unknown): Promise<void> {
-    if (!send) return Promise.reject(new Error('session-sync: client not attached to a connection yet'));
+  // Re-transmits every logged push past `fromSeq` over the current
+  // connection, in order. Pure retransmission — doesn't touch `pending` or
+  // allocate new seqs, since these were already chain-computed the first
+  // time they were sent (mirrors server.ts's replayInboundLog).
+  function replayOutboundLog(fromSeq: number): void {
+    if (!send) return;
+    const rows = readOutboundLogSince(outboundDb, fromSeq);
+    for (const row of rows) {
+      send('session-sync', { seq: row.seq, kind: row.kind, chain: row.chain, payload: JSON.parse(row.payload) } satisfies SyncMessage);
+    }
+  }
+
+  // Sends one row assuming the chain lock is already held by this client.
+  // Split out of push() so a burst of same-tick calls (lockHeld already
+  // true) can skip straight to sending instead of re-acquiring per call.
+  function sendLocked(kind: SyncMessageKind, payload: unknown): Promise<void> {
     const seq = state.outbound.seq + 1;
     const chain = nextChain(state.outbound.chain, seq, payload);
     // Reserve the seq synchronously, before the async ack round trip — two
@@ -193,10 +284,43 @@ export function createSyncClient(
         resolve: () => {
           persistChainState(outboundDb, state);
           resolve();
+          releaseLockIfIdle();
         },
-        reject,
+        reject: (err) => {
+          reject(err);
+          releaseLockIfIdle();
+        },
       });
+      logOutboundPush(outboundDb, seq, kind, chain, payload);
       send!('session-sync', { seq, kind, chain, payload } satisfies SyncMessage);
+    });
+  }
+
+  function push(kind: SyncMessageKind, payload: unknown): Promise<void> {
+    if (!send) return Promise.reject(new Error('session-sync: client not attached to a connection yet'));
+
+    // Already holding the lock for an earlier unacked push in this burst —
+    // send synchronously, same as before this client took the cross-process
+    // lock into account (keeps same-tick multi-push batching lock-free).
+    if (lockHeld) return sendLocked(kind, payload);
+
+    if (tryAcquireChainLockSync(syncLocalDir)) {
+      lockHeld = true;
+      // A sibling CLI subprocess (ncl.ts/host-shim.ts) may have advanced the
+      // chain since our last push while we held no lock — re-read before
+      // trusting state.outbound, or we'd resend a stale seq and get a
+      // resync_point we can't recover from.
+      state.outbound = loadChainState(outboundDb).outbound;
+      return sendLocked(kind, payload);
+    }
+
+    // Contended — a CLI subprocess currently holds the lock. Wait
+    // asynchronously (never Bun.sleepSync) so this doesn't stall the poll
+    // loop, mcp tools, or heartbeat while it finishes.
+    return acquireChainLockAsync(syncLocalDir).then(() => {
+      lockHeld = true;
+      state.outbound = loadChainState(outboundDb).outbound;
+      return sendLocked(kind, payload);
     });
   }
 
@@ -204,6 +328,12 @@ export function createSyncClient(
     handler,
     attach(sync: SyncClient): void {
       send = sync.send;
+      // Ask the host where it actually is on every (re)connect — catches a
+      // push that was sent but never acked because the socket dropped
+      // mid-flight, which an unsolicited resync_point alone wouldn't (the
+      // host has nothing to reject; it's just never heard from us since).
+      // Answered as a resync_point, handled by the same replay path above.
+      send('session-sync', { type: 'resync_request' } satisfies ResyncRequest);
     },
     pushOutbound: (payload) => push('outbound', payload),
     pushAck: (payload) => push('ack', payload),
