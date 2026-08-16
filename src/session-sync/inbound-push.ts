@@ -20,6 +20,7 @@
  * 'sync' transport in production.
  */
 import { getContainerConfig } from '../db/container-configs.js';
+import { markDeliveredSynced, openInboundDb } from '../db/session-db.js';
 import { outboundDbPath } from '../session-manager.js';
 import { log } from '../log.js';
 import type { SyncMessageKind } from './protocol.js';
@@ -96,9 +97,38 @@ export interface DeliveredPayload {
   delivered_at: string;
 }
 
-/** Called after markDelivered (src/db/session-db.ts) writes a delivery outcome. */
-export function notifyDeliveredWrite(agentGroupId: string, sessionId: string, row: DeliveredPayload): void {
-  notifyInboundKindWrite(agentGroupId, sessionId, 'delivered', row);
+/**
+ * Called after markDelivered (src/db/session-db.ts) writes a delivery
+ * outcome, and again from backfillPendingDelivered (session-manager.ts) on
+ * reconnect. Marks the row sync_acked once the container confirms it, so a
+ * later reconnect knows not to re-send it (see
+ * docs/session-sync-transport.md §8.2 item 4 / §8.6.4).
+ */
+export function notifyDeliveredWrite(
+  agentGroupId: string,
+  sessionId: string,
+  row: DeliveredPayload,
+  inboundDbPath?: string,
+): void {
+  if (!activeSyncServer) return;
+  const config = getContainerConfig(agentGroupId);
+  if (config?.transport !== 'sync') return;
+  const ws = activeSyncServer.connections.get(sessionId);
+  if (!ws) return;
+
+  pushInboundRow(sessionId, ws, (sid) => outboundDbPath(agentGroupId, sid), 'delivered', row)
+    .then(() => {
+      if (!inboundDbPath) return;
+      const db = openInboundDb(inboundDbPath);
+      try {
+        markDeliveredSynced(db, row.message_out_id);
+      } finally {
+        db.close();
+      }
+    })
+    .catch((err) => {
+      log.error('session-sync: inbound push failed', { sessionId, kind: 'delivered', err });
+    });
 }
 
 export interface DestinationsPayload {

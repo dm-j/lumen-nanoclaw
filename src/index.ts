@@ -12,7 +12,12 @@ import { enforceStartupBackoff, resetCircuitBreaker } from './circuit-breaker.js
 import { getDb, hasTable, initDb } from './db/connection.js';
 import { runMigrations } from './db/migrations/index.js';
 import { getSession } from './db/sessions.js';
-import { backfillPendingInbound, outboundDbPath, writeSessionRouting } from './session-manager.js';
+import {
+  backfillPendingDelivered,
+  backfillPendingInbound,
+  outboundDbPath,
+  writeSessionRouting,
+} from './session-manager.js';
 import { ensureContainerRuntimeRunning, cleanupOrphans } from './container-runtime.js';
 import { startActiveDeliveryPoll, startSweepDeliveryPoll, setDeliveryAdapter, stopDeliveryPolls } from './delivery.js';
 import { startHostSweep, stopHostSweep } from './host-sweep.js';
@@ -112,6 +117,7 @@ async function main(): Promise<void> {
       }
       writeSessionRouting(session.agent_group_id, sessionId);
       backfillPendingInbound(session.agent_group_id, sessionId);
+      backfillPendingDelivered(session.agent_group_id, sessionId);
     },
   );
   registerSyncServer(syncServer);

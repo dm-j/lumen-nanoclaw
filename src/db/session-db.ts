@@ -327,6 +327,14 @@ export function migrateDeliveredTable(db: Database.Database): void {
   if (!cols.has('status')) {
     db.prepare("ALTER TABLE delivered ADD COLUMN status TEXT NOT NULL DEFAULT 'delivered'").run();
   }
+  if (!cols.has('sync_acked')) {
+    db.prepare('ALTER TABLE delivered ADD COLUMN sync_acked INTEGER NOT NULL DEFAULT 0').run();
+  }
+}
+
+/** Mark a delivered row as acked by the container's sync client (see notifyDeliveredWrite). */
+export function markDeliveredSynced(db: Database.Database, messageOutId: string): void {
+  db.prepare('UPDATE delivered SET sync_acked = 1 WHERE message_out_id = ?').run(messageOutId);
 }
 
 // LEGACY-COMPAT(v1-tasks): adds columns added to messages_in after the initial

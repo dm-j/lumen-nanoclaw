@@ -31,7 +31,7 @@ import { runGuarded, type DeliveryGuardSpec, type GuardedDeliveryHandler } from 
 import { isUnguarded, type Unguarded } from './guard/index.js';
 import { log } from './log.js';
 import { normalizeOptions } from './channels/ask-question.js';
-import { clearOutbox, openInboundDb, openOutboundDb, readOutboxFiles } from './session-manager.js';
+import { clearOutbox, inboundDbPath, openInboundDb, openOutboundDb, readOutboxFiles } from './session-manager.js';
 import { notifyDeliveredWrite } from './session-sync/inbound-push.js';
 import { pauseTypingRefreshAfterDelivery, setTypingAdapter } from './modules/typing/index.js';
 import type { OutboundFile } from './channels/adapter.js';
@@ -204,7 +204,12 @@ async function drainSession(session: Session): Promise<void> {
       try {
         const platformMsgId = await deliverMessage(msg, session, inDb);
         const deliveredRow = markDelivered(inDb, msg.id, platformMsgId ?? null);
-        notifyDeliveredWrite(session.agent_group_id, session.id, deliveredRow);
+        notifyDeliveredWrite(
+          session.agent_group_id,
+          session.id,
+          deliveredRow,
+          inboundDbPath(session.agent_group_id, session.id),
+        );
         deliveryAttempts.delete(msg.id);
 
         // Live per-turn vault transcript export — cheap no-op when the
@@ -241,7 +246,12 @@ async function drainSession(session: Session): Promise<void> {
             err,
           });
           const failedRow = markDeliveryFailed(inDb, msg.id);
-          notifyDeliveredWrite(session.agent_group_id, session.id, failedRow);
+          notifyDeliveredWrite(
+            session.agent_group_id,
+            session.id,
+            failedRow,
+            inboundDbPath(session.agent_group_id, session.id),
+          );
           deliveryAttempts.delete(msg.id);
         } else {
           log.warn('Message delivery failed, will retry', {

@@ -38,10 +38,17 @@ import {
   openOutboundDbRw as openOutboundDbRwRaw,
   upsertSessionRouting,
   insertMessage,
+  migrateDeliveredTable,
   migrateMessagesInTable,
 } from './db/session-db.js';
 import { log } from './log.js';
-import { notifyInboundWrite, notifySessionRoutingWrite, type InboundRowPayload } from './session-sync/inbound-push.js';
+import {
+  notifyDeliveredWrite,
+  notifyInboundWrite,
+  notifySessionRoutingWrite,
+  type DeliveredPayload,
+  type InboundRowPayload,
+} from './session-sync/inbound-push.js';
 import type { Session } from './types.js';
 
 /** Root directory for all session data. */
@@ -226,6 +233,31 @@ export function backfillPendingInbound(agentGroupId: string, sessionId: string):
     db.close();
   }
   for (const row of rows) notifyInboundWrite(agentGroupId, sessionId, row);
+}
+
+/**
+ * Push every not-yet-acked `delivered` row to a freshly-connected 'sync'
+ * container — closes the gap flagged in docs/session-sync-transport.md
+ * §8.6.4 / §8.2 item 4: a container killed between sending a reply and the
+ * delivery confirmation landing would otherwise never see that
+ * confirmation, since notifyDeliveredWrite silently no-ops with no
+ * connection to push through. `sync_acked` (schema.ts) is the watermark —
+ * set once the container acks a push (see notifyDeliveredWrite), so a
+ * reconnect only re-sends what was actually missed.
+ */
+export function backfillPendingDelivered(agentGroupId: string, sessionId: string): void {
+  const dbPath = inboundDbPath(agentGroupId, sessionId);
+  if (!fs.existsSync(dbPath)) return;
+
+  const db = openInboundDb(agentGroupId, sessionId);
+  let rows: DeliveredPayload[];
+  try {
+    migrateDeliveredTable(db);
+    rows = db.prepare('SELECT * FROM delivered WHERE sync_acked = 0').all() as DeliveredPayload[];
+  } finally {
+    db.close();
+  }
+  for (const row of rows) notifyDeliveredWrite(agentGroupId, sessionId, row, dbPath);
 }
 
 /**

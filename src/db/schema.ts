@@ -197,7 +197,11 @@ CREATE TABLE IF NOT EXISTS delivered (
   message_out_id      TEXT PRIMARY KEY,
   platform_message_id TEXT,
   status              TEXT NOT NULL DEFAULT 'delivered',
-  delivered_at        TEXT NOT NULL
+  delivered_at        TEXT NOT NULL,
+  -- 'sync' transport only: 1 once the container has acked this row.
+  -- Lets a reconnect find and re-push rows that were written while the
+  -- container was disconnected (see docs/session-sync-transport.md §8.2 item 4).
+  sync_acked           INTEGER NOT NULL DEFAULT 0
 );
 
 -- Destination map for this session's agent.
