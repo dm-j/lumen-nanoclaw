@@ -159,7 +159,19 @@ export function createSyncClient(
       send?.('session-sync', { type: 'resync_point', seq: state.inbound.seq, chain: state.inbound.chain });
       return;
     }
-    applyInboundRow(syncMsg.kind, syncMsg.payload);
+    try {
+      applyInboundRow(syncMsg.kind, syncMsg.payload);
+    } catch (err) {
+      // A throw here must not silently swallow the message: without this
+      // catch, an uncaught exception inside a `ws` message-frame handler
+      // gets absorbed internally (confirmed empirically against a live
+      // container) — the ack is never sent, the host's pushInboundRow
+      // promise just hangs forever unresolved (no error, no timeout), and
+      // the row never lands locally. Loud console.error is deliberate: this
+      // runs inside the container, the only way to see it is container logs.
+      console.error(`[session-sync] applyInboundRow threw for kind "${syncMsg.kind}", seq ${syncMsg.seq}: ${String(err)}`);
+      return;
+    }
     state.inbound = { seq: syncMsg.seq, chain: nextInboundChain };
     persistChainState(outboundDb, state);
     send?.('session-sync', { type: 'ack', seq: syncMsg.seq });

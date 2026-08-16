@@ -45,8 +45,12 @@ export function getInstallCert(): TlsMaterial {
     // Required, not cosmetic: Node/Bun's TLS client checks the peer cert's
     // SAN against the connection hostname even when `ca` is pinned
     // explicitly — a cert with no SAN fails every connection outright.
+    // host.docker.internal is the address container-runner.ts actually
+    // hands the container (session-credentials.ts) — omitting it fails the
+    // handshake with an opaque ErrorEvent, only visible once something
+    // actually connects through Docker's network instead of loopback.
     '-addext',
-    'subjectAltName=DNS:localhost,IP:127.0.0.1',
+    'subjectAltName=DNS:localhost,DNS:host.docker.internal,IP:127.0.0.1',
   ]);
   fs.chmodSync(KEY_PATH, 0o600);
   return { cert: fs.readFileSync(CERT_PATH, 'utf8'), key: fs.readFileSync(KEY_PATH, 'utf8') };

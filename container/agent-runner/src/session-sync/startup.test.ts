@@ -1,9 +1,23 @@
-import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach, afterAll, mock } from 'bun:test';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
 import { initTestSessionDb, closeSessionDb } from '../db/connection.js';
+
+// bun:test's mock.module() replaces a module for the rest of the process —
+// mock.restore() (used per-test below) only undoes mock() spies, not module
+// replacements. Without this, any test file that runs after this one in the
+// same `bun test` invocation would silently get these mocks instead of the
+// real config.js/transport.js (confirmed empirically: transport.test.ts
+// failed only when run alongside this file, never in isolation). Capture
+// the real modules before any mock.module() call below, restore them here.
+const realConfig = await import('../config.js');
+const realTransport = await import('./transport.js');
+afterAll(() => {
+  mock.module('../config.js', () => realConfig);
+  mock.module('./transport.js', () => realTransport);
+});
 
 let dir: string;
 let credentialsPath: string;

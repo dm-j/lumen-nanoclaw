@@ -8,10 +8,17 @@
  * native client has no TLS options at all (no `ca`, no `rejectUnauthorized`
  * — confirmed against Bun's docs, not assumed), which would force either
  * `NODE_TLS_REJECT_UNAUTHORIZED=0` (accepts *any* server, not just the host)
- * or a plaintext fallback. `ws`'s client passes its options straight through
- * to Node's `https`/`tls` machinery, which Bun implements for compatibility,
- * so `ca` actually pins the connection to the host's own self-signed cert —
- * the one thing this module exists to get right.
+ * or a plaintext fallback.
+ *
+ * `ca`/`rejectUnauthorized` passed directly as top-level `WebSocket`
+ * constructor options are silently ignored under Bun's `ws` implementation
+ * — confirmed empirically (a real canary flip against a live container hit
+ * this: every connection failed the TLS handshake, `rejectUnauthorized`
+ * true or false, matching SAN or not — the options just weren't reaching
+ * the socket). Wrapping them in an `https.Agent` and passing that as
+ * `agent` instead is what actually works under Bun. This is the real fix,
+ * not the SAN-mismatch theory that was chased first (see cert.ts's SAN
+ * list, which stays generous but is no longer load-bearing for this).
  *
  * Channel-agnostic: connects, authenticates via the signed token the host
  * hands the container at spawn time, and routes `{channel, body}` envelopes
@@ -19,6 +26,7 @@
  * writing into the container's local inbound.db) is a separate module, not
  * yet built (see docs/session-sync-transport.md — Phase 2).
  */
+import { Agent } from 'https';
 import { WebSocket } from 'ws';
 
 export interface Envelope {
@@ -59,6 +67,21 @@ export interface SyncClient {
  * trusts *only* `pinnedCertPem` (passed as the sole CA), not the system
  * trust store, so a self-signed cert is exactly as safe as a CA-issued one
  * here: nothing else can pose as this host.
+ *
+ * `checkServerIdentity` is overridden to skip hostname verification
+ * entirely — deliberately, not a bypass of the real check. The cert is
+ * still fully validated against `pinnedCertPem` as the sole CA
+ * (`rejectUnauthorized: true` enforces that); only the *hostname-matches-
+ * SAN* step is skipped. That step can't generalize: the address a
+ * container reaches the host through varies by deployment (Docker
+ * Desktop's `host.docker.internal`, a Linux gateway IP via
+ * `hostGatewayArgs()`, or a real network address for a remote agent — see
+ * docs/roadmap/container-runner-interface.md's "Raspberry Pi on a rover"
+ * direction) and can't be baked into the cert's SAN list in advance. Since
+ * CA pinning alone already means only this exact cert (backed by a private
+ * key that never leaves the host) can complete the handshake, hostname
+ * verification adds no additional security here — it only adds a
+ * maintenance burden of enumerating every possible connecting address.
  */
 export function connectSyncClient(
   url: string,
@@ -67,7 +90,8 @@ export function connectSyncClient(
   handlers: Record<string, ChannelHandler>,
 ): Promise<SyncClient> {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(url, token, { ca: [pinnedCertPem], rejectUnauthorized: true });
+    const agent = new Agent({ ca: [pinnedCertPem], rejectUnauthorized: true, checkServerIdentity: () => undefined });
+    const ws = new WebSocket(url, token, { agent });
     let latestToken = token;
 
     ws.on('open', () => {

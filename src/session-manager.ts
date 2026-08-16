@@ -300,11 +300,27 @@ export function writeSessionMessage(
  *  row was never staged (already 'pending') or doesn't exist. */
 export function releaseStagedMessage(agentGroupId: string, sessionId: string, messageId: string): void {
   const db = openInboundDb(agentGroupId, sessionId);
+  let syncPayload: InboundRowPayload | undefined;
   try {
-    db.prepare("UPDATE messages_in SET status = 'pending' WHERE id = ? AND status = 'staged'").run(messageId);
+    const result = db
+      .prepare("UPDATE messages_in SET status = 'pending' WHERE id = ? AND status = 'staged'")
+      .run(messageId);
+    if (result.changes > 0) {
+      syncPayload = db.prepare('SELECT * FROM messages_in WHERE id = ?').get(messageId) as
+        | InboundRowPayload
+        | undefined;
+    }
   } finally {
     db.close();
   }
+  // Under 'sync' transport, the container's local copy of this row is still
+  // stuck at status='staged' (the initial writeSessionMessage push carried
+  // that value) until this status flip is pushed too — otherwise
+  // getPendingMessages()'s `WHERE status = 'pending'` filter never sees it,
+  // for the lifetime of that container. Found via a live canary flip: the
+  // exact "already-warm container, staged wake message" path this function
+  // exists for is exactly the case that was silently dropped.
+  if (syncPayload) notifyInboundWrite(agentGroupId, sessionId, syncPayload);
 }
 
 /**
