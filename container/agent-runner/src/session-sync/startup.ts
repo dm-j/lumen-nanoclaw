@@ -76,8 +76,8 @@ export async function initSessionSync(credentialsPath?: string): Promise<SyncCli
     return null;
   }
 
-  const client = createSyncClient(getOutboundDb(), (payload) => {
-    log(`received a host-pushed inbound row before the write-path rewrite lands — dropping: ${JSON.stringify(payload).slice(0, 200)}`);
+  const client = createSyncClient(getOutboundDb(), (kind, payload) => {
+    log(`received a host-pushed ${kind} row before the write-path rewrite lands — dropping: ${JSON.stringify(payload).slice(0, 200)}`);
   });
 
   try {

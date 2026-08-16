@@ -16,7 +16,10 @@ export type SyncMessageKind =
   | 'ack'
   | 'ack_processing'
   | 'session_state'
-  | 'container_state';
+  | 'container_state'
+  | 'delivered'
+  | 'destinations'
+  | 'session_routing';
 
 export interface SyncMessage {
   seq: number;

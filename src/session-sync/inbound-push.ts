@@ -22,6 +22,7 @@
 import { getContainerConfig } from '../db/container-configs.js';
 import { outboundDbPath } from '../session-manager.js';
 import { log } from '../log.js';
+import type { SyncMessageKind } from './protocol.js';
 import { pushInboundRow } from './server.js';
 import type { SyncServer } from './transport.js';
 
@@ -55,23 +56,72 @@ export interface InboundRowPayload {
 }
 
 /**
- * Fire-and-forget: pushes a newly-written messages_in row to the container
- * if (a) a sync server is running, (b) this agent group is on 'sync'
- * transport, and (c) the container is currently connected. If the container
- * isn't connected, the row is simply not pushed — it'll be missing from the
- * container's local inbound.db until the still-open reconnect/resync work
- * lands (see docs/session-sync-transport.md §6). Errors are logged, not
- * thrown — a sync failure must never block the write path that produced the
- * row in the first place.
+ * Fire-and-forget: pushes an inbound-direction write (messages_in, or one of
+ * the other host-owned inbound.db tables — delivered/destinations/
+ * session_routing, see notifyDeliveredWrite/notifyDestinationsWrite/
+ * notifySessionRoutingWrite below) to the container if (a) a sync server is
+ * running, (b) this agent group is on 'sync' transport, and (c) the
+ * container is currently connected. If the container isn't connected, the
+ * write is simply not pushed — it'll be missing from the container's local
+ * inbound.db until the still-open reconnect/resync work lands (see
+ * docs/session-sync-transport.md §6). Errors are logged, not thrown — a sync
+ * failure must never block the write path that produced the row in the
+ * first place.
  */
-export function notifyInboundWrite(agentGroupId: string, sessionId: string, row: InboundRowPayload): void {
+function notifyInboundKindWrite(
+  agentGroupId: string,
+  sessionId: string,
+  kind: SyncMessageKind,
+  payload: unknown,
+): void {
   if (!activeSyncServer) return;
   const config = getContainerConfig(agentGroupId);
   if (config?.transport !== 'sync') return;
   const ws = activeSyncServer.connections.get(sessionId);
   if (!ws) return;
 
-  pushInboundRow(sessionId, ws, (sid) => outboundDbPath(agentGroupId, sid), 'inbound', row).catch((err) => {
-    log.error('session-sync: inbound push failed', { sessionId, err });
+  pushInboundRow(sessionId, ws, (sid) => outboundDbPath(agentGroupId, sid), kind, payload).catch((err) => {
+    log.error('session-sync: inbound push failed', { sessionId, kind, err });
   });
+}
+
+export function notifyInboundWrite(agentGroupId: string, sessionId: string, row: InboundRowPayload): void {
+  notifyInboundKindWrite(agentGroupId, sessionId, 'inbound', row);
+}
+
+export interface DeliveredPayload {
+  message_out_id: string;
+  platform_message_id: string | null;
+  status: string;
+  delivered_at: string;
+}
+
+/** Called after markDelivered (src/db/session-db.ts) writes a delivery outcome. */
+export function notifyDeliveredWrite(agentGroupId: string, sessionId: string, row: DeliveredPayload): void {
+  notifyInboundKindWrite(agentGroupId, sessionId, 'delivered', row);
+}
+
+export interface DestinationsPayload {
+  name: string;
+  display_name: string | null;
+  type: 'channel' | 'agent';
+  channel_type: string | null;
+  platform_id: string | null;
+  agent_group_id: string | null;
+}
+
+/** Called after replaceDestinations (src/db/session-db.ts) overwrites the full destination map. */
+export function notifyDestinationsWrite(agentGroupId: string, sessionId: string, rows: DestinationsPayload[]): void {
+  notifyInboundKindWrite(agentGroupId, sessionId, 'destinations', rows);
+}
+
+export interface SessionRoutingPayload {
+  channel_type: string | null;
+  platform_id: string | null;
+  thread_id: string | null;
+}
+
+/** Called after upsertSessionRouting (src/db/session-db.ts) updates the single-row routing table. */
+export function notifySessionRoutingWrite(agentGroupId: string, sessionId: string, row: SessionRoutingPayload): void {
+  notifyInboundKindWrite(agentGroupId, sessionId, 'session_routing', row);
 }

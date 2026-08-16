@@ -279,16 +279,41 @@ export function getDeliveredIds(db: Database.Database): Set<string> {
   );
 }
 
-export function markDelivered(db: Database.Database, messageOutId: string, platformMessageId: string | null): void {
-  db.prepare(
-    "INSERT OR IGNORE INTO delivered (message_out_id, platform_message_id, status, delivered_at) VALUES (?, ?, 'delivered', ?)",
-  ).run(messageOutId, platformMessageId ?? null, new Date().toISOString());
+export interface DeliveredRow {
+  message_out_id: string;
+  platform_message_id: string | null;
+  status: string;
+  delivered_at: string;
 }
 
-export function markDeliveryFailed(db: Database.Database, messageOutId: string): void {
+export function markDelivered(
+  db: Database.Database,
+  messageOutId: string,
+  platformMessageId: string | null,
+): DeliveredRow {
+  const row: DeliveredRow = {
+    message_out_id: messageOutId,
+    platform_message_id: platformMessageId ?? null,
+    status: 'delivered',
+    delivered_at: new Date().toISOString(),
+  };
   db.prepare(
-    "INSERT OR IGNORE INTO delivered (message_out_id, platform_message_id, status, delivered_at) VALUES (?, NULL, 'failed', ?)",
-  ).run(messageOutId, new Date().toISOString());
+    'INSERT OR IGNORE INTO delivered (message_out_id, platform_message_id, status, delivered_at) VALUES (@message_out_id, @platform_message_id, @status, @delivered_at)',
+  ).run(row);
+  return row;
+}
+
+export function markDeliveryFailed(db: Database.Database, messageOutId: string): DeliveredRow {
+  const row: DeliveredRow = {
+    message_out_id: messageOutId,
+    platform_message_id: null,
+    status: 'failed',
+    delivered_at: new Date().toISOString(),
+  };
+  db.prepare(
+    'INSERT OR IGNORE INTO delivered (message_out_id, platform_message_id, status, delivered_at) VALUES (@message_out_id, @platform_message_id, @status, @delivered_at)',
+  ).run(row);
+  return row;
 }
 
 /** Ensure the delivered table has columns added after initial schema. */

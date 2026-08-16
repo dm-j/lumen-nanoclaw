@@ -116,7 +116,10 @@ export interface SyncClientHandle {
  * inbound.db (kept out of this module so it stays independent of
  * connection.ts's read-only-by-default singleton).
  */
-export function createSyncClient(outboundDb: Database, applyInboundRow: (payload: unknown) => void): SyncClientHandle {
+export function createSyncClient(
+  outboundDb: Database,
+  applyInboundRow: (kind: SyncMessageKind, payload: unknown) => void,
+): SyncClientHandle {
   const state = loadChainState(outboundDb);
   const pending = new Map<number, { resolve: () => void; reject: (err: Error) => void }>();
   let send: SyncClient['send'] | null = null;
@@ -156,7 +159,7 @@ export function createSyncClient(outboundDb: Database, applyInboundRow: (payload
       send?.('session-sync', { type: 'resync_point', seq: state.inbound.seq, chain: state.inbound.chain });
       return;
     }
-    applyInboundRow(syncMsg.payload);
+    applyInboundRow(syncMsg.kind, syncMsg.payload);
     state.inbound = { seq: syncMsg.seq, chain: nextInboundChain };
     persistChainState(outboundDb, state);
     send?.('session-sync', { type: 'ack', seq: syncMsg.seq });

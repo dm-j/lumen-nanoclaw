@@ -4,7 +4,15 @@ import { initTestDb, closeDb } from '../db/connection.js';
 import { runMigrations } from '../db/migrations/index.js';
 import { createAgentGroup } from '../db/agent-groups.js';
 import { ensureContainerConfig, updateContainerConfigScalars } from '../db/container-configs.js';
-import { registerSyncServer, clearSyncServer, notifyInboundWrite, type InboundRowPayload } from './inbound-push.js';
+import {
+  registerSyncServer,
+  clearSyncServer,
+  notifyInboundWrite,
+  notifyDeliveredWrite,
+  notifyDestinationsWrite,
+  notifySessionRoutingWrite,
+  type InboundRowPayload,
+} from './inbound-push.js';
 import * as serverModule from './server.js';
 import type { SyncServer } from './transport.js';
 
@@ -95,5 +103,68 @@ describe('notifyInboundWrite', () => {
     expect(() => notifyInboundWrite('ag-sync', 'sess-1', row)).not.toThrow();
     // Let the rejected promise's .catch() handler run before the test ends.
     await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+});
+
+describe('notifyDeliveredWrite / notifyDestinationsWrite / notifySessionRoutingWrite', () => {
+  beforeEach(() => {
+    const db = initTestDb();
+    runMigrations(db);
+  });
+
+  afterEach(() => {
+    closeDb();
+    clearSyncServer();
+    vi.restoreAllMocks();
+  });
+
+  it('pushes a delivered row with kind "delivered"', () => {
+    makeGroup('ag-sync', 'sync');
+    const ws = {};
+    registerSyncServer(fakeSyncServer(new Map([['sess-1', ws]])));
+    const push = vi.spyOn(serverModule, 'pushInboundRow').mockResolvedValue(undefined);
+
+    const deliveredRow = {
+      message_out_id: 'mo-1',
+      platform_message_id: 'pm-1',
+      status: 'delivered',
+      delivered_at: '2026-01-01T00:00:00.000Z',
+    };
+    notifyDeliveredWrite('ag-sync', 'sess-1', deliveredRow);
+
+    expect(push).toHaveBeenCalledWith('sess-1', ws, expect.any(Function), 'delivered', deliveredRow);
+  });
+
+  it('pushes a destinations array with kind "destinations"', () => {
+    makeGroup('ag-sync', 'sync');
+    const ws = {};
+    registerSyncServer(fakeSyncServer(new Map([['sess-1', ws]])));
+    const push = vi.spyOn(serverModule, 'pushInboundRow').mockResolvedValue(undefined);
+
+    const rows = [
+      {
+        name: 'peer',
+        display_name: 'Peer',
+        type: 'agent' as const,
+        channel_type: null,
+        platform_id: null,
+        agent_group_id: 'ag-2',
+      },
+    ];
+    notifyDestinationsWrite('ag-sync', 'sess-1', rows);
+
+    expect(push).toHaveBeenCalledWith('sess-1', ws, expect.any(Function), 'destinations', rows);
+  });
+
+  it('pushes a routing row with kind "session_routing"', () => {
+    makeGroup('ag-sync', 'sync');
+    const ws = {};
+    registerSyncServer(fakeSyncServer(new Map([['sess-1', ws]])));
+    const push = vi.spyOn(serverModule, 'pushInboundRow').mockResolvedValue(undefined);
+
+    const routing = { channel_type: 'slack', platform_id: 'C1', thread_id: null };
+    notifySessionRoutingWrite('ag-sync', 'sess-1', routing);
+
+    expect(push).toHaveBeenCalledWith('sess-1', ws, expect.any(Function), 'session_routing', routing);
   });
 });

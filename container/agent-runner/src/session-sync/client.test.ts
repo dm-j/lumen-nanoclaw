@@ -89,7 +89,7 @@ describe('createSyncClient', () => {
 
   it('applies a host-pushed inbound row once chain-verified', () => {
     const applied: unknown[] = [];
-    const client = createSyncClient(getOutboundDb(), (payload) => applied.push(payload));
+    const client = createSyncClient(getOutboundDb(), (_kind, payload) => applied.push(payload));
 
     const payload = { id: 'in-1', content: 'hi' };
     const chain = nextChain(GENESIS_CHAIN, 1, payload);
@@ -100,7 +100,7 @@ describe('createSyncClient', () => {
 
   it('drops a host-pushed inbound row with a bad chain instead of applying it', () => {
     const applied: unknown[] = [];
-    const client = createSyncClient(getOutboundDb(), (payload) => applied.push(payload));
+    const client = createSyncClient(getOutboundDb(), (_kind, payload) => applied.push(payload));
 
     client.handler({ seq: 1, kind: 'inbound', chain: 'wrong', payload: { id: 'in-1' } });
 

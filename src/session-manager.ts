@@ -41,7 +41,7 @@ import {
   migrateMessagesInTable,
 } from './db/session-db.js';
 import { log } from './log.js';
-import { notifyInboundWrite, type InboundRowPayload } from './session-sync/inbound-push.js';
+import { notifyInboundWrite, notifySessionRoutingWrite, type InboundRowPayload } from './session-sync/inbound-push.js';
 import type { Session } from './types.js';
 
 /** Root directory for all session data. */
@@ -190,16 +190,14 @@ export function writeSessionRouting(agentGroupId: string, sessionId: string): vo
     }
   }
 
+  const routing = { channel_type: channelType, platform_id: platformId, thread_id: session.thread_id };
   const db = openInboundDb(agentGroupId, sessionId);
   try {
-    upsertSessionRouting(db, {
-      channel_type: channelType,
-      platform_id: platformId,
-      thread_id: session.thread_id,
-    });
+    upsertSessionRouting(db, routing);
   } finally {
     db.close();
   }
+  notifySessionRoutingWrite(agentGroupId, sessionId, routing);
   log.debug('Session routing written', { sessionId, channelType, platformId, threadId: session.thread_id });
 }
 
