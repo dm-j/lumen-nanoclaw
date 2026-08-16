@@ -25,10 +25,6 @@ function summarize(err: unknown): string {
   return String(err);
 }
 
-function labelFor(kind: FatalKind): string {
-  return kind === 'uncaughtException' ? '💥 NanoClaw crashed' : '⚠️ NanoClaw hit an unhandled rejection';
-}
-
 async function notifyRecipients(err: unknown, kind: FatalKind): Promise<void> {
   const adapter = getDeliveryAdapter();
   if (!adapter) {
@@ -46,7 +42,8 @@ async function notifyRecipients(err: unknown, kind: FatalKind): Promise<void> {
     return;
   }
 
-  const text = `${labelFor(kind)}\n${summarize(err).slice(0, MAX_MESSAGE_LEN)}`;
+  const label = kind === 'uncaughtException' ? '💥 NanoClaw crashed' : '⚠️ NanoClaw hit an unhandled rejection';
+  const text = `${label}\n${summarize(err).slice(0, MAX_MESSAGE_LEN)}`;
 
   await Promise.allSettled(
     [...userIds].map(async (userId) => {

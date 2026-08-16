@@ -56,7 +56,7 @@ export const log = {
 
 export type FatalKind = 'uncaughtException' | 'unhandledRejection';
 type FatalHook = (err: unknown, kind: FatalKind) => Promise<void>;
-const fatalHooks: FatalHook[] = [];
+let fatalHook: FatalHook | null = null;
 
 /**
  * Register a callback to run when the process is about to die from an
@@ -64,21 +64,20 @@ const fatalHooks: FatalHook[] = [];
  * process but is just as much a real bug). Used by crash-notify.ts to DM an
  * owner/admin — kept as a hook here rather than importing delivery/DB code
  * directly into this file, which is imported by nearly everything and would
- * risk a circular import. Hooks are best-effort: a throwing hook is caught
- * and logged, never allowed to mask the original error or block shutdown.
+ * risk a circular import. One hook, not a registry — add one back if a
+ * second consumer ever shows up. Best-effort: a throwing hook is caught and
+ * logged, never allowed to mask the original error or block shutdown.
  */
 export function onFatal(cb: FatalHook): void {
-  fatalHooks.push(cb);
+  fatalHook = cb;
 }
 
 const FATAL_HOOK_TIMEOUT_MS = 5000;
 
 async function runFatalHooks(err: unknown, kind: FatalKind): Promise<void> {
-  if (fatalHooks.length === 0) return;
+  if (!fatalHook) return;
   await Promise.race([
-    Promise.allSettled(
-      fatalHooks.map((cb) => cb(err, kind).catch((hookErr) => log.error('Fatal hook threw', { err: hookErr }))),
-    ),
+    fatalHook(err, kind).catch((hookErr) => log.error('Fatal hook threw', { err: hookErr })),
     new Promise<void>((resolve) => setTimeout(resolve, FATAL_HOOK_TIMEOUT_MS).unref()),
   ]);
 }
