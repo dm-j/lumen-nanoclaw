@@ -93,6 +93,24 @@ function persistChainState(db: import('better-sqlite3').Database, state: ChainSt
   });
 }
 
+/**
+ * session_sync_log was added after this file's initial release — every
+ * session's outbound.db created before that point has no such table, and
+ * session DBs (unlike the central DB) have no ALTER-forward migration
+ * system, only a one-time ensureSchema() at creation. Same forward-compat
+ * pattern as ensureInboundChainColumns above, applied per-call rather than
+ * relying on schema.ts's CREATE TABLE IF NOT EXISTS ever running again for
+ * an already-existing file.
+ */
+function ensureSyncLogTable(db: import('better-sqlite3').Database): void {
+  db.exec(`CREATE TABLE IF NOT EXISTS session_sync_log (
+    seq     INTEGER PRIMARY KEY,
+    kind    TEXT NOT NULL,
+    chain   TEXT NOT NULL,
+    payload TEXT NOT NULL
+  )`);
+}
+
 function getChainState(sessionId: string, db: import('better-sqlite3').Database): ChainState {
   let state = chainStateBySession.get(sessionId);
   if (!state) {
@@ -239,6 +257,7 @@ export function pushInboundRow(
   {
     const logDb = openOutboundDbRw(outboundDbPathFor(sessionId));
     try {
+      ensureSyncLogTable(logDb);
       logDb
         .prepare('INSERT OR REPLACE INTO session_sync_log (seq, kind, chain, payload) VALUES (?, ?, ?, ?)')
         .run(seq, kind, chain, JSON.stringify(payload));
@@ -284,6 +303,7 @@ function replayInboundLog(
   db: import('better-sqlite3').Database,
   fromSeq: number,
 ): void {
+  ensureSyncLogTable(db);
   const rows = db
     .prepare('SELECT seq, kind, chain, payload FROM session_sync_log WHERE seq > ? ORDER BY seq ASC')
     .all(fromSeq) as Array<{ seq: number; kind: SyncMessageKind; chain: string; payload: string }>;
