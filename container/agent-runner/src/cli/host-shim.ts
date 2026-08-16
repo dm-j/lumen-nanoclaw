@@ -17,6 +17,8 @@
  */
 import { Database } from 'bun:sqlite';
 
+import { localInboundPath, pushCompletedAck, readTransport, writeAndPushSystemMessage } from './sync-outbound-push.js';
+
 type ShimResponse = {
   requestId: string;
   ok: boolean;
@@ -26,6 +28,10 @@ type ShimResponse = {
   refusalReason?: string;
 };
 
+// Under 'sync' transport these are never opened — see sync-outbound-push.ts's
+// header for why writing straight into the host-mounted files here would
+// reintroduce the concurrent-writer corruption pattern 'sync' transport
+// exists to eliminate.
 const INBOUND_DB = '/workspace/inbound.db';
 const OUTBOUND_DB = '/workspace/outbound.db';
 // See mcp-tools/memory-fact.ts's HOST_SHIM_TIMEOUT_MS for why this needs to
@@ -33,8 +39,27 @@ const OUTBOUND_DB = '/workspace/outbound.db';
 // (recall/remember/digest/briefing) rather than the old flat 30s.
 const TIMEOUT_MS = 210_000;
 
+const IS_SYNC = readTransport() === 'sync';
+
 function generateId(): string {
   return `shim-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function buildPayload(name: string, args: string[]): Record<string, unknown> {
+  const timeoutOverride = process.env.HOST_SHIM_TIMEOUT_MS_OVERRIDE
+    ? Number(process.env.HOST_SHIM_TIMEOUT_MS_OVERRIDE)
+    : undefined;
+  return {
+    name,
+    args,
+    ...(timeoutOverride && Number.isFinite(timeoutOverride) ? { timeoutMs: timeoutOverride } : {}),
+  };
+}
+
+// Under 'sync' transport, into the local outbound.db + across the sync
+// connection (see sync-outbound-push.ts) instead of the host-mounted files.
+async function writeRequestSync(requestId: string, name: string, args: string[]): Promise<void> {
+  await writeAndPushSystemMessage(requestId, { action: 'host_shim_exec', requestId, ...buildPayload(name, args) });
 }
 
 // Mirrors ncl.ts's writeRequest — BEGIN IMMEDIATE to avoid seq collisions
@@ -100,12 +125,16 @@ const CORRUPT_RETRY_DELAYS_MS = [0, 1000, 2000];
 
 function queryPendingRow(requestId: string): { id: string; content: string } | null {
   let lastErr: unknown;
+  const inboundPath = IS_SYNC ? localInboundPath() : INBOUND_DB;
   for (let attempt = 0; attempt < CORRUPT_RETRY_DELAYS_MS.length; attempt++) {
     if (CORRUPT_RETRY_DELAYS_MS[attempt] > 0) Bun.sleepSync(CORRUPT_RETRY_DELAYS_MS[attempt]);
 
-    const inDb = new Database(INBOUND_DB, { readonly: true });
+    // 'sync' transport's local .sync-local/ files never cross the VirtioFS
+    // mount boundary, so the corruption this retry loop guards against
+    // (docker/for-mac#6690) can't happen there — mmap_size=0 stays 'file'-only.
+    const inDb = new Database(inboundPath, { readonly: true });
     inDb.exec('PRAGMA busy_timeout = 5000');
-    inDb.exec('PRAGMA mmap_size = 0');
+    if (!IS_SYNC) inDb.exec('PRAGMA mmap_size = 0');
     try {
       return inDb
         .prepare("SELECT id, content FROM messages_in WHERE status = 'pending' AND content LIKE ?")
@@ -130,22 +159,26 @@ function queryPendingRow(requestId: string): { id: string; content: string } | n
 // Mirrors ncl.ts's pollResponse — fresh connection each poll for cross-mount
 // visibility, marks the row completed via processing_ack so the agent-runner
 // poll loop never surfaces it as a normal message.
-function pollResponse(requestId: string, timeoutMs: number): ShimResponse | null {
+async function pollResponse(requestId: string, timeoutMs: number): Promise<ShimResponse | null> {
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
     const row = queryPendingRow(requestId);
 
     if (row) {
-      const outDb = new Database(OUTBOUND_DB);
-      outDb.exec('PRAGMA journal_mode = DELETE');
-      outDb.exec('PRAGMA busy_timeout = 5000');
-      outDb
-        .prepare(
-          "INSERT OR REPLACE INTO processing_ack (message_id, status, status_changed) VALUES (?, 'completed', ?)",
-        )
-        .run(row.id, new Date().toISOString());
-      outDb.close();
+      if (IS_SYNC) {
+        await pushCompletedAck(row.id);
+      } else {
+        const outDb = new Database(OUTBOUND_DB);
+        outDb.exec('PRAGMA journal_mode = DELETE');
+        outDb.exec('PRAGMA busy_timeout = 5000');
+        outDb
+          .prepare(
+            "INSERT OR REPLACE INTO processing_ack (message_id, status, status_changed) VALUES (?, 'completed', ?)",
+          )
+          .run(row.id, new Date().toISOString());
+        outDb.close();
+      }
 
       const parsed = JSON.parse(row.content);
       return parsed.response as ShimResponse;
@@ -167,8 +200,12 @@ if (argv.length === 0 || argv[0] === '--help' || argv[0] === '-h') {
 const [name, ...args] = argv;
 const requestId = generateId();
 
-writeRequest(requestId, name, args);
-const resp = pollResponse(requestId, TIMEOUT_MS);
+if (IS_SYNC) {
+  await writeRequestSync(requestId, name, args);
+} else {
+  writeRequest(requestId, name, args);
+}
+const resp = await pollResponse(requestId, TIMEOUT_MS);
 
 if (!resp) {
   process.stderr.write(`host-shim: "${name}" timed out after ${TIMEOUT_MS / 1000}s\n`);
