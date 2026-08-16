@@ -104,7 +104,7 @@ describe('initSessionSync', () => {
       JSON.stringify({ url: 'wss://host.docker.internal:58636', token: 'a.b.c', pinnedCertPem: 'CERT' }),
     );
     mock.module('../config.js', () => ({ getConfig: () => ({ transport: 'sync' }) }));
-    const fakeSync = { send: () => {} };
+    const fakeSync = { send: () => {}, currentToken: () => 'a.b.c', ws: { once: () => {} } };
     mock.module('./transport.js', () => ({
       connectSyncClient: (url: string, token: string, cert: string) => {
         expect(url).toBe('wss://host.docker.internal:58636');
@@ -118,5 +118,39 @@ describe('initSessionSync', () => {
     const result = await initSessionSync(credentialsPath);
     expect(result).not.toBeNull();
     expect(typeof result?.pushOutbound).toBe('function');
+  });
+
+  it('reconnects with backoff after the socket closes', async () => {
+    fs.writeFileSync(
+      credentialsPath,
+      JSON.stringify({ url: 'wss://host.docker.internal:58636', token: 'a.b.c', pinnedCertPem: 'CERT' }),
+    );
+    mock.module('../config.js', () => ({ getConfig: () => ({ transport: 'sync' }) }));
+
+    let connectCount = 0;
+    let closeHandler: (() => void) | undefined;
+    mock.module('./transport.js', () => ({
+      connectSyncClient: (_url: string, token: string) => {
+        connectCount++;
+        return Promise.resolve({
+          send: () => {},
+          currentToken: () => token,
+          ws: { once: (event: string, cb: () => void) => { if (event === 'close') closeHandler = cb; } },
+        });
+      },
+    }));
+
+    const { initSessionSync } = await import(`./startup.js?t=${Date.now()}`);
+    const result = await initSessionSync(credentialsPath);
+    expect(result).not.toBeNull();
+    expect(connectCount).toBe(1);
+
+    closeHandler?.();
+    // Backoff schedule starts at 1000ms — nothing should reconnect before then.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(connectCount).toBe(1);
+
+    await new Promise((r) => setTimeout(r, 1200));
+    expect(connectCount).toBe(2);
   });
 });

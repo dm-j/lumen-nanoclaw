@@ -23,11 +23,48 @@ function log(msg: string): void {
   console.error(`[session-sync] ${msg}`);
 }
 
+/** Backoff schedule for reconnect attempts — caps at 30s so a long host outage doesn't spin. */
+const RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000, 30000];
+
+/**
+ * Reconnects forever in the background once the initial connection drops,
+ * using the freshest token the client has seen (host pushes a new one over
+ * AUTH_CHANNEL every tokenTtlMs/2 — see transport.ts) rather than re-reading
+ * the credentials file, which only ever holds the spawn-time token. Same
+ * `client` handle throughout: its chain state and pending pushes survive a
+ * reconnect, only the underlying socket is replaced.
+ */
+function maintainConnection(
+  client: SyncClientHandle,
+  url: string,
+  pinnedCertPem: string,
+  lastToken: string,
+  attempt = 0,
+): void {
+  const delay = RECONNECT_DELAYS_MS[Math.min(attempt, RECONNECT_DELAYS_MS.length - 1)];
+  setTimeout(() => {
+    connectSyncClient(url, lastToken, pinnedCertPem, { 'session-sync': client.handler })
+      .then((sync) => {
+        client.attach(sync);
+        log(`reconnected to host session-sync server at ${url}`);
+        sync.ws.once('close', () => maintainConnection(client, url, pinnedCertPem, sync.currentToken(), 0));
+      })
+      .catch((err) => {
+        log(`reconnect attempt failed, retrying: ${String(err)}`);
+        maintainConnection(client, url, pinnedCertPem, lastToken, attempt + 1);
+      });
+  }, delay);
+}
+
 /**
  * Returns the connected client handle, or null if this group isn't on
  * 'sync' transport, the credentials file is missing/unreadable, or the
  * connection attempt fails. Never throws — a sync failure must not prevent
  * the container from starting; it just runs as if transport were 'file'.
+ *
+ * Once connected, a dropped socket (network blip, host restart) triggers an
+ * automatic background reconnect with backoff — the caller does not need to
+ * poll or retry itself.
  */
 export async function initSessionSync(credentialsPath?: string): Promise<SyncClientHandle | null> {
   const config = getConfig();
@@ -49,6 +86,7 @@ export async function initSessionSync(credentialsPath?: string): Promise<SyncCli
     });
     client.attach(sync);
     log(`connected to host session-sync server at ${credentials.url}`);
+    sync.ws.once('close', () => maintainConnection(client, credentials.url, credentials.pinnedCertPem, sync.currentToken(), 0));
     return client;
   } catch (err) {
     log(`connection failed — continuing without a sync connection: ${String(err)}`);
