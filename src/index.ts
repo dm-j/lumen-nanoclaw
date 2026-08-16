@@ -7,6 +7,7 @@
 import path from 'path';
 
 import { backfillContainerConfigs } from './backfill-container-configs.js';
+import { registerCrashNotify } from './crash-notify.js';
 import { DATA_DIR, SESSION_SYNC_PORT } from './config.js';
 import { enforceStartupBackoff, resetCircuitBreaker } from './circuit-breaker.js';
 import { getDb, hasTable, initDb } from './db/connection.js';
@@ -198,6 +199,7 @@ async function main(): Promise<void> {
   // offline adapter is never rerouted through a sibling bot. See
   // createChannelDeliveryAdapter in channels/channel-registry.ts.
   setDeliveryAdapter(createChannelDeliveryAdapter());
+  registerCrashNotify();
 
   // 5. Start registered host modules. Imports only registered callbacks; the
   // actual work begins here, after DB + delivery are ready and before polls.

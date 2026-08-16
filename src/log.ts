@@ -54,11 +54,43 @@ export const log = {
   fatal: (msg: string, data?: Record<string, unknown>) => emit('fatal', msg, data),
 };
 
+export type FatalKind = 'uncaughtException' | 'unhandledRejection';
+type FatalHook = (err: unknown, kind: FatalKind) => Promise<void>;
+const fatalHooks: FatalHook[] = [];
+
+/**
+ * Register a callback to run when the process is about to die from an
+ * uncaught exception (or hit an unhandled rejection, which doesn't kill the
+ * process but is just as much a real bug). Used by crash-notify.ts to DM an
+ * owner/admin — kept as a hook here rather than importing delivery/DB code
+ * directly into this file, which is imported by nearly everything and would
+ * risk a circular import. Hooks are best-effort: a throwing hook is caught
+ * and logged, never allowed to mask the original error or block shutdown.
+ */
+export function onFatal(cb: FatalHook): void {
+  fatalHooks.push(cb);
+}
+
+const FATAL_HOOK_TIMEOUT_MS = 5000;
+
+async function runFatalHooks(err: unknown, kind: FatalKind): Promise<void> {
+  if (fatalHooks.length === 0) return;
+  await Promise.race([
+    Promise.allSettled(
+      fatalHooks.map((cb) => cb(err, kind).catch((hookErr) => log.error('Fatal hook threw', { err: hookErr }))),
+    ),
+    new Promise<void>((resolve) => setTimeout(resolve, FATAL_HOOK_TIMEOUT_MS).unref()),
+  ]);
+}
+
 process.on('uncaughtException', (err) => {
   log.fatal('Uncaught exception', { err });
-  process.exit(1);
+  // Exiting must not wait on a hook that hangs — runFatalHooks races its own
+  // timeout, so this always settles within FATAL_HOOK_TIMEOUT_MS regardless.
+  runFatalHooks(err, 'uncaughtException').finally(() => process.exit(1));
 });
 
 process.on('unhandledRejection', (reason) => {
   log.error('Unhandled rejection', { err: reason });
+  runFatalHooks(reason, 'unhandledRejection').catch(() => {});
 });
