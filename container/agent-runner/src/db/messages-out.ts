@@ -4,7 +4,12 @@
  * Writes to outbound.db (container-owned).
  * The host polls this DB (read-only) for undelivered messages.
  */
+import { getSyncClient } from '../session-sync/active-client.js';
 import { getInboundDb, getOutboundDb } from './connection.js';
+
+function log(msg: string): void {
+  console.error(`[db/messages-out] ${msg}`);
+}
 
 export interface MessageOutRow {
   id: string;
@@ -55,24 +60,41 @@ export function writeMessageOut(msg: WriteMessageOut): number {
 
   // bun:sqlite requires named parameters to be passed with the prefix character
   // in the JS object keys (better-sqlite3 auto-stripped it, bun:sqlite does not).
+  const row: MessageOutRow = {
+    id: msg.id,
+    seq: nextSeq,
+    timestamp: new Date().toISOString(),
+    in_reply_to: msg.in_reply_to ?? null,
+    deliver_after: msg.deliver_after ?? null,
+    recurrence: msg.recurrence ?? null,
+    kind: msg.kind,
+    platform_id: msg.platform_id ?? null,
+    channel_type: msg.channel_type ?? null,
+    thread_id: msg.thread_id ?? null,
+    content: msg.content,
+  };
   outbound
     .prepare(
       `INSERT INTO messages_out (id, seq, in_reply_to, timestamp, deliver_after, recurrence, kind, platform_id, channel_type, thread_id, content)
      VALUES ($id, $seq, $in_reply_to, $timestamp, $deliver_after, $recurrence, $kind, $platform_id, $channel_type, $thread_id, $content)`,
     )
     .run({
-      $id: msg.id,
-      $seq: nextSeq,
-      $timestamp: new Date().toISOString(),
-      $in_reply_to: msg.in_reply_to ?? null,
-      $deliver_after: msg.deliver_after ?? null,
-      $recurrence: msg.recurrence ?? null,
-      $kind: msg.kind,
-      $platform_id: msg.platform_id ?? null,
-      $channel_type: msg.channel_type ?? null,
-      $thread_id: msg.thread_id ?? null,
-      $content: msg.content,
+      $id: row.id,
+      $seq: row.seq,
+      $timestamp: row.timestamp,
+      $in_reply_to: row.in_reply_to,
+      $deliver_after: row.deliver_after,
+      $recurrence: row.recurrence,
+      $kind: row.kind,
+      $platform_id: row.platform_id,
+      $channel_type: row.channel_type,
+      $thread_id: row.thread_id,
+      $content: row.content,
     });
+
+  getSyncClient()
+    ?.pushOutbound(row)
+    .catch((err) => log(`pushOutbound failed for ${row.id}: ${String(err)}`));
 
   return nextSeq;
 }

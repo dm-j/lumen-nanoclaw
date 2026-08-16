@@ -273,7 +273,13 @@ function applyProcessingAck(db: import('better-sqlite3').Database, message: Sync
 }
 
 function applySessionStateRow(db: import('better-sqlite3').Database, message: SyncMessage): void {
-  const row = message.payload as { key: string; value: string; updated_at: string };
+  const row = message.payload as { key: string; value: string | null; updated_at: string };
+  // value: null is the container's deleteValue() signal (db/session-state.ts) —
+  // session_state.value is NOT NULL, so a delete can't be expressed as an upsert.
+  if (row.value === null) {
+    db.prepare('DELETE FROM session_state WHERE key = ?').run(row.key);
+    return;
+  }
   db.prepare(
     `INSERT INTO session_state (key, value, updated_at)
      VALUES (@key, @value, @updated_at)

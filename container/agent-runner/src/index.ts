@@ -36,6 +36,7 @@ import './providers/index.js';
 import { createProvider, type ProviderName } from './providers/factory.js';
 import type { McpServerConfig } from './providers/types.js';
 import { runPollLoop } from './poll-loop.js';
+import { registerSyncClient } from './session-sync/active-client.js';
 import type { SyncClientHandle } from './session-sync/client.js';
 import { initSessionSync } from './session-sync/startup.js';
 
@@ -86,9 +87,10 @@ async function main(): Promise<void> {
   log(`Starting v2 agent-runner (provider: ${providerName})`);
 
   // Session-sync bootstrap — no-op unless this group's container.json says
-  // transport: 'sync'. Doesn't affect DB reads/writes yet (see startup.ts
-  // header); just proves the connection itself works end-to-end.
+  // transport: 'sync'. registerSyncClient makes the client reachable from
+  // db/*.ts's dual-write push calls (session-sync/active-client.ts).
   const syncClient = await initSessionSync();
+  registerSyncClient(syncClient);
   registerShutdownDrain(syncClient);
 
   // Every provider shares one persistent memory tree. Legacy imports are an

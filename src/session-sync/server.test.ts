@@ -140,6 +140,22 @@ describe('makeSessionSyncHandler', () => {
     expect(rows).toEqual([{ value: 'v2' }]);
   });
 
+  it('deletes a session_state row when the pushed value is null (deleteValue signal)', () => {
+    const handler = makeSessionSyncHandler(() => dbPath);
+    const first = { key: 'k', value: 'v1', updated_at: '2026-01-01T00:00:00.000Z' };
+    const chain1 = nextChain(GENESIS_CHAIN, 1, first);
+    handler('sess-1', fakeWs(), { seq: 1, kind: 'session_state', chain: chain1, payload: first });
+
+    const deletion = { key: 'k', value: null, updated_at: '2026-01-01T00:00:01.000Z' };
+    const chain2 = nextChain(chain1, 3, deletion);
+    handler('sess-1', fakeWs(), { seq: 3, kind: 'session_state', chain: chain2, payload: deletion });
+
+    const db = new Database(dbPath, { readonly: true });
+    const row = db.prepare('SELECT value FROM session_state WHERE key = ?').get('k');
+    db.close();
+    expect(row).toBeUndefined();
+  });
+
   it('applies a synced container_state row (stuck-tool sweep window)', () => {
     const handler = makeSessionSyncHandler(() => dbPath);
     const ws = fakeWs();

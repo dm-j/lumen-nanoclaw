@@ -3,18 +3,17 @@
  * container.json says transport: 'sync'. A no-op for the default 'file'
  * transport — every group not opted in sees zero behavior change.
  *
- * Scope note (docs/session-sync-transport.md §6): this only proves the
- * connection works end-to-end (host accepts the token, cert pin holds,
- * client.attach succeeds). The bind mounts and every DB read/write call site
- * (poll-loop.ts, mcp-tools send_message/edit_message/add_reaction,
- * session_state, container_state) still talk to the local files exactly as
- * they do under 'file' transport — rerouting them onto this connection is a
- * separate, deliberately deferred piece of work, since flipping the mounts
- * before every write path is rewired would silently drop an opted-in
- * group's agent replies.
+ * Under 'sync' transport, db/connection.ts redirects inbound.db/outbound.db
+ * to a container-local copy (/workspace/.sync-local/) instead of the
+ * host-mounted files, and db/*.ts's write helpers dual-write: the local
+ * insert plus a push to the host via the connected client (see
+ * session-sync/active-client.ts, registered from index.ts right after this
+ * function returns). applyInboundRow (below) is the reverse direction: a
+ * host-pushed row gets applied into that same local inbound.db copy.
  */
 import { getConfig } from '../config.js';
 import { getOutboundDb } from '../db/connection.js';
+import { applyInboundRow } from './apply-inbound.js';
 import { createSyncClient, type SyncClientHandle } from './client.js';
 import { loadSessionSyncCredentials } from './credentials.js';
 import { connectSyncClient } from './transport.js';
@@ -76,9 +75,7 @@ export async function initSessionSync(credentialsPath?: string): Promise<SyncCli
     return null;
   }
 
-  const client = createSyncClient(getOutboundDb(), (kind, payload) => {
-    log(`received a host-pushed ${kind} row before the write-path rewrite lands — dropping: ${JSON.stringify(payload).slice(0, 200)}`);
-  });
+  const client = createSyncClient(getOutboundDb(), applyInboundRow);
 
   try {
     const sync = await connectSyncClient(credentials.url, credentials.token, credentials.pinnedCertPem, {
