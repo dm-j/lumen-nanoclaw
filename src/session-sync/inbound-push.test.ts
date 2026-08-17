@@ -76,12 +76,12 @@ describe('notifyInboundWrite', () => {
     expect(push).not.toHaveBeenCalled();
   });
 
-  it('does nothing when the session has no live connection', () => {
+  it('still logs the row for reconnect replay when the session has no live connection', () => {
     makeGroup('ag-sync', 'sync');
     registerSyncServer(fakeSyncServer(new Map()));
-    const push = vi.spyOn(serverModule, 'pushInboundRow');
+    const push = vi.spyOn(serverModule, 'pushInboundRow').mockResolvedValue(undefined);
     notifyInboundWrite('ag-sync', 'sess-1', row);
-    expect(push).not.toHaveBeenCalled();
+    expect(push).toHaveBeenCalledWith('sess-1', undefined, expect.any(Function), 'inbound', row);
   });
 
   it('pushes the row when transport is sync and the session is connected', () => {

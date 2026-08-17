@@ -224,13 +224,16 @@ export function makeSessionSyncHandler(outboundDbPathFor: (sessionId: string) =>
  * Pushes one row to the container in the host-to-container direction (host
  * is chain authority). Resolves once the container acks; rejects if the
  * container reports a chain mismatch (`resync_point`) — same "surface it,
- * don't auto-recover" contract as client.ts's push(). No caller wires this
- * to a live inbound.db write path yet (see docs/session-sync-transport.md §6)
- * — `sessionId` must already have an open connection in `connections`.
+ * don't auto-recover" contract as client.ts's push(). The row is always
+ * reserved a seq/chain and logged to session_sync_log first, regardless of
+ * connection state — that's what lets replayInboundLog recover it on the
+ * container's next reconnect. If `ws` is undefined (container not currently
+ * connected), the row is logged and this resolves immediately without
+ * attempting a live send; the container picks it up via replay instead.
  */
 export function pushInboundRow(
   sessionId: string,
-  ws: WebSocket,
+  ws: WebSocket | undefined,
   outboundDbPathFor: (sessionId: string) => string,
   kind: SyncMessageKind,
   payload: unknown,
@@ -264,6 +267,20 @@ export function pushInboundRow(
     } finally {
       logDb.close();
     }
+  }
+
+  if (!ws) {
+    // Not connected right now — the row is already durably logged above, so
+    // the next reconnect's replayInboundLog will deliver it. Persist the
+    // reserved chain state immediately (mirrors the resolve() path below)
+    // so a second concurrent push doesn't reserve the same seq.
+    const persistDb = openOutboundDbRw(outboundDbPathFor(sessionId));
+    try {
+      persistChainState(persistDb, state);
+    } finally {
+      persistDb.close();
+    }
+    return Promise.resolve();
   }
 
   return new Promise((resolve, reject) => {

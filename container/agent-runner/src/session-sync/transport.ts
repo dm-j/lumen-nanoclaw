@@ -44,6 +44,25 @@ interface TokenRefresh {
   token: string;
 }
 
+/**
+ * Mirror of the host's HEARTBEAT_CHANNEL constant — must match exactly.
+ * App-level, not native WebSocket ping/pong frames: an earlier version
+ * relied on the `ws` library's automatic pong response to the host's
+ * ws.ping(), which answered reliably on the first cycle after every
+ * (re)connect but then went unanswered on the very next cycle, every
+ * single time — pointing at a Bun-vs-Node gap in this package's ping/pong
+ * frame handling (this file's own header already documents a different
+ * Bun `ws` quirk: TLS options silently ignored unless wrapped in an
+ * https.Agent). Handling ping/pong as ordinary envelopes routes it through
+ * the exact same send/receive path as every other message, so it can't
+ * depend on whatever was dropping the frame-level pong.
+ */
+const HEARTBEAT_CHANNEL = 'session-sync-heartbeat';
+
+interface HeartbeatPing {
+  type: 'ping';
+}
+
 export interface SyncClient {
   ws: WebSocket;
   send(channel: string, body: unknown): void;
@@ -124,6 +143,13 @@ export function connectSyncClient(
         const refresh = envelope.body as TokenRefresh;
         if (refresh?.type === 'token_refresh' && typeof refresh.token === 'string') {
           latestToken = refresh.token;
+        }
+        return;
+      }
+      if (envelope.channel === HEARTBEAT_CHANNEL) {
+        const ping = envelope.body as HeartbeatPing;
+        if (ping?.type === 'ping') {
+          ws.send(JSON.stringify({ channel: HEARTBEAT_CHANNEL, body: { type: 'pong' } } satisfies Envelope));
         }
         return;
       }

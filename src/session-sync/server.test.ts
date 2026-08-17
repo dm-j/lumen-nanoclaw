@@ -203,6 +203,26 @@ describe('makeSessionSyncHandler', () => {
       expect(row.inbound_seq).toBe(1);
     });
 
+    it('logs the row and resolves immediately when the container is not connected', async () => {
+      const payload = { id: 'in-1', content: 'hi' };
+      await expect(pushInboundRow('sess-1', undefined, () => dbPath, 'inbound', payload)).resolves.toBeUndefined();
+
+      const db = new Database(dbPath, { readonly: true });
+      const logRow = db.prepare('SELECT seq, kind, payload FROM session_sync_log WHERE seq = 1').get() as {
+        seq: number;
+        kind: string;
+        payload: string;
+      };
+      const stateRow = db.prepare('SELECT inbound_seq FROM session_sync_state WHERE id = 1').get() as {
+        inbound_seq: number;
+      };
+      db.close();
+
+      expect(logRow.kind).toBe('inbound');
+      expect(JSON.parse(logRow.payload)).toEqual(payload);
+      expect(stateRow.inbound_seq).toBe(1);
+    });
+
     it('replays from the log when the container reports a resync_point instead of acking', async () => {
       const handler = makeSessionSyncHandler(() => dbPath);
       const ws = fakeWs();

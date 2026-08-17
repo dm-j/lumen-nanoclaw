@@ -57,7 +57,15 @@ function connectMinimalSyncClient(
 ): Promise<{ send(channel: string, body: unknown): void; close(): void }> {
   return new Promise((resolve, reject) => {
     const agent = new Agent({ ca: [pinnedCertPem], rejectUnauthorized: true, checkServerIdentity: () => undefined });
-    const ws = new WebSocket(url, token, { agent });
+    // Marks this as a send-and-ack-only connection so the host's
+    // `connections` map (session-sync/transport.ts) — which exists only to
+    // route host-initiated pushes to the container's *persistent*
+    // connection — never registers or evicts this short-lived one. Without
+    // it, this connection (opened fresh per CLI invocation, closed within
+    // ~seconds) would clobber the persistent connection's tracked slot and
+    // then delete it on close, leaving the still-open persistent connection
+    // silently untracked for any push that happens after.
+    const ws = new WebSocket(url, token, { agent, headers: { 'x-session-sync-role': 'transient' } });
 
     ws.on('open', () => {
       resolve({

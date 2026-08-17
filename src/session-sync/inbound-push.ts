@@ -11,13 +11,13 @@
  * exactly today's behavior for every existing install.
  *
  * Scope note: only writeSessionMessage (src/session-manager.ts) — the
- * primary chat-inbound path via router.ts — calls this today. Task-wake
+ * primary chat-inbound path via router.ts, which includes host_shim_exec
+ * responses (src/modules/host-shim/index.ts) — calls this today. Task-wake
  * messages, `cli_request` inline replies, and agent-to-agent inbound also
  * write messages_in (see docs/session-sync-transport.md §6) but don't push
- * yet — under 'sync' transport those rows would currently be silently lost
- * (no shared filesystem to fall back on), same as this file's own status
- * until it's wired in. Not a problem in practice yet: no agent group runs
- * 'sync' transport in production.
+ * yet. If the container isn't connected at push time, pushInboundRow still
+ * logs the row to session_sync_log so it's delivered on the next reconnect
+ * via replayInboundLog — see that function's doc comment.
  */
 import { getContainerConfig } from '../db/container-configs.js';
 import { markDeliveredSynced, openInboundDb } from '../db/session-db.js';
@@ -61,13 +61,13 @@ export interface InboundRowPayload {
  * the other host-owned inbound.db tables — delivered/destinations/
  * session_routing, see notifyDeliveredWrite/notifyDestinationsWrite/
  * notifySessionRoutingWrite below) to the container if (a) a sync server is
- * running, (b) this agent group is on 'sync' transport, and (c) the
- * container is currently connected. If the container isn't connected, the
- * write is simply not pushed — it'll be missing from the container's local
- * inbound.db until the still-open reconnect/resync work lands (see
- * docs/session-sync-transport.md §6). Errors are logged, not thrown — a sync
- * failure must never block the write path that produced the row in the
- * first place.
+ * running and (b) this agent group is on 'sync' transport. If (c) the
+ * container isn't currently connected, pushInboundRow still logs the row to
+ * session_sync_log (chain state reserved synchronously either way) so it's
+ * delivered via replay on the container's next reconnect, instead of being
+ * silently dropped — see docs/session-sync-transport.md §6. Errors are
+ * logged, not thrown — a sync failure must never block the write path that
+ * produced the row in the first place.
  */
 function notifyInboundKindWrite(
   agentGroupId: string,
@@ -79,7 +79,12 @@ function notifyInboundKindWrite(
   const config = getContainerConfig(agentGroupId);
   if (config?.transport !== 'sync') return;
   const ws = activeSyncServer.connections.get(sessionId);
-  if (!ws) return;
+  if (!ws)
+    log.warn('session-sync: pushing inbound row while disconnected, deferred to reconnect replay', {
+      sessionId,
+      kind,
+      connectedSessions: Array.from(activeSyncServer.connections.keys()),
+    });
 
   pushInboundRow(sessionId, ws, (sid) => outboundDbPath(agentGroupId, sid), kind, payload).catch((err) => {
     log.error('session-sync: inbound push failed', { sessionId, kind, err });
