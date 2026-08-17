@@ -92,7 +92,19 @@ function connectMinimalSyncClient(
 const DEFAULT_CONFIG_PATH = '/workspace/agent/container.json';
 const DEFAULT_CREDENTIALS_PATH = '/workspace/.session-sync.json';
 const DEFAULT_SYNC_LOCAL_DIR = '/workspace/.sync-local';
-const ACK_TIMEOUT_MS = 10_000;
+let _ackTimeoutMs = 10_000;
+/** Test-only: exercise the retry loop (see MAX_PUSH_ATTEMPTS) without a real 10s-per-attempt wait. */
+export function setAckTimeoutForTest(ms: number): void {
+  _ackTimeoutMs = ms;
+}
+/**
+ * Retry budget for a single row push (see pushOverSyncConnection). The
+ * container-to-host connection has been observed to drop and reconnect on
+ * roughly a 40s cycle under some Docker networking configurations (see
+ * docs/session-sync-transport.md §8.11) — 4 attempts at 10s each covers at
+ * least one full drop-and-recover cycle before giving up for real.
+ */
+const MAX_PUSH_ATTEMPTS = 4;
 
 let _configPath = DEFAULT_CONFIG_PATH;
 let _credentialsPath = DEFAULT_CREDENTIALS_PATH;
@@ -124,14 +136,101 @@ function readCredentials(): Credentials {
   return JSON.parse(fs.readFileSync(_credentialsPath, 'utf8')) as Credentials;
 }
 
+function persistOutboundState(outDb: InstanceType<typeof Database>, seq: number, chain: string): void {
+  outDb
+    .prepare(
+      `INSERT INTO session_sync_state (id, outbound_seq, outbound_chain, inbound_seq, inbound_chain, updated_at)
+       VALUES (1, $seq, $chain, COALESCE((SELECT inbound_seq FROM session_sync_state WHERE id = 1), 0),
+               COALESCE((SELECT inbound_chain FROM session_sync_state WHERE id = 1), ''), $updated_at)
+       ON CONFLICT(id) DO UPDATE SET
+         outbound_seq = excluded.outbound_seq, outbound_chain = excluded.outbound_chain, updated_at = excluded.updated_at`,
+    )
+    .run({ $seq: seq, $chain: chain, $updated_at: new Date().toISOString() });
+}
+
+/**
+ * Connects fresh, sends `body` over the 'session-sync' channel, and waits
+ * up to ACK_TIMEOUT_MS for `isMatch` to see a reply that settles it — one
+ * connect-send-wait-close cycle, always. Shared by checkHostPosition (a
+ * resync_request) and sendRow (the actual row) below so each stays a plain,
+ * single-purpose function instead of one doing double duty across two
+ * different messages on a supposedly-reused socket.
+ */
+async function connectSendAndWait<T>(
+  credentials: Credentials,
+  body: unknown,
+  isMatch: (body: { type?: string; seq?: number }) => T | undefined,
+  onTimeout: T,
+): Promise<T> {
+  let resolveOutcome!: (result: T) => void;
+  const outcome = new Promise<T>((resolve) => {
+    resolveOutcome = resolve;
+  });
+  const timeout = setTimeout(() => resolveOutcome(onTimeout), _ackTimeoutMs);
+
+  let sync: Awaited<ReturnType<typeof connectMinimalSyncClient>>;
+  try {
+    sync = await connectMinimalSyncClient(credentials.url, credentials.token, credentials.pinnedCertPem, (channel, rawBody) => {
+      if (channel !== 'session-sync') return;
+      const matched = isMatch(rawBody as { type?: string; seq?: number });
+      if (matched !== undefined) {
+        clearTimeout(timeout);
+        resolveOutcome(matched);
+      }
+    });
+  } catch {
+    clearTimeout(timeout);
+    return onTimeout;
+  }
+
+  try {
+    sync.send('session-sync', body);
+    return await outcome;
+  } finally {
+    sync.close();
+  }
+}
+
+/**
+ * Asks the host where it actually is on the outbound chain. Used only on a
+ * retry, after a prior attempt's connection dropped before its ack arrived
+ * — distinguishes "the row never reached the host" (host's position < seq,
+ * resend it) from "the row landed and only the ack got lost in the drop"
+ * (host's position >= seq, nothing to resend). Reuses the host's existing
+ * resync_request/resync_point protocol (already implemented for the
+ * persistent client, client.ts) — no host-side change needed.
+ */
+function checkHostAlreadyHas(credentials: Credentials, seq: number): Promise<boolean> {
+  return connectSendAndWait(
+    credentials,
+    { type: 'resync_request' },
+    (b) => (b.type === 'resync_point' && typeof b.seq === 'number' ? b.seq >= seq : undefined),
+    false,
+  );
+}
+
+/** Sends the row itself and waits for its matching ack. */
+function sendRow(credentials: Credentials, seq: number, chain: string, kind: SyncMessageKind, payload: unknown): Promise<boolean> {
+  return connectSendAndWait(
+    credentials,
+    { seq, kind, chain, payload },
+    (b) => (b.type === 'ack' && b.seq === seq ? true : b.type === 'resync_point' ? false : undefined),
+    false,
+  );
+}
+
 /**
  * Pushes one row to the host over a short-lived sync connection, under the
  * local chain lock — computes the next outbound seq/chain from the local
  * session_sync_state row (shared keyspace with client.ts's own outbound
  * pushes), sends, waits for the ack, and persists the advanced state.
- * Throws if the host doesn't ack within ACK_TIMEOUT_MS or reports a
- * resync_point (chain divergence — should not happen under the lock, but
- * surfaced as an error rather than silently dropped either way).
+ *
+ * Retries across a fresh connection up to MAX_PUSH_ATTEMPTS times if the
+ * host never responds (connection dropped mid-flight — see
+ * docs/session-sync-transport.md §8.11 for why this connection drops on a
+ * short, environment-driven cycle) rather than failing the caller's whole
+ * CLI invocation over what's usually a transient blip. Only throws once
+ * every attempt is exhausted.
  */
 async function pushOverSyncConnection(outDb: InstanceType<typeof Database>, kind: SyncMessageKind, payload: unknown): Promise<void> {
   if (!tryAcquireChainLockSync(_syncLocalDir)) await acquireChainLockAsync(_syncLocalDir);
@@ -141,49 +240,21 @@ async function pushOverSyncConnection(outDb: InstanceType<typeof Database>, kind
       | undefined;
     const seq = (row?.outbound_seq ?? 0) + 1;
     const chain = nextChain(row?.outbound_chain || GENESIS_CHAIN, seq, payload);
-
     const credentials = readCredentials();
 
-    let resolveAck!: (ok: boolean) => void;
-    const acked = new Promise<boolean>((resolve) => {
-      resolveAck = resolve;
-    });
-    const timeout = setTimeout(() => resolveAck(false), ACK_TIMEOUT_MS);
-
-    const sync = await connectMinimalSyncClient(
-      credentials.url,
-      credentials.token,
-      credentials.pinnedCertPem,
-      (channel, body) => {
-        if (channel !== 'session-sync') return;
-        const b = body as { type?: string; seq?: number };
-        if (b.type === 'ack' && b.seq === seq) {
-          clearTimeout(timeout);
-          resolveAck(true);
-        } else if (b.type === 'resync_point') {
-          clearTimeout(timeout);
-          resolveAck(false);
-        }
-      },
-    );
-
-    try {
-      sync.send('session-sync', { seq, kind, chain, payload });
-      const ok = await acked;
-      if (!ok) throw new Error('sync-outbound-push: push was not acked (timeout or chain resync required)');
-
-      outDb
-        .prepare(
-          `INSERT INTO session_sync_state (id, outbound_seq, outbound_chain, inbound_seq, inbound_chain, updated_at)
-           VALUES (1, $seq, $chain, COALESCE((SELECT inbound_seq FROM session_sync_state WHERE id = 1), 0),
-                   COALESCE((SELECT inbound_chain FROM session_sync_state WHERE id = 1), ''), $updated_at)
-           ON CONFLICT(id) DO UPDATE SET
-             outbound_seq = excluded.outbound_seq, outbound_chain = excluded.outbound_chain, updated_at = excluded.updated_at`,
-        )
-        .run({ $seq: seq, $chain: chain, $updated_at: new Date().toISOString() });
-    } finally {
-      sync.close();
+    for (let attempt = 0; attempt < MAX_PUSH_ATTEMPTS; attempt++) {
+      if (attempt > 0 && (await checkHostAlreadyHas(credentials, seq))) {
+        persistOutboundState(outDb, seq, chain);
+        return;
+      }
+      if (await sendRow(credentials, seq, chain, kind, payload)) {
+        persistOutboundState(outDb, seq, chain);
+        return;
+      }
+      // Neither landed — connection dropped or never came up; loop retries
+      // fresh, unless attempts are exhausted.
     }
+    throw new Error(`sync-outbound-push: push was not acked after ${MAX_PUSH_ATTEMPTS} attempts (host unreachable)`);
   } finally {
     releaseChainLock(_syncLocalDir);
   }

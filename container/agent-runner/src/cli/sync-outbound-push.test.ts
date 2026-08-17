@@ -10,7 +10,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 
 import { INBOUND_SCHEMA, OUTBOUND_SCHEMA } from '../db/schema.js';
 
-const { pushCompletedAck, readTransport, setPathsForTest, writeAndPushSystemMessage } = await import(
+const { pushCompletedAck, readTransport, setAckTimeoutForTest, setPathsForTest, writeAndPushSystemMessage } = await import(
   `./sync-outbound-push.js?t=${Date.now()}`
 );
 
@@ -63,6 +63,57 @@ function startFakeHost(): { url: string; cert: string; close(): void; received: 
   };
 }
 
+/**
+ * Fake host whose behavior on each successive connection is scripted via
+ * `behaviors[connectionIndex]` (defaults to 'normal' past the end of the
+ * array) — for testing pushOverSyncConnection's retry loop, which opens a
+ * fresh connection per attempt. Always answers resync_request accurately
+ * against its own applied-rows state, matching the real host's protocol
+ * (src/session-sync/server.ts's makeSessionSyncHandler).
+ */
+function startScriptableHost(): {
+  url: string;
+  cert: string;
+  close(): void;
+  received: unknown[];
+  behaviors: Array<'normal' | 'apply-no-ack' | 'silent-close'>;
+} {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-outbound-push-'));
+  const { cert, key } = makeCert(dir);
+  const httpsServer = createHttpsServer({ cert, key });
+  const wss = new WebSocketServer({ server: httpsServer });
+  const received: unknown[] = [];
+  const behaviors: Array<'normal' | 'apply-no-ack' | 'silent-close'> = [];
+  let connectionCount = 0;
+  let appliedSeq = 0;
+
+  wss.on('connection', (ws: WebSocket) => {
+    const behavior = behaviors[connectionCount] ?? 'normal';
+    connectionCount++;
+    ws.on('message', (raw) => {
+      const envelope = JSON.parse(raw.toString()) as { channel: string; body: { type?: string; seq: number } };
+      if (envelope.body.type === 'resync_request') {
+        ws.send(JSON.stringify({ channel: 'session-sync', body: { type: 'resync_point', seq: appliedSeq, chain: '' } }));
+        return;
+      }
+      if (behavior === 'silent-close') {
+        ws.close();
+        return;
+      }
+      received.push(envelope.body);
+      appliedSeq = envelope.body.seq;
+      if (behavior === 'apply-no-ack') return; // applied, but the ack itself is the thing that gets lost
+      ws.send(JSON.stringify({ channel: 'session-sync', body: { type: 'ack', seq: envelope.body.seq } }));
+    });
+  });
+
+  const port = 0;
+  httpsServer.listen(port);
+  const addr = httpsServer.address() as { port: number };
+
+  return { url: `wss://127.0.0.1:${addr.port}`, cert, close: () => httpsServer.close(), received, behaviors };
+}
+
 describe('sync-outbound-push', () => {
   let dir: string;
   let host: ReturnType<typeof startFakeHost>;
@@ -97,6 +148,7 @@ describe('sync-outbound-push', () => {
   afterEach(() => {
     host.close();
     fs.rmSync(dir, { recursive: true, force: true });
+    setAckTimeoutForTest(10_000);
   });
 
   it('readTransport reads sync from container.json', () => {
@@ -148,5 +200,55 @@ describe('sync-outbound-push', () => {
   it('rejects when the host never acks (timeout)', async () => {
     host.close(); // no listener at all now
     await expect(writeAndPushSystemMessage('req-timeout', {})).rejects.toThrow();
+  });
+
+  describe('retry across a reconnect (docs/session-sync-transport.md §8.11 track 2)', () => {
+    it('resends over a fresh connection when the row never reached the host at all', async () => {
+      const flaky = startScriptableHost();
+      flaky.behaviors[0] = 'silent-close'; // first attempt: connection dies before the row is even received
+      setPathsForTest({
+        configPath: path.join(dir, 'agent', 'container.json'),
+        credentialsPath: path.join(dir, 'credentials.json'),
+        syncLocalDir: path.join(dir, 'sync-local'),
+      });
+      fs.writeFileSync(
+        path.join(dir, 'credentials.json'),
+        JSON.stringify({ url: flaky.url, token: 'test-token', pinnedCertPem: flaky.cert }),
+      );
+      setAckTimeoutForTest(200);
+
+      await writeAndPushSystemMessage('req-1', { a: 1 });
+
+      expect(flaky.received).toHaveLength(1);
+      expect((flaky.received[0] as { seq: number }).seq).toBe(1);
+      flaky.close();
+    });
+
+    it('treats a resync_point reporting the host already applied the row as success, without resending it', async () => {
+      const flaky = startScriptableHost();
+      flaky.behaviors[0] = 'apply-no-ack'; // first attempt: host gets the row and applies it, but the ack itself never arrives back
+      setPathsForTest({
+        configPath: path.join(dir, 'agent', 'container.json'),
+        credentialsPath: path.join(dir, 'credentials.json'),
+        syncLocalDir: path.join(dir, 'sync-local'),
+      });
+      fs.writeFileSync(
+        path.join(dir, 'credentials.json'),
+        JSON.stringify({ url: flaky.url, token: 'test-token', pinnedCertPem: flaky.cert }),
+      );
+      setAckTimeoutForTest(200);
+
+      await writeAndPushSystemMessage('req-1', { a: 1 });
+
+      // Received exactly once — the retry's resync_request found the host
+      // already at seq 1 and correctly did not resend the row a second time.
+      expect(flaky.received).toHaveLength(1);
+
+      const outDb = new Database(path.join(dir, 'sync-local', 'outbound.db'), { readonly: true });
+      const state = outDb.prepare('SELECT outbound_seq FROM session_sync_state WHERE id = 1').get() as { outbound_seq: number };
+      outDb.close();
+      expect(state.outbound_seq).toBe(1);
+      flaky.close();
+    });
   });
 });
