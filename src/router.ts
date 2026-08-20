@@ -561,24 +561,6 @@ async function deliverToAgent(
   });
 
   if (wake) {
-    // Projected-lifecycle sessions (Implementation Plan, Phase 1): compile a
-    // fresh briefing + literal tail BEFORE waking the container, and write
-    // them into the session dir the container mounts at /workspace — the
-    // responder never resumes its own transcript in this mode, so this is
-    // its only source of continuity. Runs synchronously (blocking this
-    // message's wake) by design; a slow/failed compile falls back to the
-    // previously stored briefing rather than blocking the turn indefinitely.
-    const containerConfig = getContainerConfig(agent.agent_group_id);
-    if (containerConfig?.session_lifecycle === 'projected') {
-      const sessionKey = sessionBriefingKey(session.agent_group_id, session.messaging_group_id, session.thread_id);
-      const batchText = safeParseContent(event.message.content).text ?? '';
-      const briefing = await compileBriefing(session.agent_group_id, session.id, sessionKey, batchText);
-      const tail = renderLiteralTail(session.agent_group_id, session.id, sessionKey, 'responder', RESPONDER_TAIL_TURNS);
-      const dir = sessionDir(session.agent_group_id, session.id);
-      fs.writeFileSync(path.join(dir, 'briefing.md'), briefing);
-      fs.writeFileSync(path.join(dir, 'recent-turns.md'), tail);
-    }
-
     // Typing indicator + wake are only for the engaged branch; accumulated
     // messages sit silently until a real trigger fires.
     // Typing fires via the adapter instance that owns this chat's row.

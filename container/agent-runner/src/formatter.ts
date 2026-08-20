@@ -1,45 +1,7 @@
-import fs from 'fs';
-
-import { getConfig } from './config.js';
 import { findByRouting } from './destinations.js';
 import type { MessageInRow } from './db/messages-in.js';
 import { projectedContextHeader } from './projected-sessions.js';
 import { TIMEZONE, formatLocalTime } from './timezone.js';
-
-const BRIEFING_PATH = '/workspace/briefing.md';
-const RECENT_TURNS_PATH = '/workspace/recent-turns.md';
-
-function readIfExists(p: string): string {
-  try {
-    return fs.readFileSync(p, 'utf8').trim();
-  } catch {
-    return '';
-  }
-}
-
-/**
- * `session_lifecycle = 'projected'` sessions (Implementation Plan §3/§4):
- * the host writes a compiled briefing + literal recent-turns tail into the
- * session dir before every wake, in place of transcript resume. Read fresh
- * per call — cheap, and always reflects what the host just wrote for this
- * turn.
- */
-function projectedContextHeader(): string {
-  let sessionLifecycle: 'resumed' | 'projected' = 'resumed';
-  try {
-    sessionLifecycle = getConfig().sessionLifecycle;
-  } catch {
-    // Config not loaded yet (e.g. test harness) — behave as 'resumed'.
-  }
-  if (sessionLifecycle !== 'projected') return '';
-
-  const parts: string[] = [];
-  const briefing = readIfExists(BRIEFING_PATH);
-  if (briefing) parts.push(`<briefing>\n${briefing}\n</briefing>`);
-  const tail = readIfExists(RECENT_TURNS_PATH);
-  if (tail) parts.push(`<recent-turns>\n${tail}\n</recent-turns>`);
-  return parts.length > 0 ? parts.join('\n') + '\n' : '';
-}
 
 /**
  * Command categories for messages starting with '/'.
