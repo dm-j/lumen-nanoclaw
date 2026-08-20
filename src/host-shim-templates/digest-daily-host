@@ -1,0 +1,71 @@
+#!/bin/sh
+# digest-daily-host — default template, seeded once per group into its own
+# host-shims/ directory by group-init.ts's initGroupFilesystem (never
+# overwritten after — a group's own edits, chiefly VAULT_PATH, must survive
+# every future spawn/restart).
+#
+# Calling contract (Obsidian note "Lumen on NanoClaw — Vault Memory
+# Pipeline Implementation Plan", Phase 3): invoked as
+#   digest-daily-host [YYYY-MM-DD]
+# with no required args — the default (and the shape host-cron schedules
+# it with) is "digest yesterday, in this vault's own configured
+# timezone," computed here rather than passed in, so the cron row needs
+# no date arithmetic of its own. An explicit date arg is accepted for
+# backfill/manual runs.
+#
+# Shells to the `digester` Claude Code subagent (VAULT_PATH/.claude/agents/
+# digester.md, seeded by add-mbif-vault) against whatever's already in
+# 07-Daily/Transcripts-readonly/YYYY/MM/DD.md — written continuously by
+# transcript-append-host, not assembled fresh by this script. Digester
+# owns its own idempotency (checkpoint post-it at Meta/states/digester.md)
+# — this script does not check whether a digest already exists for the
+# date; re-running is always safe.
+
+case "${1:-}" in
+  -h|--help)
+    cat <<'EOF'
+digest-daily — digest a day's transcript into the vault's daily digests.
+
+Usage: digest-daily [YYYY-MM-DD]
+
+Defaults to yesterday (in the vault's configured timezone) if no date is
+given.
+EOF
+    exit 0
+    ;;
+esac
+
+set -eu
+
+# --- Per-group configuration — edit this for your vault ---
+VAULT_PATH="/CHANGE/ME/path/to/this/groups/obsidian/vault"
+VAULT_TIMEZONE="America/Chicago"
+# --- end configuration ---
+
+if [ ! -d "$VAULT_PATH" ] || [ "$VAULT_PATH" = "/CHANGE/ME/path/to/this/groups/obsidian/vault" ]; then
+  echo "digest-daily-host: VAULT_PATH not configured — edit $0" >&2
+  exit 1
+fi
+
+if [ "${1:-}" != "" ]; then
+  DATE="$1"
+else
+  DATE=$(TZ="$VAULT_TIMEZONE" date -v-1d "+%Y-%m-%d")
+fi
+
+YYYY=$(echo "$DATE" | cut -d- -f1)
+MM=$(echo "$DATE" | cut -d- -f2)
+DD=$(echo "$DATE" | cut -d- -f3)
+TRANSCRIPT_REL="07-Daily/Transcripts-readonly/${YYYY}/${MM}/${DD}.md"
+
+if [ ! -f "$VAULT_PATH/$TRANSCRIPT_REL" ]; then
+  echo "digest-daily-host: no transcript for ${DATE} (${TRANSCRIPT_REL}) — quiet day, nothing to digest" >&2
+  exit 0
+fi
+
+cd "$VAULT_PATH"
+exec claude -p --agent digester \
+  --output-format text \
+  --permission-mode bypassPermissions \
+  --no-session-persistence \
+  "Digest ${TRANSCRIPT_REL}"

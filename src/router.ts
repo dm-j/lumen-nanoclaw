@@ -33,10 +33,10 @@ import {
 } from './db/messaging-groups.js';
 import { findSessionForAgent } from './db/sessions.js';
 import { startTypingRefresh, stopTypingRefresh } from './modules/typing/index.js';
-import { compileBriefing, sessionBriefingKey } from './modules/synthetic-context/compile-briefing.js';
-import { renderLiteralTail } from './modules/synthetic-context/literal-tail.js';
+import { stampCaptionIds } from './modules/attachment-caption/caption.js';
+import { triggerCaptioning } from './modules/attachment-caption/notify.js';
 import { log } from './log.js';
-import { resolveSession, writeSessionMessage, writeOutboundDirect, sessionDir } from './session-manager.js';
+import { resolveSession, writeSessionMessage, writeOutboundDirect, releaseStagedMessage } from './session-manager.js';
 import { wakeContainer } from './container-runner.js';
 import { getSession } from './db/sessions.js';
 import type { AgentGroup, MessagingGroup, MessagingGroupAgent } from './types.js';
@@ -308,6 +308,15 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
   const parsed = safeParseContent(event.message.content);
   const messageText = parsed.text ?? '';
 
+  // Stamp a captionId on every image attachment once here, before the
+  // fan-out loop below calls deliverToAgent per wired agent — mutating in
+  // place means every fanned-out session's placeholder references the same
+  // id. This is instant (no network call); the actual captioning model call
+  // happens later, off the delivery path, per session (see deliverToAgent).
+  if (event.message.kind === 'chat' || event.message.kind === 'chat-sdk') {
+    event.message.content = stampCaptionIds(event.message.content);
+  }
+
   // Per-wiring thread policy inputs, resolved once per event. Each wiring's
   // threads override (NULL = inherit) resolves against the channel's declared
   // defaults, hard-bounded by the live adapter's raw capability. Undeclared
@@ -514,8 +523,9 @@ async function deliverToAgent(
     }
   }
 
+  const deliveredMessageId = messageIdForAgent(event.message.id, agent.agent_group_id);
   writeSessionMessage(session.agent_group_id, session.id, {
-    id: messageIdForAgent(event.message.id, agent.agent_group_id),
+    id: deliveredMessageId,
     kind: event.message.kind,
     timestamp: event.message.timestamp,
     platformId: deliveryAddr.platformId,
@@ -523,7 +533,21 @@ async function deliverToAgent(
     threadId: deliveryAddr.threadId,
     content: event.message.content,
     trigger: wake ? 1 : 0,
+    // Staged (not immediately 'pending') when this wakes the agent: an
+    // already-warm container polls inbound.db on its own schedule and would
+    // otherwise pick this row up before wakeContainer's synth/briefing step
+    // below has finished writing a fresh briefing.md — released right after
+    // that await resolves, further down.
+    stage: wake,
   });
+
+  // Attachments were only stamped with a captionId above (no network call).
+  // The actual model call happens now, off the delivery path — fire-and-forget,
+  // never awaited, never blocks this session's wake. No-op if there are no
+  // un-captioned image attachments.
+  if (event.message.kind === 'chat' || event.message.kind === 'chat-sdk') {
+    triggerCaptioning(session.agent_group_id, session.id, deliveredMessageId);
+  }
 
   log.info('Message routed', {
     sessionId: session.id,
@@ -569,6 +593,11 @@ async function deliverToAgent(
     const freshSession = getSession(session.id);
     if (freshSession) {
       const woke = await wakeContainer(freshSession);
+      // Only now — after the synth/briefing step inside wakeContainer has
+      // actually finished — can the container's poll loop be allowed to see
+      // this message. No-op if writeSessionMessage above didn't stage it
+      // (trigger=0 accumulate rows are written 'pending' from the start).
+      releaseStagedMessage(session.agent_group_id, session.id, deliveredMessageId);
       // wakeContainer never throws — it returns false on transient spawn
       // failure (host-sweep retries). Stop the typing indicator we just
       // started so it doesn't leak; the inbound row stays pending.

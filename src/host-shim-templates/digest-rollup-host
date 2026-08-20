@@ -1,0 +1,61 @@
+#!/bin/sh
+# digest-rollup-host — default template, seeded once per group into its own
+# host-shims/ directory by group-init.ts's initGroupFilesystem (never
+# overwritten after — a group's own edits, chiefly VAULT_PATH, must survive
+# every future spawn/restart).
+#
+# Calling contract (Obsidian note "Lumen on NanoClaw — Vault Memory
+# Pipeline Implementation Plan", Phase 4): invoked with no arguments —
+# unlike digest-daily-host, there's no date to resolve. The prompt below
+# tells the agent to work out "this week" itself (it has Bash/Read/Write
+# tools and a real clock), same as the live crontab job this is based on.
+#
+# Shells to MBIF's stock `librarian` agent — no derivation needed (unlike
+# Briefer-from-Seeker or the purpose-built Digester): librarian ships
+# generic vault-QA modes with no built-in notion of "roll up digests,"
+# and the entire weekly→monthly rollup behavior lives in the prompt this
+# script supplies, not in the agent definition itself. Idempotent by
+# design: librarian creates the week file if absent, fills in only the
+# day-subheaders that are missing, and only appends to the month file
+# once that week is actually past its Sunday — safe to run more than
+# once a day.
+#
+# Prompt is the real, currently-running crontab prompt for this exact
+# job (0 4 * * * ... invoke-claude librarian), taken verbatim rather than
+# rewritten, with exactly one addition: the per-day `^mon`.."^sun" block
+# anchors this project's own weekly-digest design calls for (Implementation
+# Plan, Phase 4) — the live vault's own weekly digests don't have these
+# yet, so this is a deliberate delta from what's actually running today,
+# not something already proven in production.
+
+case "${1:-}" in
+  -h|--help)
+    cat <<'EOF'
+digest-rollup — roll this week's daily digests up into the weekly digest,
+and the weekly digest up into the monthly digest once a week completes.
+
+Usage: digest-rollup
+
+Takes no arguments.
+EOF
+    exit 0
+    ;;
+esac
+
+set -eu
+
+# --- Per-group configuration — edit this for your vault ---
+VAULT_PATH="/CHANGE/ME/path/to/this/groups/obsidian/vault"
+# --- end configuration ---
+
+if [ ! -d "$VAULT_PATH" ] || [ "$VAULT_PATH" = "/CHANGE/ME/path/to/this/groups/obsidian/vault" ]; then
+  echo "digest-rollup-host: VAULT_PATH not configured — edit $0" >&2
+  exit 1
+fi
+
+cd "$VAULT_PATH"
+exec claude -p --agent librarian \
+  --output-format text \
+  --permission-mode bypassPermissions \
+  --no-session-persistence \
+  "Roll up this week's daily digests in 07-Daily/Digests-readonly/ into 08-Weekly/Digests-readonly/WeekBeginning-<Monday-of-this-week>.md, one file per week with Monday-Sunday subheaders capturing the most pertinent details of each day. Create the weekly file if it does not exist yet, and fill in any subheaders for days that now have a daily digest but are missing from the weekly file. Close each day's subheader paragraph with a block anchor matching that weekday, lowercase three-letter form (^mon, ^tue, ^wed, ^thu, ^fri, ^sat, ^sun) so a monthly or other higher-tier digest can cite a specific day. Then, if that week (Monday-Sunday) is now fully complete (today is past that week's Sunday), append a super-concise summary of it to its monthly digest file in 09-Monthly/Digests-readonly/Month-YYYY-MM.md (month = the one containing that week's Monday), creating the month file from the template in Templates/Monthly Digest.md if it does not exist yet. Compress narrative hard but preserve named [[wikilinks]] to people/projects/key decisions, per the format in Meta/naming-conventions.md."

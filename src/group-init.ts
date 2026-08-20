@@ -1,7 +1,14 @@
 import fs from 'fs';
 import path from 'path';
 
-import { DATA_DIR, DEFAULT_AGENT_PROVIDER, GROUPS_DIR, HOST_SHIM_TEMPLATES_DIR } from './config.js';
+import {
+  DATA_DIR,
+  DEFAULT_AGENT_PROVIDER,
+  GROUPS_DIR,
+  HOST_SHIMS_DIR,
+  HOST_SHIM_TEMPLATES_DIR,
+  MCP_SHIMS_DIR,
+} from './config.js';
 import { ensureContainerConfig } from './db/container-configs.js';
 import { stageGroupPersona } from './group-persona.js';
 import { log } from './log.js';
@@ -78,23 +85,43 @@ export function initGroupFilesystem(
     initialized.push('instructions.prepend.md');
   }
 
-  // host-shims/ — this group's own host-shim whitelist directory (default
-  // location per resolveHostShimsDir; container_configs.host_shims_dir can
-  // override it). Seeded with the default briefing-host script
+  // host-shims/<folder>/ — this group's own host-shim whitelist directory
+  // (default location per resolveHostShimsDir; container_configs.host_shims_dir
+  // can override it). Deliberately a sibling of groups/, NOT inside
+  // groupDir — groupDir is bind-mounted RW into this group's own container,
+  // so a script living inside it would be readable *and* writable from
+  // inside the agent's own session; the agent is meant to know a host-shim
+  // by name only. Seeded with the default briefing-host script
   // (src/host-shim-templates/briefing-host), copied once and never
   // overwritten again — a group's own edits (e.g. its VAULT_PATH) must
   // survive every future spawn/restart.
-  const hostShimsDir = path.join(groupDir, 'host-shims');
+  const hostShimsDir = path.join(HOST_SHIMS_DIR, group.folder);
   if (!fs.existsSync(hostShimsDir)) {
     fs.mkdirSync(hostShimsDir, { recursive: true });
     initialized.push('host-shims/');
   }
-  const briefingHostDst = path.join(hostShimsDir, 'briefing-host');
-  const briefingHostSrc = path.join(HOST_SHIM_TEMPLATES_DIR, 'briefing-host');
-  if (!fs.existsSync(briefingHostDst) && fs.existsSync(briefingHostSrc)) {
-    fs.copyFileSync(briefingHostSrc, briefingHostDst);
-    fs.chmodSync(briefingHostDst, 0o755);
-    initialized.push('host-shims/briefing-host');
+  // transcript-append-host, digest-daily-host: same seed-once-never-overwrite
+  // treatment, for the vault memory pipeline (live per-turn transcript
+  // export + scheduled daily digest generation via add-host-cron).
+  for (const shimName of ['briefing-host', 'transcript-append-host', 'digest-daily-host', 'digest-rollup-host']) {
+    const shimDst = path.join(hostShimsDir, shimName);
+    const shimSrc = path.join(HOST_SHIM_TEMPLATES_DIR, shimName);
+    if (!fs.existsSync(shimDst) && fs.existsSync(shimSrc)) {
+      fs.copyFileSync(shimSrc, shimDst);
+      fs.chmodSync(shimDst, 0o755);
+      initialized.push(`host-shims/${shimName}`);
+    }
+  }
+
+  // mcp-shims/<folder>/ — this group's own dynamic MCP-tool whitelist
+  // directory. Same off-mount isolation model as host-shims/ above (a
+  // subfolder script is invisible to every other group, and to the agent
+  // itself) but auto-exposed as an MCP tool per script instead of requiring
+  // a Bash-tool call. Empty by default — no seeded scripts.
+  const mcpShimsDir = path.join(MCP_SHIMS_DIR, group.folder);
+  if (!fs.existsSync(mcpShimsDir)) {
+    fs.mkdirSync(mcpShimsDir, { recursive: true });
+    initialized.push('mcp-shims/');
   }
 
   // Ensure container_configs row exists in the DB. Idempotent — no-op if

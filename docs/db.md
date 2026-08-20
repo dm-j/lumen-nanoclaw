@@ -77,6 +77,8 @@ Session DBs are bind-mounted into the container. A few rules you need to know be
 
 These rules are enforced by convention in `src/session-manager.ts` and `container/agent-runner/src/db/`. If you change how the DBs are opened, re-read that code first.
 
+**A macOS-specific corruption issue with this bind-mount approach** (`SqliteError: attempt to write a readonly database`, `database disk image is malformed`) led to a from-scratch replacement design — host-local + container-local SQLite, reconciled over a WebSocket instead of a shared mount. Scaffolding is landed (`container_configs.transport`, opt-in, default `'file'` = today's behavior); the transport itself is not yet built. Full investigation (what was tried and ruled out, why), design, and status: [session-sync-transport.md](session-sync-transport.md).
+
 ---
 
 ## 5. Design patterns at a glance

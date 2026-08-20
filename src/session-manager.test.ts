@@ -17,15 +17,18 @@ vi.mock('./config.js', async () => {
 });
 
 import {
+  backfillPendingInbound,
   initSessionFolder,
   inboundDbPath,
   outboundDbPath,
+  releaseStagedMessage,
   sessionDir,
   writeOutboundDirect,
   writeSessionMessage,
 } from './session-manager.js';
 import { initTestDb, closeDb, runMigrations, createAgentGroup } from './db/index.js';
 import { createSession } from './db/sessions.js';
+import * as inboundPush from './session-sync/inbound-push.js';
 import type { Session } from './types.js';
 
 const TEST_DIR = '/tmp/nanoclaw-test-write-outbound';
@@ -106,6 +109,131 @@ describe('writeOutboundDirect', () => {
     const rows = readMessagesOut();
     expect(rows.map((r) => r.id)).toEqual(['denial-1', 'denial-2']);
     expect(rows.map((r) => r.seq)).toEqual([2, 4]);
+  });
+});
+
+/**
+ * Found via a live 'sync'-transport canary flip: an already-warm container
+ * receiving a wake-triggering message goes through writeSessionMessage's
+ * `stage: true` path (to avoid racing the host's own synth step), and only
+ * becomes visible to the container's poll loop once releaseStagedMessage
+ * flips status 'staged' → 'pending'. That flip must also push under 'sync'
+ * transport — without it, the container's local copy of the row stays
+ * stuck at 'staged' forever (getPendingMessages only reads 'pending'), and
+ * the message is silently never processed for the lifetime of that container.
+ */
+describe('releaseStagedMessage pushes the status flip under sync transport', () => {
+  beforeEach(() => {
+    const db = initTestDb();
+    runMigrations(db);
+    createAgentGroup({ id: AG, name: AG, folder: AG, agent_provider: null, created_at: new Date().toISOString() });
+    createSession({
+      id: SESS,
+      agent_group_id: AG,
+      messaging_group_id: null,
+      thread_id: null,
+      agent_provider: null,
+      status: 'active',
+      container_status: 'stopped',
+      last_active: null,
+      created_at: new Date().toISOString(),
+    } as Session);
+  });
+
+  afterEach(() => {
+    closeDb();
+    vi.restoreAllMocks();
+  });
+
+  it('calls notifyInboundWrite with the released row (status: pending)', () => {
+    writeSessionMessage(AG, SESS, {
+      id: 'stage-1',
+      kind: 'chat',
+      timestamp: new Date().toISOString(),
+      content: '{}',
+      stage: true,
+    });
+
+    const notify = vi.spyOn(inboundPush, 'notifyInboundWrite');
+    releaseStagedMessage(AG, SESS, 'stage-1');
+
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith(AG, SESS, expect.objectContaining({ id: 'stage-1', status: 'pending' }));
+  });
+
+  it('does not push when the row was never staged (already pending, or missing)', () => {
+    writeSessionMessage(AG, SESS, {
+      id: 'not-staged',
+      kind: 'chat',
+      timestamp: new Date().toISOString(),
+      content: '{}',
+    });
+
+    const notify = vi.spyOn(inboundPush, 'notifyInboundWrite');
+    releaseStagedMessage(AG, SESS, 'not-staged');
+
+    expect(notify).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Found via a live 'sync'-transport canary flip: routeInbound() writes the
+ * triggering messages_in row and *then* spawns the container, which takes a
+ * real multi-second TLS round trip to connect — so the write always races
+ * the connection, and notifyInboundWrite's push always no-ops (no `ws` yet).
+ * Without a connect-time backfill, the very message that woke a cold
+ * container is invisible to it, and the container hangs forever with no
+ * error (it's just correctly waiting on a message that never arrives).
+ */
+describe('backfillPendingInbound pushes every pending row on connect', () => {
+  beforeEach(() => {
+    const db = initTestDb();
+    runMigrations(db);
+    createAgentGroup({ id: AG, name: AG, folder: AG, agent_provider: null, created_at: new Date().toISOString() });
+    createSession({
+      id: SESS,
+      agent_group_id: AG,
+      messaging_group_id: null,
+      thread_id: null,
+      agent_provider: null,
+      status: 'active',
+      container_status: 'stopped',
+      last_active: null,
+      created_at: new Date().toISOString(),
+    } as Session);
+  });
+
+  afterEach(() => {
+    closeDb();
+    vi.restoreAllMocks();
+  });
+
+  it('pushes pending rows but skips delivered/processing ones', () => {
+    writeSessionMessage(AG, SESS, {
+      id: 'pending-1',
+      kind: 'chat',
+      timestamp: new Date().toISOString(),
+      content: '{}',
+    });
+    writeSessionMessage(AG, SESS, {
+      id: 'staged-1',
+      kind: 'chat',
+      timestamp: new Date().toISOString(),
+      content: '{}',
+      stage: true,
+    });
+
+    const notify = vi.spyOn(inboundPush, 'notifyInboundWrite');
+    backfillPendingInbound(AG, SESS);
+
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith(AG, SESS, expect.objectContaining({ id: 'pending-1', status: 'pending' }));
+  });
+
+  it('does nothing when the inbound.db does not exist yet', () => {
+    const notify = vi.spyOn(inboundPush, 'notifyInboundWrite');
+    expect(() => backfillPendingInbound(AG, 'sess-never-provisioned')).not.toThrow();
+    expect(notify).not.toHaveBeenCalled();
   });
 });
 

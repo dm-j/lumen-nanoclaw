@@ -14,6 +14,7 @@
  * wrapped action with the approval row as its grant and `createAgent` runs.
  * `performCreateAgent` is the module-private body.
  */
+import fs from 'fs';
 import path from 'path';
 
 import { GROUPS_DIR } from '../../config.js';
@@ -147,6 +148,31 @@ async function performCreateAgent(
   // --provider`.
   const parentProvider = getContainerConfig(sourceGroup.id)?.provider ?? 'claude';
   initGroupFilesystem(newGroup, { instructions: instructions ?? undefined, provider: parentProvider });
+
+  // Inherit the parent's env/blockedHosts overrides (e.g. local model
+  // routing — see add-ollama-provider). These are host-local, never
+  // DB-backed: materializeContainerJson only *preserves* whatever's already
+  // on disk across regeneration, it never invents them (container-config.ts).
+  // A fresh child group has no container.json yet, so without this it would
+  // silently fall back to the provider's default inference URL instead of
+  // the parent's — seed the same two fields the parent already resolved to.
+  try {
+    const parentConfigPath = path.join(GROUPS_DIR, sourceGroup.folder, 'container.json');
+    if (fs.existsSync(parentConfigPath)) {
+      const parentConfig = JSON.parse(fs.readFileSync(parentConfigPath, 'utf8')) as {
+        env?: Record<string, string>;
+        blockedHosts?: string[];
+      };
+      if (parentConfig.env || parentConfig.blockedHosts) {
+        const seed: { env?: Record<string, string>; blockedHosts?: string[] } = {};
+        if (parentConfig.env) seed.env = parentConfig.env;
+        if (parentConfig.blockedHosts) seed.blockedHosts = parentConfig.blockedHosts;
+        fs.writeFileSync(path.join(groupPath, 'container.json'), JSON.stringify(seed, null, 2));
+      }
+    }
+  } catch (err) {
+    log.warn('create_agent: failed to inherit parent env/blockedHosts', { agentGroupId, err });
+  }
 
   // Insert bidirectional destination rows (= ACL grants).
   // Creator refers to child by the name it chose; child refers to creator as "parent".

@@ -14,6 +14,18 @@ logs/
 # Groups - per-installation state, not tracked
 groups/*
 
+# mcp-shims and host-shims implementation scripts — both moved out of
+# groups/<folder>/ entirely (see src/config.ts's MCP_SHIMS_DIR/HOST_SHIMS_DIR
+# and resolveMcpShimsDir/resolveHostShimsDir): groups/<folder>/ is bind-mounted
+# RW into that group's own container, so anything living inside it —
+# including the old groups/*/mcp-shims/ and groups/*/host-shims/ locations —
+# is readable *and* writable from inside the agent's own session. These two
+# top-level directories are siblings of groups/, never mounted into any
+# container, and per-installation state (real host paths, real config) —
+# not tracked, same as everything else under groups/*.
+/mcp-shims/
+/host-shims/
+
 # Composer-managed CLAUDE.md artifacts (regenerated every spawn) and
 # per-group memory (CLAUDE.local.md) must never be committed.
 **/CLAUDE.local.md
@@ -47,3 +59,7 @@ AGENTS.md
 docs/maintainer-guide.md
 docs/drafts/
 forks.md
+
+# Runtime lock state (session id + pid of whichever process holds the
+# scheduled-tasks lock) — regenerated per-process, not install config.
+.claude/scheduled_tasks.lock

@@ -8,7 +8,18 @@
  * processing_ack. The host reads processing_ack to sync message lifecycle.
  */
 import { getConfig } from '../config.js';
+import { getSyncClient } from '../session-sync/active-client.js';
 import { openInboundDb, getOutboundDb } from './connection.js';
+
+function log(msg: string): void {
+  console.error(`[db/messages-in] ${msg}`);
+}
+
+function pushAck(messageId: string, status: string, statusChanged: string): void {
+  getSyncClient()
+    ?.pushAck({ message_id: messageId, status, status_changed: statusChanged })
+    .catch((err) => log(`pushAck failed for ${messageId}: ${String(err)}`));
+}
 
 // Cache whether inbound.db has the on_wake column (added in v2.0.48).
 // The container opens inbound.db read-only, so it can't ALTER —
@@ -103,9 +114,11 @@ export function markProcessing(ids: string[]): void {
   const stmt = db.prepare(
     "INSERT OR REPLACE INTO processing_ack (message_id, status, status_changed) VALUES (?, 'processing', ?)",
   );
+  const now = new Date().toISOString();
   db.transaction(() => {
-    for (const id of ids) stmt.run(id, new Date().toISOString());
+    for (const id of ids) stmt.run(id, now);
   })();
+  for (const id of ids) pushAck(id, 'processing', now);
 }
 
 /** Mark messages as completed — updates processing_ack in outbound.db. */
@@ -115,9 +128,11 @@ export function markCompleted(ids: string[]): void {
   const stmt = db.prepare(
     "INSERT OR REPLACE INTO processing_ack (message_id, status, status_changed) VALUES (?, 'completed', ?)",
   );
+  const now = new Date().toISOString();
   db.transaction(() => {
-    for (const id of ids) stmt.run(id, new Date().toISOString());
+    for (const id of ids) stmt.run(id, now);
   })();
+  for (const id of ids) pushAck(id, 'completed', now);
 }
 
 /**
@@ -133,18 +148,22 @@ export function markScriptSkipped(skips: Array<{ id: string; reason: string }>):
   const stmt = db.prepare(
     'INSERT OR REPLACE INTO processing_ack (message_id, status, status_changed) VALUES (?, ?, ?)',
   );
+  const now = new Date().toISOString();
   db.transaction(() => {
-    for (const s of skips) stmt.run(s.id, s.reason === 'error' ? 'script-skip:error' : 'completed', new Date().toISOString());
+    for (const s of skips) stmt.run(s.id, s.reason === 'error' ? 'script-skip:error' : 'completed', now);
   })();
+  for (const s of skips) pushAck(s.id, s.reason === 'error' ? 'script-skip:error' : 'completed', now);
 }
 
 /** Mark a single message as failed — writes to processing_ack in outbound.db. */
 export function markFailed(id: string): void {
+  const now = new Date().toISOString();
   getOutboundDb()
     .prepare(
       "INSERT OR REPLACE INTO processing_ack (message_id, status, status_changed) VALUES (?, 'failed', ?)",
     )
-    .run(id, new Date().toISOString());
+    .run(id, now);
+  pushAck(id, 'failed', now);
 }
 
 /** Get a message by ID (read from inbound.db). */

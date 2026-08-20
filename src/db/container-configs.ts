@@ -1,4 +1,4 @@
-import { DEFAULT_AGENT_PROVIDER } from '../config.js';
+import { DEFAULT_AGENT_MODEL, DEFAULT_AGENT_PROVIDER } from '../config.js';
 import type { ContainerConfigRow } from '../types.js';
 import { getDb } from './connection.js';
 
@@ -12,7 +12,8 @@ const SCALAR_COLUMNS = new Set([
   'cli_scope',
   'timezone',
   'host_shims_dir',
-  'session_lifecycle',
+  'mcp_shims_dir',
+  'transport',
 ]);
 const JSON_COLUMNS = new Set(['skills', 'mcp_servers', 'packages_apt', 'packages_npm', 'additional_mounts']);
 
@@ -33,11 +34,11 @@ export function createContainerConfig(config: ContainerConfigRow): void {
       `INSERT INTO container_configs (
         agent_group_id, provider, model, effort, image_tag, assistant_name,
         max_messages_per_prompt, skills, mcp_servers, packages_apt, packages_npm,
-        additional_mounts, cli_scope, timezone, host_shims_dir, session_lifecycle, updated_at
+        additional_mounts, cli_scope, timezone, host_shims_dir, mcp_shims_dir, transport, updated_at
       ) VALUES (
         @agent_group_id, @provider, @model, @effort, @image_tag, @assistant_name,
         @max_messages_per_prompt, @skills, @mcp_servers, @packages_apt, @packages_npm,
-        @additional_mounts, @cli_scope, @timezone, @host_shims_dir, @session_lifecycle, @updated_at
+        @additional_mounts, @cli_scope, @timezone, @host_shims_dir, @mcp_shims_dir, @transport, @updated_at
       )`,
     )
     .run(config);
@@ -69,10 +70,10 @@ export function ensureContainerConfig(agentGroupId: string, provider?: string | 
   const stamped = normalized && normalized !== 'claude' ? normalized : null;
   getDb()
     .prepare(
-      `INSERT OR IGNORE INTO container_configs (agent_group_id, provider, updated_at)
-       VALUES (?, ?, ?)`,
+      `INSERT OR IGNORE INTO container_configs (agent_group_id, provider, model, updated_at)
+       VALUES (?, ?, ?, ?)`,
     )
-    .run(agentGroupId, stamped, new Date().toISOString());
+    .run(agentGroupId, stamped, DEFAULT_AGENT_MODEL ?? null, new Date().toISOString());
 }
 
 /** Update scalar fields on a config row. Only touches fields present in `updates`. */
@@ -90,7 +91,8 @@ export function updateContainerConfigScalars(
       | 'cli_scope'
       | 'timezone'
       | 'host_shims_dir'
-      | 'session_lifecycle'
+      | 'mcp_shims_dir'
+      | 'transport'
     >
   >,
 ): void {

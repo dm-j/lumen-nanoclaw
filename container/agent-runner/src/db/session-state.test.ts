@@ -1,5 +1,7 @@
-import { beforeEach, describe, expect, test } from 'bun:test';
+import { beforeEach, afterEach, describe, expect, test } from 'bun:test';
 
+import { clearSyncClient, registerSyncClient } from '../session-sync/active-client.js';
+import type { SyncClientHandle } from '../session-sync/client.js';
 import { getOutboundDb, initTestSessionDb } from './connection.js';
 import {
   clearContinuation,
@@ -11,6 +13,27 @@ import {
 beforeEach(() => {
   initTestSessionDb();
 });
+
+afterEach(() => {
+  clearSyncClient();
+});
+
+function fakeSyncClient(): SyncClientHandle & { pushed: unknown[] } {
+  const pushed: unknown[] = [];
+  return {
+    pushed,
+    handler: () => {},
+    attach: () => {},
+    pushOutbound: () => Promise.resolve(),
+    pushAck: () => Promise.resolve(),
+    pushSessionState: (payload: unknown) => {
+      pushed.push(payload);
+      return Promise.resolve();
+    },
+    pushContainerState: () => Promise.resolve(),
+    drain: () => Promise.resolve({ pending: 0 }),
+  };
+}
 
 function seedLegacy(value: string): void {
   getOutboundDb()
@@ -96,5 +119,33 @@ describe('session-state — legacy migration', () => {
 
     const second = migrateLegacyContinuation('claude');
     expect(second).toBe('once');
+  });
+});
+
+describe('session-state — dual-write to a registered sync client', () => {
+  test('setContinuation pushes {key, value, updated_at}', () => {
+    const client = fakeSyncClient();
+    registerSyncClient(client);
+
+    setContinuation('claude', 'conv-1');
+
+    expect(client.pushed).toHaveLength(1);
+    expect(client.pushed[0]).toMatchObject({ key: 'continuation:claude', value: 'conv-1' });
+  });
+
+  test('clearContinuation pushes {key, value: null}', () => {
+    const client = fakeSyncClient();
+    setContinuation('claude', 'conv-1');
+    registerSyncClient(client);
+
+    clearContinuation('claude');
+
+    expect(client.pushed).toHaveLength(1);
+    expect(client.pushed[0]).toMatchObject({ key: 'continuation:claude', value: null });
+  });
+
+  test('no registered client — write still succeeds locally, nothing thrown', () => {
+    expect(() => setContinuation('claude', 'conv-1')).not.toThrow();
+    expect(getContinuation('claude')).toBe('conv-1');
   });
 });

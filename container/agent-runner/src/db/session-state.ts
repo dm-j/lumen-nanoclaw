@@ -9,7 +9,12 @@
  * providers is therefore lossless: each provider's last thread stays
  * on file and resumes cleanly if the user flips back.
  */
+import { getSyncClient } from '../session-sync/active-client.js';
 import { getOutboundDb } from './connection.js';
+
+function log(msg: string): void {
+  console.error(`[db/session-state] ${msg}`);
+}
 
 const LEGACY_KEY = 'sdk_session_id';
 
@@ -25,13 +30,22 @@ function getValue(key: string): string | undefined {
 }
 
 function setValue(key: string, value: string): void {
+  const updatedAt = new Date().toISOString();
   getOutboundDb()
     .prepare('INSERT OR REPLACE INTO session_state (key, value, updated_at) VALUES (?, ?, ?)')
-    .run(key, value, new Date().toISOString());
+    .run(key, value, updatedAt);
+  getSyncClient()
+    ?.pushSessionState({ key, value, updated_at: updatedAt })
+    .catch((err) => log(`pushSessionState failed for ${key}: ${String(err)}`));
 }
 
 function deleteValue(key: string): void {
   getOutboundDb().prepare('DELETE FROM session_state WHERE key = ?').run(key);
+  // value: null signals a delete to the host's applySessionStateRow — see
+  // src/session-sync/server.ts.
+  getSyncClient()
+    ?.pushSessionState({ key, value: null, updated_at: new Date().toISOString() })
+    .catch((err) => log(`pushSessionState (delete) failed for ${key}: ${String(err)}`));
 }
 
 /**

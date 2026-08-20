@@ -27,7 +27,8 @@ export interface ContainerConfigRow {
   cli_scope: string; // 'disabled' | 'group' | 'global'
   timezone: string | null; // IANA id; NULL = follow the install-global timezone
   host_shims_dir: string | null; // NULL = default to groups/<folder>/host-shims/
-  session_lifecycle: string | null; // NULL/'resumed' | 'projected'
+  mcp_shims_dir: string | null; // NULL = default to groups/<folder>/mcp-shims/
+  transport: string | null; // 'file' | 'sync'; NULL = 'file' (bind-mounted session DBs)
   updated_at: string;
 }
 
@@ -220,6 +221,8 @@ export interface PendingApproval {
   expires_at: string | null;
   status: 'pending' | 'approved' | 'rejected' | 'expired' | 'awaiting_reason';
   title: string;
+  /** Original approval-card body, retained when the card reaches a terminal state. */
+  question: string;
   options_json: string;
   /** When set, only this exact user may resolve the approval. */
   approver_user_id: string | null;

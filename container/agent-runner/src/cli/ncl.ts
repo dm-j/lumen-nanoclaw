@@ -11,6 +11,8 @@
  */
 import { Database } from 'bun:sqlite';
 
+import { localInboundPath, pushCompletedAck, readTransport, writeAndPushSystemMessage } from './sync-outbound-push.js';
+
 // ---------------------------------------------------------------------------
 // Frame types (mirrors src/cli/frame.ts on the host)
 // ---------------------------------------------------------------------------
@@ -31,8 +33,14 @@ type ResponseFrame =
 // Paths
 // ---------------------------------------------------------------------------
 
+// Under 'sync' transport these are never opened — see sync-outbound-push.ts's
+// header for why writing straight into the host-mounted files here would
+// reintroduce the concurrent-writer corruption pattern 'sync' transport
+// exists to eliminate.
 const INBOUND_DB = '/workspace/inbound.db';
 const OUTBOUND_DB = '/workspace/outbound.db';
+
+const IS_SYNC = readTransport() === 'sync';
 
 // ---------------------------------------------------------------------------
 // DB transport
@@ -43,11 +51,23 @@ function generateId(): string {
 }
 
 /**
- * Write a cli_request to outbound.db.
+ * Write a cli_request. Under 'file' transport, straight into the
+ * host-mounted outbound.db (unchanged). Under 'sync' transport, into the
+ * container's own local outbound.db and across the sync connection —
+ * see sync-outbound-push.ts.
  *
  * Uses BEGIN IMMEDIATE to acquire a write lock before reading max(seq),
  * preventing seq collisions with concurrent agent-runner writes.
  */
+async function writeRequestSync(req: RequestFrame): Promise<void> {
+  await writeAndPushSystemMessage(req.id, {
+    action: 'cli_request',
+    requestId: req.id,
+    command: req.command,
+    args: req.args,
+  });
+}
+
 function writeRequest(req: RequestFrame): void {
   const db = new Database(OUTBOUND_DB);
   db.exec('PRAGMA journal_mode = DELETE');
@@ -88,24 +108,35 @@ function writeRequest(req: RequestFrame): void {
 }
 
 /**
- * Poll inbound.db for a cli_response matching our requestId.
- * Opens a fresh connection each poll (mmap_size=0) for cross-mount visibility.
+ * Poll inbound.db for a cli_response matching our requestId. Under 'sync'
+ * transport, polls the container's own local copy (kept current by the
+ * persistent agent-runner client applying host-pushed 'inbound' rows) —
+ * never the host-mounted file. Opens a fresh connection each poll
+ * (mmap_size=0) for cross-mount visibility on the 'file' transport path.
  */
-function pollResponse(requestId: string, timeoutMs: number): ResponseFrame | null {
+async function pollResponse(requestId: string, timeoutMs: number): Promise<ResponseFrame | null> {
   const deadline = Date.now() + timeoutMs;
+  const inboundPath = IS_SYNC ? localInboundPath() : INBOUND_DB;
 
   while (Date.now() < deadline) {
-    const inDb = new Database(INBOUND_DB, { readonly: true });
+    const inDb = new Database(inboundPath, { readonly: true });
     inDb.exec('PRAGMA busy_timeout = 5000');
-    inDb.exec('PRAGMA mmap_size = 0');
+    if (!IS_SYNC) inDb.exec('PRAGMA mmap_size = 0');
 
+    let row: { id: string; content: string } | null;
     try {
-      const row = inDb
+      row = inDb
         .prepare("SELECT id, content FROM messages_in WHERE status = 'pending' AND content LIKE ?")
         .get(`%"requestId":"${requestId}"%`) as { id: string; content: string } | null;
+    } finally {
+      inDb.close();
+    }
 
-      if (row) {
-        // Mark as completed via processing_ack so agent-runner skips it
+    if (row) {
+      // Mark as completed via processing_ack so agent-runner skips it.
+      if (IS_SYNC) {
+        await pushCompletedAck(row.id);
+      } else {
         const outDb = new Database(OUTBOUND_DB);
         outDb.exec('PRAGMA journal_mode = DELETE');
         outDb.exec('PRAGMA busy_timeout = 5000');
@@ -115,12 +146,10 @@ function pollResponse(requestId: string, timeoutMs: number): ResponseFrame | nul
           )
           .run(row.id, new Date().toISOString());
         outDb.close();
-
-        const parsed = JSON.parse(row.content);
-        return parsed.frame as ResponseFrame;
       }
-    } finally {
-      inDb.close();
+
+      const parsed = JSON.parse(row.content);
+      return parsed.frame as ResponseFrame;
     }
 
     Bun.sleepSync(500);
@@ -270,9 +299,13 @@ const { command, args, json } = parseArgv(argv);
 const requestId = generateId();
 const req: RequestFrame = { id: requestId, command, args };
 
-writeRequest(req);
+if (IS_SYNC) {
+  await writeRequestSync(req);
+} else {
+  writeRequest(req);
+}
 
-const resp = pollResponse(requestId, 30_000);
+const resp = await pollResponse(requestId, 30_000);
 
 if (!resp) {
   process.stderr.write('ncl: command timed out after 30s\n');

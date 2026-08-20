@@ -17,8 +17,10 @@ import path from 'path';
 import { deriveAttachmentName } from './attachment-naming.js';
 import { isSafeAttachmentName } from './attachment-safety.js';
 import type { OutboundFile } from './channels/adapter.js';
-import { DATA_DIR } from './config.js';
+import { DATA_DIR, GROUPS_DIR } from './config.js';
 import { ensureContainedInboxDir, isPathInside } from './inbox-safety.js';
+import { isImageAttachment } from './modules/attachment-caption/caption.js';
+import { getAgentGroup } from './db/agent-groups.js';
 import { getMessagingGroup } from './db/messaging-groups.js';
 import {
   createSession,
@@ -36,9 +38,17 @@ import {
   openOutboundDbRw as openOutboundDbRwRaw,
   upsertSessionRouting,
   insertMessage,
+  migrateDeliveredTable,
   migrateMessagesInTable,
 } from './db/session-db.js';
 import { log } from './log.js';
+import {
+  notifyDeliveredWrite,
+  notifyInboundWrite,
+  notifySessionRoutingWrite,
+  type DeliveredPayload,
+  type InboundRowPayload,
+} from './session-sync/inbound-push.js';
 import type { Session } from './types.js';
 
 /** Root directory for all session data. */
@@ -187,17 +197,67 @@ export function writeSessionRouting(agentGroupId: string, sessionId: string): vo
     }
   }
 
+  const routing = { channel_type: channelType, platform_id: platformId, thread_id: session.thread_id };
   const db = openInboundDb(agentGroupId, sessionId);
   try {
-    upsertSessionRouting(db, {
-      channel_type: channelType,
-      platform_id: platformId,
-      thread_id: session.thread_id,
-    });
+    upsertSessionRouting(db, routing);
   } finally {
     db.close();
   }
+  notifySessionRoutingWrite(agentGroupId, sessionId, routing);
   log.debug('Session routing written', { sessionId, channelType, platformId, threadId: session.thread_id });
+}
+
+/**
+ * Push every currently-pending messages_in row to a freshly-connected 'sync'
+ * container. Closes the gap sitting right next to the destinations/
+ * session_routing on-connect backfill (see docs/session-sync-transport.md
+ * §8.6.1): routeInbound() writes the triggering message and *then* spawns
+ * the container, so the write races the connection — by the time the WS
+ * handshake completes (a multi-second TLS round trip), the write already
+ * happened with no live `ws` to push through, and the container's local
+ * inbound.db never gets the very message that woke it. Re-reading and
+ * re-pushing every 'pending' row here is idempotent on the container side
+ * (`INSERT OR IGNORE` in apply-inbound.ts), so a reconnect that re-sends an
+ * already-applied row is harmless.
+ */
+export function backfillPendingInbound(agentGroupId: string, sessionId: string): void {
+  const dbPath = inboundDbPath(agentGroupId, sessionId);
+  if (!fs.existsSync(dbPath)) return;
+
+  const db = openInboundDb(agentGroupId, sessionId);
+  let rows: InboundRowPayload[];
+  try {
+    rows = db.prepare("SELECT * FROM messages_in WHERE status = 'pending' ORDER BY seq").all() as InboundRowPayload[];
+  } finally {
+    db.close();
+  }
+  for (const row of rows) notifyInboundWrite(agentGroupId, sessionId, row);
+}
+
+/**
+ * Push every not-yet-acked `delivered` row to a freshly-connected 'sync'
+ * container — closes the gap flagged in docs/session-sync-transport.md
+ * §8.6.4 / §8.2 item 4: a container killed between sending a reply and the
+ * delivery confirmation landing would otherwise never see that
+ * confirmation, since notifyDeliveredWrite silently no-ops with no
+ * connection to push through. `sync_acked` (schema.ts) is the watermark —
+ * set once the container acks a push (see notifyDeliveredWrite), so a
+ * reconnect only re-sends what was actually missed.
+ */
+export function backfillPendingDelivered(agentGroupId: string, sessionId: string): void {
+  const dbPath = inboundDbPath(agentGroupId, sessionId);
+  if (!fs.existsSync(dbPath)) return;
+
+  const db = openInboundDb(agentGroupId, sessionId);
+  let rows: DeliveredPayload[];
+  try {
+    migrateDeliveredTable(db);
+    rows = db.prepare('SELECT * FROM delivered WHERE sync_acked = 0').all() as DeliveredPayload[];
+  } finally {
+    db.close();
+  }
+  for (const row of rows) notifyDeliveredWrite(agentGroupId, sessionId, row, dbPath);
 }
 
 /**
@@ -238,6 +298,15 @@ export function writeSessionMessage(
      * Dying containers (past first poll) skip these rows.
      */
     onWake?: 0 | 1;
+    /**
+     * Write as 'staged' instead of 'pending' — invisible to the container's
+     * poll loop (which only reads status='pending') until releaseStagedMessage
+     * flips it. Used for wake-triggering messages so an already-warm
+     * container can't race the host's own synth/briefing step, which still
+     * needs the row present (readPendingBatchText also accepts 'staged') to
+     * build its batch text from it.
+     */
+    stage?: boolean;
   },
 ): void {
   // Documented reset: operators `rm -rf` a session folder to clear a stuck
@@ -253,6 +322,7 @@ export function writeSessionMessage(
   // Extract base64 attachment data, save to inbox, replace with file paths
   const content = extractAttachmentFiles(agentGroupId, sessionId, message.id, message.content);
 
+  let syncPayload: InboundRowPayload | undefined;
   const db = openInboundDb(agentGroupId, sessionId);
   try {
     insertMessage(db, {
@@ -269,11 +339,47 @@ export function writeSessionMessage(
       sourceSessionId: message.sourceSessionId ?? null,
       onWake: message.onWake ?? 0,
     });
+    if (message.stage) {
+      db.prepare("UPDATE messages_in SET status = 'staged' WHERE id = ?").run(message.id);
+    }
+    // Read back the assigned seq (insertMessage computes it internally) — a
+    // 'sync'-transport push needs the row exactly as it now exists, staged
+    // status included, since that's the shape the container applies verbatim.
+    syncPayload = db.prepare('SELECT * FROM messages_in WHERE id = ?').get(message.id) as InboundRowPayload | undefined;
   } finally {
     db.close();
   }
+  if (syncPayload) notifyInboundWrite(agentGroupId, sessionId, syncPayload);
 
   updateSession(sessionId, { last_active: new Date().toISOString() });
+}
+
+/** Flips a 'staged' row (see writeSessionMessage's `stage` option) back to
+ *  'pending' so the container's poll loop can finally see it. No-op if the
+ *  row was never staged (already 'pending') or doesn't exist. */
+export function releaseStagedMessage(agentGroupId: string, sessionId: string, messageId: string): void {
+  const db = openInboundDb(agentGroupId, sessionId);
+  let syncPayload: InboundRowPayload | undefined;
+  try {
+    const result = db
+      .prepare("UPDATE messages_in SET status = 'pending' WHERE id = ? AND status = 'staged'")
+      .run(messageId);
+    if (result.changes > 0) {
+      syncPayload = db.prepare('SELECT * FROM messages_in WHERE id = ?').get(messageId) as
+        | InboundRowPayload
+        | undefined;
+    }
+  } finally {
+    db.close();
+  }
+  // Under 'sync' transport, the container's local copy of this row is still
+  // stuck at status='staged' (the initial writeSessionMessage push carried
+  // that value) until this status flip is pushed too — otherwise
+  // getPendingMessages()'s `WHERE status = 'pending'` filter never sees it,
+  // for the lifetime of that container. Found via a live canary flip: the
+  // exact "already-warm container, staged wake message" path this function
+  // exists for is exactly the case that was silently dropped.
+  if (syncPayload) notifyInboundWrite(agentGroupId, sessionId, syncPayload);
 }
 
 /**
@@ -345,11 +451,12 @@ function extractAttachmentFiles(
     if (!inboxDir) break;
 
     const filePath = path.join(inboxDir, filename);
+    const bytes = Buffer.from(att.data as string, 'base64');
     try {
       // wx = exclusive create. Refuses to follow a pre existing symlink or
       // overwrite any existing file. The host expects to be the sole writer
       // of these attachments.
-      fs.writeFileSync(filePath, Buffer.from(att.data as string, 'base64'), { flag: 'wx' });
+      fs.writeFileSync(filePath, bytes, { flag: 'wx' });
     } catch (err: unknown) {
       const e = err as NodeJS.ErrnoException;
       if (e.code === 'EEXIST') {
@@ -367,6 +474,27 @@ function extractAttachmentFiles(
     delete att.data;
     changed = true;
     log.debug('Saved attachment to inbox', { messageId, filename, size: att.size });
+
+    // Session inbox is per-thread and may not outlive the session. Images
+    // also get resized to 512px for captioning/vault-export — mirror the
+    // full-resolution original into the agent group's persistent workspace
+    // (survives session lifecycle) in case the resize crunches too much
+    // detail. Not the Obsidian vault — that only ever gets the resized copy.
+    // Best-effort: a failure here must not block message delivery.
+    // ponytail: local-disk only for now; an offsite store (Dropbox etc.) can
+    // replace this path later without touching the inbox-write above.
+    if (isImageAttachment(att)) {
+      try {
+        const folder = getAgentGroup(agentGroupId)?.folder;
+        if (folder) {
+          const archiveDir = path.join(path.resolve(GROUPS_DIR, folder), 'attachments', messageId);
+          fs.mkdirSync(archiveDir, { recursive: true });
+          fs.writeFileSync(path.join(archiveDir, filename), bytes, { flag: 'wx' });
+        }
+      } catch (err) {
+        log.warn('Failed to archive original attachment to group workspace', { messageId, filename, err });
+      }
+    }
   }
 
   return changed ? JSON.stringify(parsed) : contentStr;

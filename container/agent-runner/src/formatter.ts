@@ -3,6 +3,7 @@ import fs from 'fs';
 import { getConfig } from './config.js';
 import { findByRouting } from './destinations.js';
 import type { MessageInRow } from './db/messages-in.js';
+import { projectedContextHeader } from './projected-sessions.js';
 import { TIMEZONE, formatLocalTime } from './timezone.js';
 
 const BRIEFING_PATH = '/workspace/briefing.md';
@@ -241,13 +242,18 @@ function originAttr(msg: MessageInRow): string {
 function formatTaskMessage(msg: MessageInRow): string {
   const content = parseContent(msg.content);
   const from = originAttr(msg);
-  const time = formatLocalTime(msg.timestamp, TIMEZONE);
+  const time = formatLocalTime(msg.process_after ?? msg.timestamp, TIMEZONE);
+  const currentTime = new Date().toLocaleString('en-US', {
+    timeZone: TIMEZONE,
+    dateStyle: 'full',
+    timeStyle: 'short',
+  });
   const parts: string[] = [];
   if (content.scriptOutput) {
     parts.push('Script output:', JSON.stringify(content.scriptOutput, null, 2), '');
   }
   parts.push('Instructions:', stripLegacyTaskContract(content.prompt || ''));
-  return `<task${from} time="${escapeXml(time)}">${parts.join('\n')}</task>`;
+  return `<task${from} time="${escapeXml(time)}" current_time="${escapeXml(currentTime)}">${parts.join('\n')}</task>`;
 }
 
 const LEGACY_TASK_CONTRACT_MARKERS = [
@@ -304,6 +310,12 @@ function formatReplyContext(replyTo: any): string {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
+function isImageAttachment(a: any): boolean {
+  if (typeof a.mimeType === 'string' && a.mimeType.startsWith('image/')) return true;
+  return typeof a.type === 'string' && ['image', 'photo', 'sticker'].includes(a.type.toLowerCase());
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function formatAttachments(attachments: any[] | undefined): string {
   if (!Array.isArray(attachments) || attachments.length === 0) return '';
   const parts = attachments.map((a) => {
@@ -311,10 +323,28 @@ function formatAttachments(attachments: any[] | undefined): string {
     const type = a.type || 'file';
     const localPath = a.localPath ? `/workspace/${a.localPath}` : '';
     const url = a.url || '';
-    if (localPath) {
-      return `[${type}: ${escapeXml(name)} — saved to ${escapeXml(localPath)}]`;
+    const bracket = localPath
+      ? `[${type}: ${escapeXml(name)} — saved to ${escapeXml(localPath)}]`
+      : url
+        ? `[${type}: ${escapeXml(name)} (${escapeXml(url)})]`
+        : `[${type}: ${escapeXml(name)}]`;
+    // Vision support isn't guaranteed for every configured provider/model —
+    // some routes (e.g. a local model behind an Anthropic-compat proxy) 400
+    // when a tool_result carries an image content block. The caption is
+    // already the full available description; reading the raw file adds
+    // nothing and risks crashing the turn, so always discourage it for
+    // image-class attachments, regardless of caption outcome.
+    const dontRead = isImageAttachment(a) && localPath ? ' Do not open this file directly.' : '';
+    if (typeof a.captionError === 'string' && a.captionError) {
+      return `${bracket}\n  (no description available yet — try again shortly)${dontRead}`;
     }
-    return url ? `[${type}: ${escapeXml(name)} (${escapeXml(url)})]` : `[${type}: ${escapeXml(name)}]`;
+    if (typeof a.caption === 'string' && a.caption) {
+      return `${bracket}\n  ${escapeXml(a.caption)}${dontRead}`;
+    }
+    if (typeof a.captionId === 'string' && a.captionId) {
+      return `${bracket}\n  (id: ${escapeXml(a.captionId)} — description pending, you'll be notified when ready)${dontRead}`;
+    }
+    return `${bracket}${dontRead}`;
   });
   return '\n' + parts.join('\n');
 }

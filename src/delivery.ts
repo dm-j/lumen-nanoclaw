@@ -31,7 +31,8 @@ import { runGuarded, type DeliveryGuardSpec, type GuardedDeliveryHandler } from 
 import { isUnguarded, type Unguarded } from './guard/index.js';
 import { log } from './log.js';
 import { normalizeOptions } from './channels/ask-question.js';
-import { clearOutbox, openInboundDb, openOutboundDb, readOutboxFiles } from './session-manager.js';
+import { clearOutbox, inboundDbPath, openInboundDb, openOutboundDb, readOutboxFiles } from './session-manager.js';
+import { notifyDeliveredWrite } from './session-sync/inbound-push.js';
 import { pauseTypingRefreshAfterDelivery, setTypingAdapter } from './modules/typing/index.js';
 import type { OutboundFile } from './channels/adapter.js';
 import type { PendingApproval, Session } from './types.js';
@@ -202,8 +203,28 @@ async function drainSession(session: Session): Promise<void> {
     for (const msg of undelivered) {
       try {
         const platformMsgId = await deliverMessage(msg, session, inDb);
-        markDelivered(inDb, msg.id, platformMsgId ?? null);
+        const deliveredRow = markDelivered(inDb, msg.id, platformMsgId ?? null);
+        notifyDeliveredWrite(
+          session.agent_group_id,
+          session.id,
+          deliveredRow,
+          inboundDbPath(session.agent_group_id, session.id),
+        );
         deliveryAttempts.delete(msg.id);
+
+        // Live per-turn vault transcript export — cheap no-op when the
+        // group has no transcript-append-host script. See
+        // modules/vault-transcript/index.ts's module header.
+        if (msg.kind === 'chat') {
+          const { appendDeliveredOutboundTurn } = await import('./modules/vault-transcript/index.js');
+          const { resolveAssistantName } = await import('./container-config.js');
+          void appendDeliveredOutboundTurn(
+            session.agent_group_id,
+            resolveAssistantName(session.agent_group_id),
+            msg.timestamp,
+            msg.content,
+          );
+        }
 
         // Pause the typing indicator after a real user-facing message
         // lands on the user's screen, so the client has time to visually
@@ -224,7 +245,13 @@ async function drainSession(session: Session): Promise<void> {
             attempts,
             err,
           });
-          markDeliveryFailed(inDb, msg.id);
+          const failedRow = markDeliveryFailed(inDb, msg.id);
+          notifyDeliveredWrite(
+            session.agent_group_id,
+            session.id,
+            failedRow,
+            inboundDbPath(session.agent_group_id, session.id),
+          );
           deliveryAttempts.delete(msg.id);
         } else {
           log.warn('Message delivery failed, will retry', {

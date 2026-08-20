@@ -19,7 +19,13 @@ const envConfig = readEnvFile([
   'NANOCLAW_EGRESS_LOCKDOWN',
   'NANOCLAW_EGRESS_NETWORK',
   'ONECLI_GATEWAY_CONTAINER',
+  'SESSION_SYNC_PORT',
 ]);
+
+// Host WebSocket port for 'sync'-transport session DB syncing (loopback-only,
+// between the host and its own containers). 58636 = "LUMEN" on a phone
+// keypad; override in .env if it conflicts with something else on the host.
+export const SESSION_SYNC_PORT = Number(process.env.SESSION_SYNC_PORT || envConfig.SESSION_SYNC_PORT || 58636);
 
 /**
  * @deprecated WhatsApp adapter copies now read the ASSISTANT_NAME .env key
@@ -39,6 +45,13 @@ export const DEFAULT_AGENT_PROVIDER = (
   'claude'
 ).toLowerCase();
 
+// Instance-wide default model for newly created groups. Unset (undefined) when
+// not configured, so existing installs and the provider's own default model
+// selection are unaffected. Same "new groups only, stamped once" semantics as
+// DEFAULT_AGENT_PROVIDER — see ensureContainerConfig. Per-group
+// `ncl groups config update --model` still overrides it.
+export const DEFAULT_AGENT_MODEL = process.env.DEFAULT_AGENT_MODEL || envConfig.DEFAULT_AGENT_MODEL || undefined;
+
 /**
  * @deprecated WhatsApp adapter copies now read the ASSISTANT_HAS_OWN_NUMBER
  * .env key directly. Re-export retained one release for stale adapter copies
@@ -57,6 +70,26 @@ export const SENDER_ALLOWLIST_PATH = path.join(HOME_DIR, '.config', 'nanoclaw', 
 export const STORE_DIR = path.resolve(PROJECT_ROOT, 'store');
 export const GROUPS_DIR = path.resolve(PROJECT_ROOT, 'groups');
 export const DATA_DIR = path.resolve(PROJECT_ROOT, 'data');
+// Never mounted into containers — operator-only, cat/tail from the host shell.
+export const LOGS_DIR = path.resolve(PROJECT_ROOT, 'logs');
+// mcp-shims implementation scripts — deliberately a sibling of groups/, not
+// inside it. groups/<folder>/ is bind-mounted RW into its container as
+// /workspace/agent, so anything living inside a group's own folder is
+// readable *and writable* from inside that agent's own session — fine for
+// CLAUDE.md/container.json (which get their own dedicated read-only mounts
+// overlaying the RW base), but mcp-shims scripts are meant to be invisible
+// to the agent entirely: the container only ever gets a generic forwarder
+// (dynamic-shims.ts) with no implementation in it. Default layout:
+// mcp-shims/<group-folder>/<server>/<name>-host — see resolveMcpShimsDir.
+export const MCP_SHIMS_DIR = path.resolve(PROJECT_ROOT, 'mcp-shims');
+// host-shims implementation scripts — same reasoning and layout as
+// MCP_SHIMS_DIR, a sibling of groups/, not inside it. host-shims scripts
+// (briefing-host, recall-host, etc.) are Bash-tool-invoked by name via the
+// shared host-shim CLI (agent-runner source, read-only, never per-group) —
+// the agent is meant to know only the tool's *name*, never its
+// implementation. Default layout: host-shims/<group-folder>/<name>-host —
+// see resolveHostShimsDir.
+export const HOST_SHIMS_DIR = path.resolve(PROJECT_ROOT, 'host-shims');
 // Local agent-template library. Committed but ships empty (+ README). Resolved
 // once at load. Override to another LOCAL path via NANOCLAW_TEMPLATES_DIR; never
 // a remote URL, never an ncl flag, never runtime-mutable.

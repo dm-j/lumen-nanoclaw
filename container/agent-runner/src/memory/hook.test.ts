@@ -40,4 +40,13 @@ describe('memory-hook script', () => {
     expect(runHook('{}').stdout.toString()).toBe('');
     expect(runHook('{not-json').stdout.toString()).toBe('');
   });
+
+  it('skips injection on startup when the projected-sessions marker is present', () => {
+    fs.writeFileSync(path.join(BASE, '.projected-sessions-enabled'), '');
+
+    const proc = runHook(JSON.stringify({ source: 'startup' }));
+
+    expect(proc.exitCode).toBe(0);
+    expect(proc.stdout.toString()).toBe('');
+  });
 });

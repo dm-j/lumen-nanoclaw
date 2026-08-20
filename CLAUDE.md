@@ -73,6 +73,7 @@ For ad-hoc queries from skills or scripts, use the in-tree wrapper rather than t
 | `src/command-gate.ts` | Router-side admin command gate — queries `user_roles` directly (no env var, no container-side check) |
 | `src/modules/approvals/onecli-approvals.ts` | OneCLI credentialed-action approval bridge |
 | `src/modules/permissions/user-dm.ts` | Cold-DM resolution + `user_dms` cache |
+| `src/modules/host-shim/exec.ts` + `mcp-manifest.ts`, `container/agent-runner/src/dynamic-shims.ts` | `host-shims/` (whitelisted host scripts callable via the Bash tool) and `mcp-shims/` (scripts auto-registered as real MCP tools) — see `/mcp-shims` skill for the latter's paradigm |
 | `src/group-init.ts` | Per-agent-group filesystem scaffold (CLAUDE.md, skills) — agent-runner source is a shared read-only mount, not copied per group |
 | `src/db/container-configs.ts` | CRUD for `container_configs` table (per-group container runtime config) |
 | `src/backfill-container-configs.ts` | Migrates legacy `container.json` files into the DB on startup |
@@ -203,10 +204,16 @@ Four types of skills. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full taxono
 | `/update-nanoclaw` | Bring upstream updates into a customized install |
 | `/init-onecli` | Install OneCLI Agent Vault and migrate `.env` credentials |
 | `/migrate-memory` | Carry a group's agent memory across a provider switch (operator-run, both directions) |
+| `/mcp-shims` | Reference: turn a script into an MCP tool without writing an MCP server (facade/constrain/compose a real one, or wrap a CLI/API) |
+| `/add-mcp-shim` | Guided, step-by-step build of one new mcp-shims tool (naming, wrapper type, language, per-parameter expose/hardcode/validate) |
 
 ## Contributing
 
 Before creating a PR, adding a skill, or preparing any contribution, you MUST read [CONTRIBUTING.md](CONTRIBUTING.md). It covers accepted change types, the four skill types and their guidelines, `SKILL.md` format rules, and the pre-submission checklist.
+
+## Git Hooks
+
+This repo uses **husky** with `core.hooksPath` set to `.husky/_` — `.git/hooks/*` is bypassed entirely and any script written there is dead code. Add hook logic to `.husky/<hookname>` (e.g. `.husky/pre-commit`, `.husky/post-commit`); husky's dispatcher shims in `.husky/_/` invoke it automatically. See [docs/instance-repo-split.md](docs/instance-repo-split.md) for the pre-commit/post-commit pair that syncs `groups/`/`mcp-shims/`/`host-shims/` into the private instance repo.
 
 ## PR Hygiene
 
@@ -237,16 +244,19 @@ cd container/agent-runner && bun test      # Container tests (bun:test)
 
 Container typecheck is a separate tsconfig — if you edit `container/agent-runner/src/`, run `pnpm exec tsc -p container/agent-runner/tsconfig.json --noEmit` from root (or `bun run typecheck` from `container/agent-runner/`).
 
-Service management:
+Service management: the label/unit name is **slug-scoped**, not literally `com.nanoclaw` — `src/install-slug.ts` derives it as `com.nanoclaw-v2-<sha1(projectRoot)[:8]>` (launchd) / `nanoclaw-v2-<slug>` (systemd), so two checkouts on one host don't collide. Find the actual label before targeting it:
+
 ```bash
 # macOS (launchd)
-launchctl load   ~/Library/LaunchAgents/com.nanoclaw.plist
-launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist
-launchctl kickstart -k gui/$(id -u)/com.nanoclaw  # restart
+launchctl list | grep nanoclaw                           # find the actual label first
+launchctl kickstart -k gui/$(id -u)/com.nanoclaw-v2-<slug>  # restart
 
 # Linux (systemd)
-systemctl --user start|stop|restart nanoclaw
+systemctl --user list-units | grep nanoclaw
+systemctl --user restart nanoclaw-v2-<slug>
 ```
+
+Rebuild before restart matters: `pnpm run dev` runs from source live, but the installed service runs `dist/index.js` — after editing `src/`, `pnpm run build` first or the restart just relaunches stale code.
 
 ## Troubleshooting
 
@@ -278,6 +288,12 @@ This project uses pnpm with `minimumReleaseAge: 4320` (3 days) in `pnpm-workspac
 - **`onlyBuiltDependencies`**: Never add packages to this list without human approval — build scripts execute arbitrary code during install.
 - **`pnpm install --frozen-lockfile`** should be used in CI, automation, and container builds. Never run bare `pnpm install` in those contexts.
 
+## Roadmap Maintenance
+
+Whenever a feature or change is discussed and agreed on scope/shape but not implemented in the same session — a "let's do this next time" or "document this so we don't lose it" moment — write it up before the session ends, not just into the conversation. Capture: what was decided, what's still open/undecided, and why (the reasoning, not just the conclusion — future-you needs to judge tradeoffs the same way, not just execute a checklist).
+
+[docs/roadmap.md](docs/roadmap.md) is a thin index only — one line per item, linking out to `docs/roadmap/<item>.md`. Keep it that way: a new item gets its own file plus one new line in the index, not a paragraph inline in the index itself. This keeps the index cheap to scan and lets one item's file be edited without touching any other item's. When a listed item ships, delete its file and remove its index line rather than leaving it stale; when new drift or scope is discovered while working on something else, add a dated addendum to that item's own file (see `roadmap/reconcile-host-shim-templates.md` for the pattern) rather than editing the index. The point is that the roadmap, not anyone's memory of the conversation, is the durable record of what's next and why — don't make the user re-explain a plan that was already agreed on.
+
 ## Docs Index
 
 | Doc | Purpose |
@@ -287,7 +303,9 @@ This project uses pnpm with `minimumReleaseAge: 4320` (3 days) in `pnpm-workspac
 | [docs/db.md](docs/db.md) | DB architecture overview: three-DB model, cross-mount rules, readers/writers map |
 | [docs/db-central.md](docs/db-central.md) | Central DB (`data/v2.db`) — every table + migration system |
 | [docs/db-session.md](docs/db-session.md) | Per-session `inbound.db` + `outbound.db` schemas + seq parity |
+| [docs/session-sync-transport.md](docs/session-sync-transport.md) | In-progress replacement for bind-mounted session DBs (macOS SQLite corruption) — what was tried and ruled out, the sync design, transport-layer decisions, status |
 | [docs/agent-runner-details.md](docs/agent-runner-details.md) | Agent-runner internals + MCP tool interface |
+| [docs/host-shims.md](docs/host-shims.md) | The vault-integration host-shim family (briefing/digest/recall/remember/etc.) — what each one is for, trunk-template status, shared conventions |
 | [docs/isolation-model.md](docs/isolation-model.md) | Three-level channel isolation model |
 | [docs/setup-wiring.md](docs/setup-wiring.md) | What's wired, what's open in the setup flow |
 | [docs/architecture-diagram.md](docs/architecture-diagram.md) | Diagram version of the architecture |
@@ -296,12 +314,14 @@ This project uses pnpm with `minimumReleaseAge: 4320` (3 days) in `pnpm-workspac
 | [docs/migration-dev.md](docs/migration-dev.md) | Migration development guide — testing, debugging, dev loop |
 | [docs/provider-migration.md](docs/provider-migration.md) | Switching a live agent group between providers (e.g. Claude → Codex) — what carries over, rollback |
 | [docs/customizing.md](docs/customizing.md) | Short intro to customizing via skills |
+| [docs/roadmap.md](docs/roadmap.md) | Open items / planning list |
 | [docs/skills-model.md](docs/skills-model.md) | The skills model in full: recipes, tests, upgrades, migrations |
 | [docs/skill-guidelines.md](docs/skill-guidelines.md) | Authoritative checklist for writing a skill |
 | [docs/skill-directives.md](docs/skill-directives.md) | `nc:` directive reference: fence grammar, the eight kinds, effects, guards, lint |
 | [docs/skill-engine-seam.md](docs/skill-engine-seam.md) | Skill-engine consumer contract (wizard / pipeline / agent-relay) + boundary-rule rationale |
 | [docs/templates.md](docs/templates.md) | Agent templates: what they are, stamping via `ncl groups create --template` + the setup wizard, the OneCLI/MCP-credential model, supported providers, and how to contribute one |
 | [docs/hardened-image.md](docs/hardened-image.md) | Opt-in: pull the agent image from a registry instead of building it |
+| [docs/instance-repo-split.md](docs/instance-repo-split.md) | Why `groups/`, `mcp-shims/`, `host-shims/` are symlinks into a separate private instance repo |
 
 ## Container Build Cache
 
@@ -331,8 +351,8 @@ grep -q '^INSTALL_CJK_FONTS=' .env && sed -i.bak 's/^INSTALL_CJK_FONTS=.*/INSTAL
 
 # Rebuild and restart so new sessions pick up the new image
 ./container/build.sh
-launchctl kickstart -k gui/$(id -u)/com.nanoclaw   # macOS
-# systemctl --user restart nanoclaw                # Linux
+launchctl kickstart -k gui/$(id -u)/com.nanoclaw-v2-<slug>   # macOS — find <slug> via `launchctl list | grep nanoclaw`
+# systemctl --user restart nanoclaw-v2-<slug>                # Linux
 ```
 
 `container/build.sh` reads `INSTALL_CJK_FONTS` from `.env` and passes it through as a Docker build-arg. Without CJK fonts, Chromium-rendered screenshots and PDFs containing CJK text show tofu (empty rectangles) instead of characters.

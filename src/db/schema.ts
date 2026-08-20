@@ -197,7 +197,11 @@ CREATE TABLE IF NOT EXISTS delivered (
   message_out_id      TEXT PRIMARY KEY,
   platform_message_id TEXT,
   status              TEXT NOT NULL DEFAULT 'delivered',
-  delivered_at        TEXT NOT NULL
+  delivered_at        TEXT NOT NULL,
+  -- 'sync' transport only: 1 once the container has acked this row.
+  -- Lets a reconnect find and re-push rows that were written while the
+  -- container was disconnected (see docs/session-sync-transport.md §8.2 item 4).
+  sync_acked           INTEGER NOT NULL DEFAULT 0
 );
 
 -- Destination map for this session's agent.
@@ -249,6 +253,41 @@ CREATE TABLE IF NOT EXISTS processing_ack (
   message_id     TEXT PRIMARY KEY,
   status         TEXT NOT NULL,
   status_changed TEXT NOT NULL
+);
+
+-- Host-internal bookkeeping for the 'sync' session transport (see
+-- src/session-sync/server.ts) — the hash-chain checkpoint the host has
+-- durably applied, so a host restart resumes from here instead of
+-- resetting to GENESIS_CHAIN. Deliberately a separate table from
+-- session_state below, which is container-owned app state (SDK session ID,
+-- etc.); keeping sync-internal bookkeeping out of that keyspace avoids a
+-- future collision if session_state itself ever gets synced too.
+-- inbound_seq/inbound_chain track the host's own push-to-container direction
+-- (host is chain authority there, mirroring how outbound_seq/outbound_chain
+-- track container-to-host pushes) — added after the column-less initial
+-- version shipped, so server.ts ALTERs existing rows/tables forward-compat
+-- rather than assuming a fresh CREATE TABLE ran.
+CREATE TABLE IF NOT EXISTS session_sync_state (
+  id             INTEGER PRIMARY KEY CHECK (id = 1),
+  outbound_seq   INTEGER NOT NULL,
+  outbound_chain TEXT NOT NULL,
+  inbound_seq    INTEGER NOT NULL DEFAULT 0,
+  inbound_chain  TEXT NOT NULL DEFAULT '',
+  updated_at     TEXT NOT NULL
+);
+
+-- Durable log of every host-to-container ('inbound' direction) push, keyed
+-- by seq, so a container-reported resync_point (chain mismatch, or simply
+-- "I missed messages while disconnected") can be answered with a real
+-- replay instead of just surfacing an error. The host is chain authority
+-- for this direction (session_sync_state.inbound_chain), so it's the side
+-- that must retain history to replay from. Unbounded growth is an accepted
+-- tradeoff for a first cut — see src/session-sync/server.ts's replay path.
+CREATE TABLE IF NOT EXISTS session_sync_log (
+  seq     INTEGER PRIMARY KEY,
+  kind    TEXT NOT NULL,
+  chain   TEXT NOT NULL,
+  payload TEXT NOT NULL
 );
 
 -- Persistent key/value state owned by the container. Used (among other things)

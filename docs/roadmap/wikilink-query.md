@@ -1,0 +1,3 @@
+# Re-implement or drop `wikilink-query`
+
+Vault shim `Meta/scripts/wikilink-query` (used by `briefer.md`'s fan-out step) pointed at `/Users/lumen/Projects/nanoclaw/scripts/wikilink-query.ts` — a v1 nanoclaw memory-briefing helper that never got ported to v2's projected-sessions system. Calling it threw `ERR_MODULE_NOT_FOUND`, which the briefer model (running on a small model under load) misreported to the user as an Anthropic API key problem — actually unrelated. Removed from `briefer.md`'s tool list for now (falls back to plain `Read` for fan-out); decide whether to reimplement the cached wikilink-summary lookup against v2, or leave it dropped permanently.

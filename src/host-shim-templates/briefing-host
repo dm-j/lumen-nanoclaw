@@ -11,18 +11,45 @@
 #
 # Shells to the `briefer` Claude Code subagent (VAULT_PATH/.claude/agents/
 # briefer.md) — the same invocation shape proven out by nanoclaw v1's
-# src/memory-briefing/briefer.ts (`claude -p --agent briefer`, cwd=vault).
-# That agent is vault-specific (reads/writes Meta/working-memory.md, its own
-# post-it, assumes a particular digest pipeline) — deliberately NOT shared
-# across agent groups. Each group gets its own copy of this script pointed
-# at its own vault (the "obsidian-host vs. obsidian-readonly-host" pattern:
-# same shape, different embedded policy per group) — do not point two
-# groups' scripts at the same vault unless that sharing is deliberate.
+# src/memory-briefing/briefer.ts. That agent is vault-specific (reads/writes
+# this vault's own memory files, assumes a particular digest pipeline) —
+# deliberately NOT shared across agent groups. Each group gets its own copy
+# of this script pointed at its own vault (the "obsidian-host vs.
+# obsidian-readonly-host" pattern: same shape, different embedded policy per
+# group) — do not point two groups' scripts at the same vault unless that
+# sharing is deliberate.
+#
+# Data-shape labels (not instructional text) live in briefing-prompt.md next
+# to this script — edit that file to change the two variable slots
+# ({{PREV_BRIEFING_SECTION}}, {{NEW_BATCH}}); this script fills them in and
+# appends the fixed output-constraint text below.
+
+case "${1:-}" in
+  -h|--help)
+    cat <<'EOF'
+briefing — compile an updated memory briefing from the previous briefing
+plus a new batch of inbound messages.
+
+Usage: briefing <prev-briefing-file> <new-batch-file>
+EOF
+    exit 0
+    ;;
+esac
 
 set -eu
 
 # --- Per-group configuration — edit this for your vault ---
 VAULT_PATH="/CHANGE/ME/path/to/this/groups/obsidian/vault"
+
+# Optional: route this briefer call through a local model proxy (e.g.
+# PrefixRouter, Ollama) instead of hitting the real Anthropic API directly
+# against your subscription's rate/cost limits. Leave empty to use claude's
+# normal default (real Anthropic API, host-side login). Set both to route
+# elsewhere, e.g.:
+#   BRIEFING_MODEL="ollama/some-model"
+#   PREFIXROUTER_URL="http://localhost:8787"
+BRIEFING_MODEL=""
+PREFIXROUTER_URL=""
 # --- end configuration ---
 
 if [ ! -d "$VAULT_PATH" ] || [ "$VAULT_PATH" = "/CHANGE/ME/path/to/this/groups/obsidian/vault" ]; then
@@ -37,43 +64,166 @@ PREV_BRIEFING="$(cat "$PREV_FILE" 2>/dev/null || true)"
 NEW_BATCH="$(cat "$BATCH_FILE")"
 
 # Prompt shape mirrors buildBrieferPrompt (nanoclaw v1's
-# src/memory-briefing/briefer.ts:156-192), with the one required correction
-# from the Implementation Plan (§3): the compiler must never emit a "nothing
-# changed" meta-statement, only substantive briefing text. Here the compiled
-# briefing IS the responder's entire substitute for memory — the responder
-# never sees the previous briefing itself, only what this call emits — so a
-# one-line "unchanged" would be 100% of what the responder receives.
-PROMPT="## Inciting message — what you are preparing a briefing to answer
+# src/memory-briefing/briefer.ts:156-192), with the one required correction:
+# the compiler must never emit a "nothing changed" meta-statement, only
+# substantive briefing text. Here the compiled briefing IS the responder's
+# entire substitute for memory — the responder never sees the previous
+# briefing itself, only what this call emits — so a one-line "unchanged"
+# would be 100% of what the responder receives.
+TEMPLATE="$(cat "$(dirname "$0")/briefing-prompt.md")"
 
-$NEW_BATCH
-"
-
+PREV_BRIEFING_SECTION=""
 if [ -n "$PREV_BRIEFING" ]; then
-  PROMPT="## Your previous briefing (stale — update it, do not just repeat it verbatim unless truly nothing changed)
+  PREV_BRIEFING_SECTION="## Your previous briefing (stale — update it, do not just repeat it verbatim unless truly nothing changed)
 
 $PREV_BRIEFING
 
-$PROMPT"
+"
 fi
+
+PROMPT="$(TEMPLATE="$TEMPLATE" PREV_BRIEFING_SECTION="$PREV_BRIEFING_SECTION" NEW_BATCH="$NEW_BATCH" python3 -c '
+import os
+t = os.environ["TEMPLATE"]
+t = t.replace("{{PREV_BRIEFING_SECTION}}", os.environ["PREV_BRIEFING_SECTION"])
+t = t.replace("{{NEW_BATCH}}", os.environ["NEW_BATCH"])
+print(t, end="")
+')"
 
 PROMPT="$PROMPT
 ## Output constraint
 
+This briefing exists to prepare another agent to act on and respond to the
+inciting message above — write for that purpose, not as a general summary.
 The briefing text is the whole response — no process narration, no remarks
 about matching the previous briefing or how you produced this. Pick one
-primary subject (up to 6 one-sentence bullets), zero-or-one secondary subject
-(up to 4 curt bullets), zero-or-one additional subject (one bullet + citation
-only). Every bullet is tagged with a confidence estimate (CERTAIN/CONFIDENT/
-SPECULATIVE/DISPUTED/UNCLEAR/DOUBTFUL) and cited as a wikilink.
+primary subject (up to 6 bullets), zero-or-one secondary subject (up to 4
+single-sentence bullets), zero-or-one additional subject (one bullet +
+citation only). Every bullet is tagged with a confidence estimate (CERTAIN/
+CONFIDENT/SPECULATIVE/DISPUTED/UNCLEAR/DOUBTFUL) and cited as a wikilink.
 
 If nothing meaningful changed since the previous briefing, output the
 previous briefing's content again (verbatim or lightly re-condensed) — never
 a sentence stating that nothing changed. Your output must always stand alone
 as substantive briefing text, never a statement about the briefing."
 
+# `--agent briefer` (background-agent dispatch) rejects a spoofed
+# ANTHROPIC_API_KEY with "Background agents and teammates are not supported
+# for this credential kind" when BRIEFING_MODEL is set, wrapped in a
+# fake-success JSON envelope instead of failing loudly, and hangs ~190s
+# before returning it. Foreground dispatch (--system-prompt-file, not
+# --agent) works with a spoofed key regardless of BRIEFING_MODEL, so we
+# fold briefer.md's persona into the system prompt ourselves instead of
+# selecting it via --agent. Regenerated every call so edits to briefer.md
+# take effect immediately.
+PERSONA_FILE="$(mktemp)"
+trap 'rm -f "$PERSONA_FILE"' EXIT
+python3 -c '
+import re
+with open("'"$VAULT_PATH"'/.claude/agents/briefer.md") as f:
+    text = f.read()
+text = re.sub(r"^---\n.*?\n---\n", "", text, count=1, flags=re.DOTALL)
+print(text, end="")
+' > "$PERSONA_FILE"
+
+# The repair pipe escapes raw control bytes that claude --output-format json
+# occasionally emits inside string values. Must run BEFORE bash variable
+# capture ($(...) truncates at null bytes) -- sys.stdin.buffer.read()
+# preserves them.
+REPAIR="import sys, re; data=sys.stdin.buffer.read(); esc={b\"\\n\": b\"\\\\n\", b\"\\r\": b\"\\\\r\", b\"\\t\": b\"\\\\t\"}; sys.stdout.buffer.write(re.sub(rb\"[\\x00-\\x1f]\", lambda m: esc.get(m.group(0), b\"\"), data)); sys.stdout.buffer.flush()"
+
 cd "$VAULT_PATH"
-exec claude -p --agent briefer \
-  --output-format text \
-  --permission-mode bypassPermissions \
-  --no-session-persistence \
-  "$PROMPT"
+# claude -p sniffs stdin for extra piped context when the prompt invokes a
+# skill — since this script never pipes anything in, the child's stdin is
+# left open-but-empty by execFile, so claude stalls ~3s and prints a "no
+# stdin data received" warning to stderr. Redirecting from /dev/null (the
+# warning's own suggested fix) gives it an immediately-closed stdin instead,
+# skipping the sniff/stall entirely.
+# --disallowedTools Task,Agent: --system-prompt-file (not --agent) means
+# briefer.md's own `tools:` frontmatter is stripped with the rest of the YAML
+# and never enforced by claude -p itself — this flag is the only real
+# enforcement. Without it the model can dispatch a subagent via the Agent/
+# Task tool, which runs under *that* agent's own model frontmatter (a real
+# Anthropic model name, not $BRIEFING_MODEL), inherits this process's
+# spoofed ANTHROPIC_API_KEY/router env regardless, and fails auth.
+# --disable-slash-commands: without it a "the following skills are
+# available" listing is injected into context whenever the Skill tool is
+# available, independent of the system prompt — a small model can misread
+# that listing as the actual user request. briefer never dispatches skills.
+if [ -n "$BRIEFING_MODEL" ]; then
+  RESULT_JSON="$(ANTHROPIC_BASE_URL="$PREFIXROUTER_URL" ANTHROPIC_API_KEY="ollama" \
+    claude -p --system-prompt-file "$PERSONA_FILE" \
+    --model "$BRIEFING_MODEL" \
+    --disallowedTools Task,Agent \
+    --disable-slash-commands \
+    --output-format json \
+    --permission-mode bypassPermissions \
+    --no-session-persistence \
+    "$PROMPT" < /dev/null | python3 -c "$REPAIR")"
+else
+  RESULT_JSON="$(claude -p --system-prompt-file "$PERSONA_FILE" \
+    --disallowedTools Task,Agent \
+    --disable-slash-commands \
+    --output-format json \
+    --permission-mode bypassPermissions \
+    --no-session-persistence \
+    "$PROMPT" < /dev/null | python3 -c "$REPAIR")"
+fi
+
+# Per-turn token/cost log — separate from the briefing output itself, for
+# tuning prompt/tail-length changes against actual token burn. Logging
+# failures never block the actual briefing; a malformed RESULT_JSON still
+# fails the final `.result` extraction below as before.
+TOKEN_LOG="$(cd "$(dirname "$0")" && pwd)/.briefing-tokens.log"
+TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+if ! printf '%s' "$RESULT_JSON" | jq -r --arg ts "$TS" '
+  [$ts,
+   (.usage.input_tokens // 0),
+   (.usage.cache_creation_input_tokens // 0),
+   (.usage.cache_read_input_tokens // 0),
+   (.usage.output_tokens // 0),
+   (.total_cost_usd // 0)] | @tsv
+' >> "$TOKEN_LOG" 2>/dev/null; then :; fi
+
+# Use Python rather than jq for the final extraction — jq is strict about
+# trailing non-JSON or edge-case truncation. raw_decode handles trailing
+# content (e.g. the `\n` the claude CLI appends after the JSON object) that
+# would make json.load() raise "Extra data". Exit 0 with empty stdout only
+# when the CLI envelope itself is unusable — compile-briefing.ts falls back
+# to the stored briefing on empty stdout regardless of exit code.
+#
+# Two JSON layers here: the outer object is the claude CLI's own
+# --output-format json envelope (.result is the agent's raw text reply).
+# The inner layer is this shim's own output contract with the briefer
+# prompt above — the agent's reply itself is expected to be
+# `{"briefing": "..."}`. A small/local model may not reliably hit that
+# shape; forward the raw reply instead of discarding it: a malformed
+# *envelope* (no valid outer JSON, or empty result) still fails closed, but
+# a malformed *inner* shape falls back to the raw reply text rather than
+# being thrown away.
+printf '%s' "$RESULT_JSON" | python3 -c '
+import sys, json, re
+data = sys.stdin.read().strip()
+if not data:
+    sys.exit(0)
+try:
+    decoder = json.JSONDecoder()
+    obj, _ = decoder.raw_decode(data)
+    reply = obj["result"].strip()
+except Exception:
+    sys.exit(0)
+if not reply:
+    sys.exit(0)
+# Tolerate a ```json ... ``` or ``` ... ``` wrapper — a common minor
+# deviation from otherwise-compliant models; strip it before parsing.
+stripped = re.sub(r"^```(?:json)?\s*|\s*```$", "", reply)
+try:
+    inner, _ = decoder.raw_decode(stripped)
+    briefing = inner["briefing"]
+    if isinstance(briefing, str) and briefing.strip():
+        print(briefing, end="")
+        sys.exit(0)
+except Exception:
+    pass
+# Inner contract missed — forward the raw reply text rather than discard it.
+print(stripped, end="")
+'

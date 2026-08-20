@@ -14,6 +14,7 @@ import { getMessagingGroup } from '../../db/messaging-groups.js';
 import { replaceDestinations, type DestinationRow } from '../../db/session-db.js';
 import { log } from '../../log.js';
 import { inboundDbPath, openInboundDb } from '../../session-manager.js';
+import { notifyDestinationsWrite } from '../../session-sync/inbound-push.js';
 import { getDestinations } from './db/agent-destinations.js';
 
 export function writeDestinations(agentGroupId: string, sessionId: string): void {
@@ -55,5 +56,6 @@ export function writeDestinations(agentGroupId: string, sessionId: string): void
   } finally {
     db.close();
   }
+  notifyDestinationsWrite(agentGroupId, sessionId, resolved);
   log.debug('Destination map written', { sessionId, count: resolved.length });
 }

@@ -10,6 +10,7 @@ import { deleteOrphanProcessingClaims, getProcessingClaims } from './db/session-
 import {
   ABSOLUTE_CEILING_MS,
   CLAIM_STUCK_MS,
+  _recoverStuckStagedRowsForTesting,
   _resetStuckProcessingRowsForTesting,
   decideStuckAction,
   parseSqliteUtc,
@@ -292,6 +293,37 @@ describe('resetStuckProcessingRows — orphan claim cleanup', () => {
     expect(getProcessingClaims(outDb)).toEqual([]);
     const row = inDb.prepare('SELECT tries FROM messages_in WHERE id = ?').get('m-2') as { tries: number };
     expect(row.tries).toBe(1); // not bumped, the skip path held
+  });
+});
+
+describe('recoverStuckStagedRows', () => {
+  it('flips a staged row abandoned past the ceiling back to pending', () => {
+    const { inDb } = makeSessionDbs();
+    const abandonedAt = new Date(Date.now() - ABSOLUTE_CEILING_MS - 60_000).toISOString();
+    inDb
+      .prepare(
+        "INSERT INTO messages_in (id, seq, kind, timestamp, status, content) VALUES ('m-staged', 1, 'chat', ?, 'staged', '{}')",
+      )
+      .run(abandonedAt);
+
+    _recoverStuckStagedRowsForTesting(inDb, fakeSession());
+
+    const row = inDb.prepare('SELECT status FROM messages_in WHERE id = ?').get('m-staged') as { status: string };
+    expect(row.status).toBe('pending');
+  });
+
+  it('leaves a recently-staged row alone — still legitimately mid-flight', () => {
+    const { inDb } = makeSessionDbs();
+    inDb
+      .prepare(
+        "INSERT INTO messages_in (id, seq, kind, timestamp, status, content) VALUES ('m-fresh', 1, 'chat', ?, 'staged', '{}')",
+      )
+      .run(new Date().toISOString());
+
+    _recoverStuckStagedRowsForTesting(inDb, fakeSession());
+
+    const row = inDb.prepare('SELECT status FROM messages_in WHERE id = ?').get('m-fresh') as { status: string };
+    expect(row.status).toBe('staged');
   });
 });
 

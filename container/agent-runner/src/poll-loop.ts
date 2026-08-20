@@ -1,5 +1,6 @@
 import { getConfig } from './config.js';
 import { findByName, getAllDestinations, type DestinationEntry } from './destinations.js';
+import { isProjectedSession } from './projected-sessions.js';
 import {
   getPendingMessages,
   markProcessing,
@@ -39,6 +40,28 @@ const ACTIVE_POLL_INTERVAL_MS = 500;
  * page cache (host-sweep then respawns with a fresh mount).
  */
 const CORRUPTION_STREAK_EXIT = 10;
+
+/**
+ * Projected-session warm-container context reset (docs/roadmap/warm-container-context-accumulation.md).
+ * Projected sessions promise every turn is a fresh, lightweight compile —
+ * but a warm container pushes follow-ups into the same open query
+ * indefinitely, silently growing it like a resumed transcript until it
+ * eventually blows the prompt-size limit. Mirrors the N/2N anchor-growth and
+ * TTL discipline `literal-tail.ts` already applies to what gets *written to
+ * disk* (RESPONDER_TAIL_TURNS=15, DEFAULT_CACHE_TTL_MS=5min) — duplicated
+ * here rather than imported because container/agent-runner is a separate
+ * Bun package tree with no access to host-side src/.
+ *
+ * ponytail: reset is "exit and let host-sweep respawn," not "abort the
+ * in-flight AgentQuery and open a fresh one in-process." The respawn path
+ * already exists (see the corruption-exit branch below) and for free resets
+ * every other per-query variable (archivePrompts, unwrappedNudged,
+ * taskBlockNudged, corruptionStreak) that in-process query surgery would
+ * have to reset by hand. Upgrade to in-process reset only if container
+ * respawn latency becomes a measured problem.
+ */
+const PROJECTED_FOLLOWUP_RESET_COUNT = 30; // 2 * RESPONDER_TAIL_TURNS
+const PROJECTED_QUERY_TTL_MS = 5 * 60 * 1000; // DEFAULT_CACHE_TTL_MS
 
 /**
  * True for SQLite errors that indicate a corrupt READ view — almost always a
@@ -94,11 +117,11 @@ export interface PollLoopConfig {
  * 6. Loop
  */
 export async function runPollLoop(config: PollLoopConfig): Promise<void> {
-  // Projected-lifecycle sessions (Implementation Plan, Phase 1) never resume
-  // a provider transcript — the host compiles a briefing + literal tail into
-  // /workspace/*.md instead (see formatMessages). The stored continuation key
-  // is simply never read or written in this mode.
-  const projected = getConfig().sessionLifecycle === 'projected';
+  // Projected-lifecycle sessions (src/modules/projected-sessions/ on the
+  // host) never resume a provider transcript — the host compiles a briefing
+  // + literal tail into /workspace/*.md instead (see formatMessages). The
+  // stored continuation key is simply never read or written in this mode.
+  const projected = isProjectedSession();
 
   // Resume the agent's prior session from a previous container run if one
   // was persisted. The continuation is opaque to the poll-loop — the
@@ -379,6 +402,11 @@ export async function processQuery(
   let pollInFlight = false;
   let endedForCommand = false;
   let corruptionStreak = 0;
+  const queryOpenedAt = Date.now();
+  let followUpsPushed = 0;
+  const projectedResetDue = () =>
+    isProjectedSession() &&
+    (followUpsPushed >= PROJECTED_FOLLOWUP_RESET_COUNT || Date.now() - queryOpenedAt > PROJECTED_QUERY_TTL_MS);
   const pollHandle = setInterval(() => {
     if (done || pollInFlight || endedForCommand) return;
     pollInFlight = true;
@@ -414,6 +442,9 @@ export async function processQuery(
         const newMessages = pending.filter((m) => m.kind !== 'system');
         if (newMessages.length === 0) return;
 
+        // Accumulated context must not engage a warm query by itself.
+        if (!newMessages.some((m) => m.trigger === 1)) return;
+
         const newIds = newMessages.map((m) => m.id);
         markProcessing(newIds);
 
@@ -440,6 +471,22 @@ export async function processQuery(
         // claimed messages get released by the host's processing-claim sweep.
         if (done) return;
 
+        // Projected sessions: don't let a warm container keep growing the
+        // same live query forever (docs/roadmap/warm-container-context-accumulation.md).
+        // Leave these messages pending — same as hitting the 30-min absolute
+        // ceiling mid-conversation — and exit so host-sweep respawns a fresh
+        // container that compiles a small briefing/tail on its next poll.
+        if (projectedResetDue()) {
+          log(
+            `PROJECTED_QUERY_RESET: warm container hit ${followUpsPushed} pushed follow-ups ` +
+              `(or TTL) — exiting so host respawns with a fresh query`,
+          );
+          done = true;
+          clearInterval(pollHandle);
+          setTimeout(() => process.exit(75), 100);
+          return;
+        }
+
         const keptIds = keep.map((m) => m.id);
         const prompt = formatMessages(keep);
         log(`Pushing ${keep.length} follow-up message(s) into active query`);
@@ -447,6 +494,7 @@ export async function processQuery(
         taskBlockNudged = false;
         query.push(prompt);
         archivePrompts.push(prompt);
+        followUpsPushed += 1;
         markCompleted(keptIds);
       } catch (err) {
         // Without this catch the rejection escapes the void IIFE and Node
@@ -465,8 +513,13 @@ export async function processQuery(
         if (isCorruptionError(errMsg)) {
           corruptionStreak += 1;
           if (corruptionStreak >= CORRUPTION_STREAK_EXIT) {
+            // DB_RETRY_EXHAUSTED marks a persistent problem (retries
+            // exhausted, poll loop abandoned) — grepped by
+            // host-shims/lumen-dmj/sqlite-corrupt-count-host. The per-attempt
+            // `Follow-up poll error` log above fires on every transient hit
+            // and is intentionally not part of that grep target.
             log(
-              `Follow-up poll: ${corruptionStreak} consecutive '${errMsg}' errors — ` +
+              `DB_RETRY_EXHAUSTED: follow-up poll gave up after ${corruptionStreak} consecutive '${errMsg}' errors — ` +
                 `inbound.db page cache is poisoned. Exiting so host respawns with a fresh mount.`,
             );
             // Stop touching the heartbeat so host-sweep stale detection fires
@@ -499,7 +552,7 @@ export async function processQuery(
         // container died between `init` and `result`, the SDK session was
         // effectively orphaned and the next message started a blank
         // Claude session with no prior context.
-        if (getConfig().sessionLifecycle !== 'projected') setContinuation(providerName, event.continuation);
+        if (!isProjectedSession()) setContinuation(providerName, event.continuation);
       } else if (event.type === 'result') {
         // A result — with or without text — means the turn is done. Mark
         // the initial batch completed now so the host sweep doesn't see

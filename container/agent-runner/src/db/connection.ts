@@ -19,10 +19,90 @@
  */
 import { Database } from 'bun:sqlite';
 import fs from 'fs';
+import path from 'path';
+
+import { getConfig } from '../config.js';
+import { getSyncClient } from '../session-sync/active-client.js';
+import { INBOUND_SCHEMA, OUTBOUND_SCHEMA } from './schema.js';
+
+function log(msg: string): void {
+  console.error(`[db/connection] ${msg}`);
+}
 
 const DEFAULT_INBOUND_PATH = '/workspace/inbound.db';
 const DEFAULT_OUTBOUND_PATH = '/workspace/outbound.db';
 const DEFAULT_HEARTBEAT_PATH = '/workspace/.heartbeat';
+
+// Under 'sync' transport, the container owns a genuinely local copy of both
+// DBs instead of opening the host-mounted /workspace/{inbound,outbound}.db
+// files — those still exist on disk (host keeps writing its own canonical
+// copies per docs/session-sync-transport.md §8.1) but nothing here ever
+// opens them, so there's no concurrent SQLite writer on the same inode
+// (the actual VirtioFS corruption mechanism this transport exists to avoid).
+// Lives inside the same mounted sessDir tree so it survives a container
+// respawn — no resync/backfill mechanism exists yet to repopulate it from
+// scratch (see docs/session-sync-transport.md §8.2's still-open items).
+const DEFAULT_SYNC_LOCAL_DIR = '/workspace/.sync-local';
+let _syncLocalDir = DEFAULT_SYNC_LOCAL_DIR;
+let _transportOverride: 'file' | 'sync' | null = null;
+
+/** Test-only: point the local-sync directory somewhere writable outside a real container. */
+export function setSyncLocalDirForTest(dir: string): void {
+  _syncLocalDir = dir;
+}
+
+/** The container-local directory session-sync writes never-host-mounted files into (session_sync_state, the outbound-chain lock, etc). */
+export function getSyncLocalDir(): string {
+  return _syncLocalDir;
+}
+
+/** Test-only: force isSyncTransport() without going through config.ts's load-once container.json singleton. */
+export function setTransportForTest(transport: 'file' | 'sync' | null): void {
+  _transportOverride = transport;
+}
+
+function isSyncTransport(): boolean {
+  if (_transportOverride) return _transportOverride === 'sync';
+  try {
+    return getConfig().transport === 'sync';
+  } catch {
+    // Config not loaded yet (e.g. test harness) — treat as 'file', the default.
+    return false;
+  }
+}
+
+function inboundPath(): string {
+  return isSyncTransport() ? path.join(_syncLocalDir, 'inbound.db') : DEFAULT_INBOUND_PATH;
+}
+
+function outboundPath(): string {
+  return isSyncTransport() ? path.join(_syncLocalDir, 'outbound.db') : DEFAULT_OUTBOUND_PATH;
+}
+
+/** bun:sqlite rejects `{ readonly: false }` outright ("flags must include SQLITE_OPEN_READONLY or SQLITE_OPEN_READWRITE") — omit the option entirely for RW instead of passing a literal false. */
+function inboundOpenOptions(): { readonly: true } | undefined {
+  return isSyncTransport() ? undefined : { readonly: true };
+}
+
+/** Ensure the local-sync directory + schema exist before first open. Idempotent, no-op under 'file' transport. */
+function ensureSyncLocalSchema(): void {
+  if (!isSyncTransport()) return;
+  fs.mkdirSync(_syncLocalDir, { recursive: true });
+  const inPath = inboundPath();
+  const outPath = outboundPath();
+  if (!fs.existsSync(inPath)) {
+    const db = new Database(inPath);
+    db.exec('PRAGMA journal_mode = DELETE');
+    db.exec(INBOUND_SCHEMA);
+    db.close();
+  }
+  if (!fs.existsSync(outPath)) {
+    const db = new Database(outPath);
+    db.exec('PRAGMA journal_mode = DELETE');
+    db.exec(OUTBOUND_SCHEMA);
+    db.close();
+  }
+}
 
 let _inbound: Database | null = null;
 let _outbound: Database | null = null;
@@ -54,7 +134,8 @@ export function openInboundDb(): Database {
       close: () => {},
     } as unknown as Database;
   }
-  const db = new Database(DEFAULT_INBOUND_PATH, { readonly: true });
+  ensureSyncLocalSchema();
+  const db = new Database(inboundPath(), inboundOpenOptions());
   db.exec('PRAGMA busy_timeout = 5000');
   db.exec('PRAGMA mmap_size = 0');
   return db;
@@ -68,7 +149,8 @@ export function openInboundDb(): Database {
  */
 export function getInboundDb(): Database {
   if (!_inbound) {
-    _inbound = new Database(DEFAULT_INBOUND_PATH, { readonly: true });
+    ensureSyncLocalSchema();
+    _inbound = new Database(inboundPath(), inboundOpenOptions());
     _inbound.exec('PRAGMA busy_timeout = 5000');
     _inbound.exec('PRAGMA mmap_size = 0');
   }
@@ -78,7 +160,8 @@ export function getInboundDb(): Database {
 /** Outbound DB — container owns this file (sole writer). */
 export function getOutboundDb(): Database {
   if (!_outbound) {
-    _outbound = new Database(DEFAULT_OUTBOUND_PATH);
+    ensureSyncLocalSchema();
+    _outbound = new Database(outboundPath());
     _outbound.exec('PRAGMA journal_mode = DELETE');
     _outbound.exec('PRAGMA busy_timeout = 5000');
     _outbound.exec('PRAGMA foreign_keys = ON');
@@ -112,6 +195,21 @@ export function getOutboundDb(): Database {
         updated_at               TEXT NOT NULL
       );
     `);
+    // session-sync chain checkpoints (container side, 'sync' transport only —
+    // unused under the default 'file' transport). Two directions in one row:
+    // outbound_* is this container's own send chain (verified by the host);
+    // inbound_* is the last host-pushed row this container has applied. See
+    // container/agent-runner/src/session-sync/client.ts.
+    _outbound.exec(`
+      CREATE TABLE IF NOT EXISTS session_sync_state (
+        id             INTEGER PRIMARY KEY CHECK (id = 1),
+        outbound_seq   INTEGER NOT NULL DEFAULT 0,
+        outbound_chain TEXT NOT NULL,
+        inbound_seq    INTEGER NOT NULL DEFAULT 0,
+        inbound_chain  TEXT NOT NULL,
+        updated_at     TEXT NOT NULL
+      );
+    `);
   }
   return _outbound;
 }
@@ -134,6 +232,7 @@ export function setContainerToolInFlight(tool: string, declaredTimeoutMs: number
          updated_at = excluded.updated_at`,
     )
     .run(tool, declaredTimeoutMs, now, now);
+  pushContainerState({ current_tool: tool, tool_declared_timeout_ms: declaredTimeoutMs, tool_started_at: now, updated_at: now });
 }
 
 /** Clear the in-flight tool — called on PostToolUse / PostToolUseFailure. */
@@ -150,6 +249,18 @@ export function clearContainerToolInFlight(): void {
          updated_at = excluded.updated_at`,
     )
     .run(now);
+  pushContainerState({ current_tool: null, tool_declared_timeout_ms: null, tool_started_at: null, updated_at: now });
+}
+
+function pushContainerState(row: {
+  current_tool: string | null;
+  tool_declared_timeout_ms: number | null;
+  tool_started_at: string | null;
+  updated_at: string;
+}): void {
+  getSyncClient()
+    ?.pushContainerState(row)
+    .catch((err) => log(`pushContainerState failed: ${String(err)}`));
 }
 
 /**
@@ -185,74 +296,11 @@ export function initTestSessionDb(): { inbound: Database; outbound: Database } {
   _testMode = true;
   _inbound = new Database(':memory:');
   _inbound.exec('PRAGMA foreign_keys = ON');
-  _inbound.exec(`
-    CREATE TABLE messages_in (
-      id             TEXT PRIMARY KEY,
-      seq            INTEGER UNIQUE,
-      kind           TEXT NOT NULL,
-      timestamp      TEXT NOT NULL,
-      status         TEXT DEFAULT 'pending',
-      process_after  TEXT,
-      recurrence     TEXT,
-      series_id      TEXT,
-      tries          INTEGER DEFAULT 0,
-      trigger        INTEGER NOT NULL DEFAULT 1,
-      platform_id    TEXT,
-      channel_type   TEXT,
-      thread_id      TEXT,
-      content        TEXT NOT NULL,
-      on_wake        INTEGER NOT NULL DEFAULT 0
-    );
-    CREATE TABLE delivered (
-      message_out_id      TEXT PRIMARY KEY,
-      platform_message_id TEXT,
-      status              TEXT NOT NULL DEFAULT 'delivered',
-      delivered_at        TEXT NOT NULL
-    );
-    CREATE TABLE destinations (
-      name            TEXT PRIMARY KEY,
-      display_name    TEXT,
-      type            TEXT NOT NULL,
-      channel_type    TEXT,
-      platform_id     TEXT,
-      agent_group_id  TEXT
-    );
-  `);
+  _inbound.exec(INBOUND_SCHEMA);
 
   _outbound = new Database(':memory:');
   _outbound.exec('PRAGMA foreign_keys = ON');
-  _outbound.exec(`
-    CREATE TABLE messages_out (
-      id             TEXT PRIMARY KEY,
-      seq            INTEGER UNIQUE,
-      in_reply_to    TEXT,
-      timestamp      TEXT NOT NULL,
-      deliver_after  TEXT,
-      recurrence     TEXT,
-      kind           TEXT NOT NULL,
-      platform_id    TEXT,
-      channel_type   TEXT,
-      thread_id      TEXT,
-      content        TEXT NOT NULL
-    );
-    CREATE TABLE processing_ack (
-      message_id     TEXT PRIMARY KEY,
-      status         TEXT NOT NULL,
-      status_changed TEXT NOT NULL
-    );
-    CREATE TABLE session_state (
-      key        TEXT PRIMARY KEY,
-      value      TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-    CREATE TABLE container_state (
-      id                       INTEGER PRIMARY KEY CHECK (id = 1),
-      current_tool             TEXT,
-      tool_declared_timeout_ms INTEGER,
-      tool_started_at          TEXT,
-      updated_at               TEXT NOT NULL
-    );
-  `);
+  _outbound.exec(OUTBOUND_SCHEMA);
 
   return { inbound: _inbound, outbound: _outbound };
 }
@@ -263,4 +311,6 @@ export function closeSessionDb(): void {
   _testMode = false;
   _outbound?.close();
   _outbound = null;
+  _syncLocalDir = DEFAULT_SYNC_LOCAL_DIR;
+  _transportOverride = null;
 }

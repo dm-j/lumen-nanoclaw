@@ -26,6 +26,7 @@ import {
 import { materializeContainerJson } from './container-config.js';
 import { getContainerConfig } from './db/container-configs.js';
 import { updateContainerConfigScalars } from './db/container-configs.js';
+import { writeSessionSyncCredentials } from './session-sync/session-credentials.js';
 import { CONTAINER_RUNTIME_BIN, hostGatewayArgs, readonlyMountArgs, stopContainer } from './container-runtime.js';
 import { EGRESS_NETWORK, egressNetworkArgs, ensureEgressNetwork } from './egress-lockdown.js';
 import { composeGroupClaudeMd } from './claude-md-compose.js';
@@ -88,10 +89,34 @@ export function isContainerRunning(sessionId: string): boolean {
  * its next tick. Callers that care (e.g. the router's typing indicator)
  * can branch on the boolean.
  */
-export function wakeContainer(session: Session): Promise<boolean> {
+export async function wakeContainer(session: Session): Promise<boolean> {
+  // Live per-turn vault transcript export — must run on every wake, not just
+  // fresh spawns. An already-running container's poll loop picks up new
+  // inbound rows directly with no host-side hook otherwise, so a message
+  // arriving while the previous turn's container is still warm would
+  // silently never get appended. No table/flag; unconditional and cheap
+  // because execHostShim no-ops (a stat, not a spawn) when the group has no
+  // transcript-append-host script. See vault-transcript's own module header.
+  void (async () => {
+    const { appendPendingInboundTurns } = await import('./modules/vault-transcript/index.js');
+    await appendPendingInboundTurns(session.agent_group_id, session.id);
+  })();
+
+  // Compiled briefing + literal tail for projected-lifecycle sessions — same
+  // "must run on every wake" reasoning as the transcript export above, but
+  // AWAITED (not fire-and-forget): an already-warm container's poll loop
+  // reads briefing.md/recent-turns.md directly with no other synchronization
+  // point, so this has to finish writing fresh files before that container
+  // is allowed to pick the message up, same as the fresh-spawn path always
+  // has. Module is optional — skip when its table is absent.
+  if (hasTable(getDb(), 'projected_sessions_enabled')) {
+    const { maybeSynthesizeProjectedContext } = await import('./modules/projected-sessions/synthesize.js');
+    await maybeSynthesizeProjectedContext(session.agent_group_id, session.id);
+  }
+
   if (activeContainers.has(session.id)) {
     log.debug('Container already running', { sessionId: session.id });
-    return Promise.resolve(true);
+    return true;
   }
   const existing = wakePromises.get(session.id);
   if (existing) {
@@ -131,6 +156,11 @@ async function spawnContainer(session: Session): Promise<void> {
   // the config object, threaded through provider resolution, buildMounts,
   // and buildContainerArgs so we don't re-read.
   const containerConfig = materializeContainerJson(agentGroup.id);
+
+  // Session-scoped sync credentials — deliberately separate from the
+  // group-scoped container.json above (see session-credentials.ts header).
+  // No-op (removes any stale file) unless this group is on 'sync' transport.
+  writeSessionSyncCredentials(agentGroup.id, session.id, 'host.docker.internal');
 
   // Per-group filesystem state lives forever after first creation. Init is
   // idempotent: it only writes paths that don't already exist, so this call

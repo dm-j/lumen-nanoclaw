@@ -67,6 +67,16 @@ Both paths end with Bun running the same source file from `/app/src/index.ts`.
 
 Any failure fails the PR.
 
+## Running agent-runner checks without installing Bun locally
+
+CI has Bun installed natively, but a dev machine may not. Rather than installing Bun on the host (another thing to keep in sync with the pinned `BUN_VERSION`, drifting silently otherwise), run typecheck/tests through the exact pinned image the Dockerfile uses — closer to the real execution environment than a native install would be anyway, and nothing to maintain afterward:
+
+```bash
+./scripts/agent-runner-check.sh
+```
+
+Reads `BUN_VERSION` straight out of `container/Dockerfile`'s `ARG` at run time — one source of truth, no version to remember to bump in two places. Mounts the whole repo (not just `container/agent-runner/`) because some tests read sibling host-side source for cross-consistency checks (e.g. `src/memory/session-hook.wiring.test.ts` reads `src/group-init.ts` at the repo root) — mounting only the agent-runner subtree makes those fail with a confusing `ENOENT` unrelated to your actual change.
+
 ## Key invariants
 
 - **Session DBs must use `journal_mode=DELETE`.** WAL's `-shm` memory-map doesn't cross VirtioFS between host and guest. See the doc comment at the top of `container/agent-runner/src/db/connection.ts` and `src/session-manager.ts`.

@@ -53,6 +53,42 @@ export function formatLocalStamp(date: Date, timezone: string): string {
 }
 
 /**
+ * Convert a UTC ISO timestamp to a local ISO-8601 string with an explicit
+ * numeric offset (e.g. "2026-08-01T03:03:03-05:00") — unambiguous wall-clock
+ * time (what the reader should think "now" is), still trivially sortable and
+ * convertible back to UTC. Prefer this over formatLocalTime/formatLocalStamp
+ * wherever the string is fed back to a model as *context* rather than shown
+ * to a human in prose — a bare "Aug 1, 3:03 AM" reads fine to a person but
+ * gives a model no offset to reason about relative-time or convert to UTC.
+ */
+export function formatLocalIsoOffset(utcIso: string, timezone: string): string {
+  const date = new Date(utcIso);
+  const zone = resolveTimezone(timezone);
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: zone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+      timeZoneName: 'shortOffset',
+    })
+      .formatToParts(date)
+      .map((p) => [p.type, p.value]),
+  ) as Record<string, string>;
+  const hour = parts.hour === '24' ? '00' : parts.hour;
+  // "GMT+5:30" (India etc., non-hour-aligned) as well as "GMT-5" — parse both
+  // hour and minute rather than assuming ":00".
+  const match = /^([+-])(\d{1,2})(?::(\d{2}))?$/.exec(parts.timeZoneName.replace('GMT', '') || '+0');
+  const [, sign, offH, offM] = match ?? ['', '+', '0', '00'];
+  const offsetStr = `${sign}${offH.padStart(2, '0')}:${(offM ?? '00').padStart(2, '0')}`;
+  return `${parts.year}-${parts.month}-${parts.day}T${hour}:${parts.minute}:${parts.second}${offsetStr}`;
+}
+
+/**
  * Interpret a naive ISO-like timestamp (no trailing `Z`, no offset) as wall-clock
  * time in `tz` and return the corresponding UTC Date. Strings that already carry
  * offset info (`Z` or `+-HH:MM`) are passed through to the Date constructor.
