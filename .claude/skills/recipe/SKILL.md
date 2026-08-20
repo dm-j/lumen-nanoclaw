@@ -37,3 +37,4 @@ runnable end-to-end.
 - [add-projected-sessions](../add-projected-sessions/SKILL.md) — applied 2026-08-01 — self-contained briefing-agent module; interleaves briefing history, real names, local timestamps into projected session context
 - [add-telegram](../add-telegram/SKILL.md) — applied 2026-08-02 — Telegram channel adapter via Chat SDK
 - [add-mcp-shim](../add-mcp-shim/SKILL.md) — applied 2026-08-04 — mcp-shims v1: auto-register whitelisted host scripts as real MCP tools, guided per-tool authoring workflow
+- [make-skill](../../../container/skills/make-skill/SKILL.md) — applied 2026-08-20 — custom-authored (not from an add-* branch): outcome-oriented pseudocode format (goal/deliverable/requirements/constraints/budget/escalation/state) for specifying task-focused agent prompts; installed as a shared container skill (all agent groups) after validating it against the lumen-dmj vault's briefer/digester agents

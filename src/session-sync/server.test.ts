@@ -109,6 +109,44 @@ describe('makeSessionSyncHandler', () => {
     expect(ws2.sent).toEqual([{ channel: 'session-sync', body: { type: 'resync_point', seq: 1, chain } }]);
   });
 
+  it('recovers when session_sync_state is entirely missing (pre-existing outbound.db older than the table itself)', () => {
+    // Same forward-compat gap session_sync_log already has a guard for
+    // (ensureSyncLogTable) — a session old enough to predate
+    // session_sync_state's introduction has no such table at all, not just
+    // missing columns. Found live against a years-old CLI-channel session's
+    // outbound.db (docs/session-sync-transport.md §8.11's canary, second
+    // attempt) — every push threw "no such table: session_sync_state".
+    const db = new Database(dbPath);
+    db.exec('DROP TABLE session_sync_state');
+    db.close();
+
+    const handler = makeSessionSyncHandler(() => dbPath);
+    const ws = fakeWs();
+    const payload = {
+      id: 'm1',
+      seq: 1,
+      in_reply_to: null,
+      timestamp: '2026-01-01T00:00:00.000Z',
+      deliver_after: null,
+      recurrence: null,
+      kind: 'chat',
+      platform_id: 'p1',
+      channel_type: 'test',
+      thread_id: null,
+      content: '{}',
+    };
+    const chain = nextChain(GENESIS_CHAIN, 1, payload);
+    expect(() => handler('sess-1', ws, { seq: 1, kind: 'outbound', chain, payload })).not.toThrow();
+    expect(ws.sent).toEqual([{ channel: 'session-sync', body: { type: 'ack', seq: 1 } }]);
+
+    const verifyDb = new Database(dbPath, { readonly: true });
+    const row = verifyDb.prepare('SELECT outbound_seq FROM session_sync_state WHERE id = 1').get() as {
+      outbound_seq: number;
+    };
+    verifyDb.close();
+    expect(row.outbound_seq).toBe(1);
+  });
+
   it('applies a synced session_state row (Chat SDK resumption data)', () => {
     const handler = makeSessionSyncHandler(() => dbPath);
     const ws = fakeWs();

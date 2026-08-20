@@ -59,7 +59,7 @@ function writeBriefingDebugLog(agentGroupId: string, prevBriefing: string, promp
 // context is short-lived); persisting garbage here doesn't just show up
 // once, it becomes the "previous briefing" fed into every subsequent turn
 // and compounds. A real briefing (per the briefing skill's output contract)
-// is subject-organized prose/bullets with wikilink citations; it never
+// is subject-organized bullets with wikilink citations; it never
 // opens as a direct first-person reply, and it never leaves a task
 // half-narrated ("Searching the vault for X now.") instead of finishing it.
 const PECULIAR_OPENING_RE = /^(i\b|i'|i’)/i;
@@ -116,7 +116,7 @@ const COMPILE_TIMEOUT_MS = 300_000;
 export const COMPILER_TAIL_TURNS = 5;
 
 function briefingFailureNote(errorDetail: string): string {
-  return `Briefing generation failed with error: ${errorDetail}. Inform your user if they are not aware of this issue.`;
+  return `Briefing generation failed with error: ${errorDetail}. Use your Recall tool to search your memory for specific topics in the conversation.`;
 }
 
 // Exact sentinel the briefer prompt is instructed to return verbatim when
@@ -124,6 +124,23 @@ function briefingFailureNote(errorDetail: string): string {
 // not persisted — see the no-op branch below.
 export const NO_BRIEFING_SENTINEL =
   "No new briefing needed. For anything specific that isn't already covered above, use the recall tool.";
+
+// A group's own briefing-host script may prepend other live-state sections
+// ahead of the briefer's own text (e.g. lumen-dmj's Now/Soon/Back-Burner
+// working-memory bands, separated from the briefing by this exact marker —
+// see that group's briefing-host). Those sections are re-read fresh from
+// disk on every single call, so persisting a snapshot of them as "previous
+// briefing" is pure duplication — and worse, it feeds a stale copy back into
+// the *next* compile as if it were prior narrative history, same class of
+// bug as the reverted $NEW_BATCH-in-history mistake this file already
+// documents. Shown once to the responder (full `content`, band section
+// included) but only the text after this marker is what's persisted forward.
+const BRIEFING_SECTION_MARKER = '\n## Briefing\n\n';
+
+function stripPrependedSections(content: string): string {
+  const idx = content.indexOf(BRIEFING_SECTION_MARKER);
+  return idx === -1 ? content : content.slice(idx + BRIEFING_SECTION_MARKER.length);
+}
 
 export function sessionBriefingKey(
   agentGroupId: string,
@@ -208,7 +225,7 @@ export async function compileBriefing(
       // Not a briefingFailureNote either: that phrasing ("briefing generation
       // failed") is misleading here — the call succeeded, the content is
       // just not usable — so this gets its own note.
-      const note = `Briefing generation produced unusable output (${peculiarReasons.join(', ')}) and was discarded. Inform your user if they are not aware of this issue.`;
+      const note = `Briefing generation produced unusable output (${peculiarReasons.join(', ')}) and was discarded. Use your Recall tool to search your memory for specific topics in the conversation.`;
       writeBriefingDebugLog(agentGroupId, prevBriefing, batchWithTail, note);
       return note;
     }
@@ -225,8 +242,9 @@ export async function compileBriefing(
     // ahead of the briefer's own text, so the sentinel is no longer
     // guaranteed to be the first thing in `content`.
     if (!content.includes(NO_BRIEFING_SENTINEL)) {
-      setSessionBriefing(sessionKey, content);
-      appendBriefingHistory(sessionKey, content, COMPILER_TAIL_TURNS);
+      const forHistory = stripPrependedSections(content);
+      setSessionBriefing(sessionKey, forHistory);
+      appendBriefingHistory(sessionKey, forHistory, COMPILER_TAIL_TURNS);
     }
     writeBriefingDebugLog(agentGroupId, prevBriefing, batchWithTail, content);
     return content;

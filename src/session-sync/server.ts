@@ -48,8 +48,27 @@ const chainStateBySession = new Map<string, ChainState>();
  * release (see schema.ts) — ALTER existing rows/tables forward, same
  * PRAGMA-guarded pattern used elsewhere for inbound.db/outbound.db columns
  * (e.g. session-db.ts's `delivered`/`messages_in` columns).
+ *
+ * session_sync_state's `CREATE TABLE IF NOT EXISTS` in schema.ts only ever
+ * runs at session creation — a session old enough to predate that table
+ * existing at all (same forward-compat gap ensureSyncLogTable below
+ * already handles for session_sync_log) has no table for `PRAGMA
+ * table_info` to describe, and no table for the ALTERs to target. Create
+ * it first, matching schema.ts's definition exactly, so both cases (table
+ * entirely missing, or present but missing the newer two columns) recover
+ * the same way. Found live: a years-old CLI-channel session's outbound.db
+ * hit exactly this on its first message after being flipped to 'sync'
+ * transport (docs/session-sync-transport.md §8.11's canary, second attempt).
  */
 function ensureInboundChainColumns(db: import('better-sqlite3').Database): void {
+  db.exec(`CREATE TABLE IF NOT EXISTS session_sync_state (
+    id             INTEGER PRIMARY KEY CHECK (id = 1),
+    outbound_seq   INTEGER NOT NULL,
+    outbound_chain TEXT NOT NULL,
+    inbound_seq    INTEGER NOT NULL DEFAULT 0,
+    inbound_chain  TEXT NOT NULL DEFAULT '',
+    updated_at     TEXT NOT NULL
+  )`);
   const cols = new Set(
     (db.prepare("PRAGMA table_info('session_sync_state')").all() as Array<{ name: string }>).map((c) => c.name),
   );
