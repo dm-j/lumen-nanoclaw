@@ -146,6 +146,36 @@ export function countDueMessages(db: Database.Database): number {
   ).count;
 }
 
+/**
+ * True only when every currently-due message is a script-gated task row
+ * (kind='task', content.script non-empty) — i.e. this wake exists solely to
+ * let a pre-task script decide whether the agent is actually needed. Used
+ * by wakeContainer to skip the pre-spawn projected-sessions briefing compile
+ * (a real LLM call) for the common case where the script says no and the
+ * agent never runs at all. False (including on zero due messages) means
+ * "brief as normal" — any real content in the batch still gets a briefing.
+ */
+export function dueMessagesAreAllGatedTasks(db: Database.Database): boolean {
+  const rows = db
+    .prepare(
+      `SELECT kind, content FROM messages_in
+       WHERE status = 'pending'
+         AND trigger = 1
+         AND (process_after IS NULL OR datetime(process_after) <= datetime('now'))`,
+    )
+    .all() as Array<{ kind: string; content: string }>;
+  if (rows.length === 0) return false;
+  return rows.every((row) => {
+    if (row.kind !== 'task') return false;
+    try {
+      const parsed = JSON.parse(row.content) as { script?: unknown };
+      return typeof parsed.script === 'string' && parsed.script.trim().length > 0;
+    } catch {
+      return false;
+    }
+  });
+}
+
 export function markMessageFailed(db: Database.Database, messageId: string): void {
   db.prepare("UPDATE messages_in SET status = 'failed' WHERE id = ?").run(messageId);
 }

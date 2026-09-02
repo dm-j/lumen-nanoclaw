@@ -10,7 +10,14 @@ import fs from 'fs';
 import path from 'path';
 import { describe, it, expect, afterEach } from 'vitest';
 
-import { ensureSchema, getInboundSourceSessionId, migrateMessagesInTable, syncProcessingAcks } from './session-db.js';
+import {
+  dueMessagesAreAllGatedTasks,
+  ensureSchema,
+  getInboundSourceSessionId,
+  insertMessage,
+  migrateMessagesInTable,
+  syncProcessingAcks,
+} from './session-db.js';
 
 const TEST_DIR = '/tmp/nanoclaw-session-db-test';
 const DB_PATH = path.join(TEST_DIR, 'inbound.db');
@@ -89,6 +96,100 @@ describe('migrateMessagesInTable', () => {
 
     expect(getInboundSourceSessionId(db, 'legacy-2')).toBeNull();
     expect(getInboundSourceSessionId(db, 'does-not-exist')).toBeNull();
+    db.close();
+  });
+});
+
+describe('dueMessagesAreAllGatedTasks', () => {
+  function freshDb(): Database.Database {
+    if (fs.existsSync(TEST_DIR)) fs.rmSync(TEST_DIR, { recursive: true });
+    fs.mkdirSync(TEST_DIR, { recursive: true });
+    ensureSchema(DB_PATH, 'inbound');
+    return new Database(DB_PATH);
+  }
+
+  it('is false when there are no due messages', () => {
+    const db = freshDb();
+    expect(dueMessagesAreAllGatedTasks(db)).toBe(false);
+    db.close();
+  });
+
+  it('is true when every due message is a task row carrying a script', () => {
+    const db = freshDb();
+    insertMessage(db, {
+      id: 'task-1',
+      kind: 'task',
+      timestamp: new Date().toISOString(),
+      platformId: null,
+      channelType: null,
+      threadId: null,
+      content: JSON.stringify({ prompt: 'check something', script: 'echo \'{"wakeAgent": false}\'' }),
+      processAfter: null,
+      recurrence: null,
+    });
+    expect(dueMessagesAreAllGatedTasks(db)).toBe(true);
+    db.close();
+  });
+
+  it('is false when a due task row has no script', () => {
+    const db = freshDb();
+    insertMessage(db, {
+      id: 'task-1',
+      kind: 'task',
+      timestamp: new Date().toISOString(),
+      platformId: null,
+      channelType: null,
+      threadId: null,
+      content: JSON.stringify({ prompt: 'unconditional reminder' }),
+      processAfter: null,
+      recurrence: null,
+    });
+    expect(dueMessagesAreAllGatedTasks(db)).toBe(false);
+    db.close();
+  });
+
+  it('is false when the due batch mixes a gated task with a plain chat message', () => {
+    const db = freshDb();
+    insertMessage(db, {
+      id: 'task-1',
+      kind: 'task',
+      timestamp: new Date().toISOString(),
+      platformId: null,
+      channelType: null,
+      threadId: null,
+      content: JSON.stringify({ prompt: 'check something', script: 'echo \'{"wakeAgent": false}\'' }),
+      processAfter: null,
+      recurrence: null,
+    });
+    insertMessage(db, {
+      id: 'chat-1',
+      kind: 'chat',
+      timestamp: new Date().toISOString(),
+      platformId: 'p1',
+      channelType: 'telegram',
+      threadId: null,
+      content: JSON.stringify({ text: 'hi' }),
+      processAfter: null,
+      recurrence: null,
+    });
+    expect(dueMessagesAreAllGatedTasks(db)).toBe(false);
+    db.close();
+  });
+
+  it('is false when the gated task is not yet due', () => {
+    const db = freshDb();
+    insertMessage(db, {
+      id: 'task-1',
+      kind: 'task',
+      timestamp: new Date().toISOString(),
+      platformId: null,
+      channelType: null,
+      threadId: null,
+      content: JSON.stringify({ prompt: 'check something', script: 'echo \'{"wakeAgent": false}\'' }),
+      processAfter: new Date(Date.now() + 3_600_000).toISOString(),
+      recurrence: null,
+    });
+    expect(dueMessagesAreAllGatedTasks(db)).toBe(false);
     db.close();
   });
 });

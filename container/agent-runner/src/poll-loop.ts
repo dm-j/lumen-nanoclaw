@@ -1,3 +1,6 @@
+import { execFile } from 'node:child_process';
+import fs from 'node:fs';
+
 import { getConfig } from './config.js';
 import { findByName, getAllDestinations, type DestinationEntry } from './destinations.js';
 import { isProjectedSession } from './projected-sessions.js';
@@ -76,6 +79,26 @@ export function isCorruptionError(msg: string): boolean {
     msg.includes('SQLITE_CORRUPT') ||
     msg.includes('file is not a database')
   );
+}
+
+const NEEDS_BRIEFING_SYNC_PATH = '/workspace/.needs-briefing-sync';
+
+function needsBriefingSync(): boolean {
+  try {
+    return fs.existsSync(NEEDS_BRIEFING_SYNC_PATH);
+  } catch {
+    return false;
+  }
+}
+
+/** Runs `ncl sessions sync-briefing` (see sessions.ts on the host) and waits for it to finish. */
+async function syncBriefingNow(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    execFile('ncl', ['sessions', 'sync-briefing'], { timeout: 60_000 }, (error, _stdout, stderr) => {
+      if (error) log(`sync-briefing failed: ${error.message}${stderr ? ` — ${stderr.slice(0, 300)}` : ''}`);
+      resolve();
+    });
+  });
 }
 
 function log(msg: string): void {
@@ -258,6 +281,17 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
     if (keep.length === 0) {
       log(`All ${normalMessages.length} non-command message(s) gated by script, skipping query`);
       continue;
+    }
+
+    // A pre-task script just let a task through on what the host spawned as
+    // a "gated tasks only" cold wake — it deliberately skipped the pre-spawn
+    // briefing compile for that case (see container-runner.ts's wakeContainer),
+    // so briefing.md/recent-turns.md may be stale or missing. Pull a fresh
+    // one now, before this session's first real answer of the wake. Cheap
+    // no-op check on every other poll (no marker file → skip immediately);
+    // the marker itself is deleted by the sync-briefing handler once done.
+    if (projected && needsBriefingSync()) {
+      await syncBriefingNow();
     }
 
     // Format messages: passthrough commands get raw text (only if the

@@ -1,3 +1,6 @@
+import fs from 'fs';
+
+import { deferredBriefingMarkerPath } from '../../container-runner.js';
 import { registerResource } from '../crud.js';
 
 registerResource({
@@ -43,4 +46,28 @@ registerResource({
     { name: 'created_at', type: 'string', description: 'Auto-set.', generated: true },
   ],
   operations: { list: 'open', get: 'open' },
+  customOperations: {
+    'sync-briefing': {
+      access: 'open',
+      description:
+        "Force-recompile this session's projected-sessions briefing before continuing. Callable only from " +
+        'inside a container, scoped to the calling session — used by the poll loop after a pre-task script ' +
+        'gate lets a task through on a cold spawn where the host deferred the pre-spawn briefing compile ' +
+        '(see the .needs-briefing-sync marker in container-runner.ts). No-op if projected sessions is off ' +
+        'for this group.',
+      handler: async (_args, ctx) => {
+        if (ctx.caller !== 'agent') {
+          throw new Error('sessions sync-briefing is only callable from inside a container');
+        }
+        const { maybeSynthesizeProjectedContext } = await import('../../modules/projected-sessions/synthesize.js');
+        await maybeSynthesizeProjectedContext(ctx.agentGroupId, ctx.sessionId);
+        try {
+          fs.rmSync(deferredBriefingMarkerPath(ctx.agentGroupId, ctx.sessionId), { force: true });
+        } catch {
+          /* best-effort — a stale marker just means one extra sync next time */
+        }
+        return { synced: true };
+      },
+    },
+  },
 });

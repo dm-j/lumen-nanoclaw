@@ -49,10 +49,37 @@ import {
   heartbeatPath,
   markContainerRunning,
   markContainerStopped,
+  openInboundDb,
   sessionDir,
   writeSessionRouting,
 } from './session-manager.js';
+import { dueMessagesAreAllGatedTasks } from './db/session-db.js';
 import type { AgentGroup, Session } from './types.js';
+
+/**
+ * Marker (session dir, mounted at /workspace) telling the container it must
+ * pull a fresh briefing itself before answering — see the comment above the
+ * `dueMessagesAreAllGatedTasks` branch in `wakeContainer`. Read by
+ * `container/agent-runner/src/scheduling/task-script.ts` counterpart logic
+ * (`ncl sessions sync-briefing`), deleted once the sync completes.
+ */
+export function deferredBriefingMarkerPath(agentGroupId: string, sessionId: string): string {
+  return path.join(sessionDir(agentGroupId, sessionId), '.needs-briefing-sync');
+}
+
+/** Never throws — a check failure just falls back to "brief as normal", never to "skip the briefing". */
+function allDueMessagesAreGatedTasks(session: Session): boolean {
+  try {
+    const inDb = openInboundDb(session.agent_group_id, session.id);
+    try {
+      return dueMessagesAreAllGatedTasks(inDb);
+    } finally {
+      inDb.close();
+    }
+  } catch {
+    return false;
+  }
+}
 
 const onecli = new OneCLI({ url: ONECLI_URL, apiKey: ONECLI_API_KEY });
 
@@ -109,9 +136,29 @@ export async function wakeContainer(session: Session): Promise<boolean> {
   // point, so this has to finish writing fresh files before that container
   // is allowed to pick the message up, same as the fresh-spawn path always
   // has. Module is optional — skip when its table is absent.
+  //
+  // Exception: a COLD spawn (nothing already running/mid-spawn for this
+  // session) whose entire due batch is script-gated task rows. The whole
+  // point of a `--script` gate is "a skipped fire costs no agent tokens"
+  // (src/modules/scheduling/create.ts) — but the script itself only runs
+  // container-side (sandboxed; scripts are agent-authored bash, unsafe to
+  // run on the host), so by the time we'd know whether the gate actually
+  // lets anything through, this compile — a real LLM call — has already
+  // been paid for on every fire, gated or not. Skip it here and drop a
+  // marker the container checks itself: if its own pre-task script gate
+  // ends up letting the task through, it pulls a fresh briefing on demand
+  // via `ncl sessions sync-briefing` before answering (see poll-loop.ts);
+  // if the gate says no, the marker is simply never consumed and no LLM
+  // call happens for this fire, as designed.
+  const isWarmOrSpawning = activeContainers.has(session.id) || wakePromises.has(session.id);
   if (hasTable(getDb(), 'projected_sessions_enabled')) {
-    const { maybeSynthesizeProjectedContext } = await import('./modules/projected-sessions/synthesize.js');
-    await maybeSynthesizeProjectedContext(session.agent_group_id, session.id);
+    const deferSynth = !isWarmOrSpawning && allDueMessagesAreGatedTasks(session);
+    if (deferSynth) {
+      fs.writeFileSync(deferredBriefingMarkerPath(session.agent_group_id, session.id), '');
+    } else {
+      const { maybeSynthesizeProjectedContext } = await import('./modules/projected-sessions/synthesize.js');
+      await maybeSynthesizeProjectedContext(session.agent_group_id, session.id);
+    }
   }
 
   if (activeContainers.has(session.id)) {
