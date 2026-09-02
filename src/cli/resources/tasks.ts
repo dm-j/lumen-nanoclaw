@@ -495,6 +495,12 @@ registerResource({
         `  wakeAgent=true wakes the agent with data attached to the prompt.\n` +
         `  DO: print the JSON as the very last line, exit 0, keep data small (a summary, not a dump).\n` +
         `  DON'T: print anything after the JSON, prompt for input, or rely on state from previous runs.\n` +
+        `  DON'T: run host-only commands directly (osascript, open -a, or anything else that only makes\n` +
+        `  sense on the host's own OS/GUI) — this script always runs inside the (Linux) agent container,\n` +
+        `  never on the host, so those calls fail silently or with a confusing error and the task still\n` +
+        `  reports success. If the gate genuinely needs to do something host-only, add a host-shim for it\n` +
+        `  (see the host-shims skill/docs) and call it here via \`host-shim <name>\` — the leaf name only,\n` +
+        `  no "-host" suffix (the host-shim CLI appends that itself).\n` +
         `  Always test with bash -c '<script>' before scheduling.\n` +
         `  Persist state between fires under the group workspace (e.g. a last-seen id file).\n` +
         `  Use good judgement on whether to share with the user the script (only if they are technical), a description of the script condition, or whether there's no need.\n\n` +

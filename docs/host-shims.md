@@ -36,6 +36,12 @@ Two shims back MCP tools an agent can call mid-conversation to query or write to
 |---|---|---|---|
 | `sqlite-corrupt-count-host` | Yes (added 2026-08-15) | none | Counts `DB_RETRY_EXHAUSTED` lines in `logs/nanoclaw.error.log` since the last check (byte-offset checkpoint, not timestamp-parsed). Backs an "alert watch" task for the recurring macOS VirtioFS bind-mount corruption issue that `docs/session-sync-transport.md` is the real fix for. Reads the host's own error log, not anything under `VAULT_PATH`. |
 
+## Scheduled-task gate scripts calling a host-shim
+
+A task's `--script` gate (`ncl tasks create --script`, see `src/cli/resources/tasks.ts`) always runs *inside* the agent container, never on the host — including on a Linux container backing a macOS install. If a gate genuinely needs a host-only capability (driving a host GUI app via `osascript`/`open -a`, reading something only the host filesystem/OS exposes, etc.), write it as a host-shim and have the task's script call `host-shim <leaf-name>` instead of running the host-only commands directly. Getting this wrong doesn't fail loudly: the container-side command errors (or silently no-ops), but the script can still emit `{"wakeAgent": false}` unconditionally at the end and the task keeps reporting success while never doing the thing it was scheduled for.
+
+Not a trunk template (too install-specific to generalize), but the pattern: a group's `omnisearch-reindex-host`-style task originally ran `osascript -e 'quit app "Obsidian"'` / `open -a Obsidian` straight in its `--script`, which always failed inside the container (`xdg-open: unexpected option '-a'`) while still reporting `wakeAgent: false` success — silently never restarting anything for weeks. Fixed by moving the actual restart + health-check into a `restart-obsidian-host` host-shim and having the task's script call `host-shim restart-obsidian` (leaf name only — the host-shim CLI appends `-host` itself) and branch `wakeAgent` on that call's exit code instead.
+
 ## Conventions shared across this family
 
 - **Subagent naming**: `briefer` (compile briefings), `digester` (daily summary), `librarian` (rollups), `seeker` (read-only Q&A), `sorter` (inbox filing) — a vault adopting this family defines all five under `.claude/agents/`.
