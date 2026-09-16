@@ -77,3 +77,20 @@ starts, since it changes what "manage Lumen's reminders" actually means as a too
 - Once `routine` exists with a real `description` and a destination from Dispatcher, this
   is also the first real exercise of an actual multi-agent delegation chain (Lumen →
   Dispatcher → `routine` → reply), not just the send/reply mechanism check already done.
+
+## Status: built 2026-09-16
+
+Agent group created (`ag-32059f15-f18a-4505-9d2e-e62b55131587`), `cli_scope: group` (for
+`ncl tasks` reminders), `model: role/cheap-worker`, `description` set, destinations wired
+both directions with Dispatcher. Calendar shims copied from `lumen-dmj` to
+`mcp-shims/routine/calendar/` (read-only, `personal_today`/`tomorrow`/`week`) with the
+hardcoded timezone-lookup agent-group id repointed at `routine`'s own id. Prompt written
+at `groups/routine/instructions.prepend.md` — lean specialist shape (bounded domain,
+mandatory reply, scope discipline), not Dispatcher's full coordinator scaffolding.
+
+Live-tested via a direct Dispatcher → routine work order: the a2a chain worked correctly
+end to end (session created, message routed, `routine` replied, reply routed back). The
+test also surfaced [roadmap/task-tool-subagent-dispatch-gap.md](task-tool-subagent-dispatch-gap.md)
+— a real, systemic issue unrelated to `routine`'s own setup — so treat `routine` as
+correctly wired but not yet safe to rely on for real delegated work until that's resolved
+or at least understood well enough to know how often it bites.
