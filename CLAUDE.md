@@ -340,6 +340,7 @@ Whenever a feature or change is discussed and agreed on scope/shape but not impl
 | [docs/session-sync-transport.md](docs/session-sync-transport.md) | In-progress replacement for bind-mounted session DBs (macOS SQLite corruption) — what was tried and ruled out, the sync design, transport-layer decisions, status |
 | [docs/agent-runner-details.md](docs/agent-runner-details.md) | Agent-runner internals + MCP tool interface |
 | [docs/host-shims.md](docs/host-shims.md) | The vault-integration host-shim family (briefing/digest/recall/remember/etc.) — what each one is for, trunk-template status, shared conventions |
+| [docs/dispatcher-agent.md](docs/dispatcher-agent.md) | MBIF-style coordination-agent architecture: the `description`/"Available agents" routing signal, async reply routing, workflow-state file convention, config a coordinator needs, and Dispatcher's full prompt |
 | [docs/isolation-model.md](docs/isolation-model.md) | Three-level channel isolation model |
 | [docs/setup-wiring.md](docs/setup-wiring.md) | What's wired, what's open in the setup flow |
 | [docs/architecture-diagram.md](docs/architecture-diagram.md) | Diagram version of the architecture |
