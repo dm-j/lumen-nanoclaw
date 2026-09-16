@@ -30,3 +30,19 @@ describe('built-in tools that collide with NanoClaw MCP tools', () => {
     expect(overlap).toEqual([]);
   });
 });
+
+// Task/TeamCreate dispatch a same-session subagent that doesn't inherit this
+// container's routed model/env (ANTHROPIC_BASE_URL / spoofed ANTHROPIC_API_KEY)
+// — it resolves the SDK's own default and hits real api.anthropic.com via
+// OneCLI, which has no credential registered. Confirmed live 2026-09-16: see
+// docs/roadmap/task-tool-subagent-dispatch-gap.md.
+const SUBAGENT_DISPATCH_TOOLS = ['Task', 'TaskOutput', 'TaskStop', 'TeamCreate', 'TeamDelete'];
+
+describe('same-session subagent dispatch tools (do not respect container model/env routing)', () => {
+  for (const tool of SUBAGENT_DISPATCH_TOOLS) {
+    it(`${tool} is disallowed`, () => {
+      expect(SDK_DISALLOWED_TOOLS).toContain(tool);
+      expect(TOOL_ALLOWLIST).not.toContain(tool);
+    });
+  }
+});

@@ -85,6 +85,24 @@ export function classifyRateLimitEvent(
 //   headless container (~9.3KB/turn schema).
 // - ReportFindings: code-review-reporting UI affordance with no headless
 //   host surface to receive it (~1.9KB/turn schema).
+// - Task / TaskOutput / TaskStop / TeamCreate / TeamDelete: Claude Code's own
+//   in-session subagent/teammate spawning — same family as SendMessage above,
+//   and unlike it, this one wasn't just a confusing refusal: dispatching a
+//   Task doesn't inherit this container's routed model/env (ANTHROPIC_BASE_URL/
+//   spoofed ANTHROPIC_API_KEY), so it resolves the SDK's own default and hits
+//   real api.anthropic.com via OneCLI, which has no credential registered
+//   (deliberately — the whole point of routing through PrefixRouter is never
+//   touching a real Anthropic account for headless work). Confirmed live on
+//   2026-09-16: two independent agent groups (Dispatcher, a fresh `routine`
+//   specialist) each produced OneCLI's 401 "no credentials configured for
+//   api.anthropic.com" boilerplate as their entire visible reply on the turn
+//   right after one plausibly reached for Task, one turn after each had
+//   already produced a normal reply under the same model/env with no issue —
+//   see docs/roadmap/task-tool-subagent-dispatch-gap.md for the incident.
+//   NanoClaw's own agent-to-agent coordination is mcp__nanoclaw__send_message
+//   across separate containers; there was never a legitimate use for
+//   same-session subagent spawning here, unlike SendMessage this one had no
+//   comment justifying its inclusion in the first place.
 export const SDK_DISALLOWED_TOOLS = [
   'CronCreate',
   'CronDelete',
@@ -98,6 +116,11 @@ export const SDK_DISALLOWED_TOOLS = [
   'ExitWorktree',
   'DesignSync',
   'ReportFindings',
+  'Task',
+  'TaskOutput',
+  'TaskStop',
+  'TeamCreate',
+  'TeamDelete',
 ];
 
 // Tool allowlist for NanoClaw agent containers. MCP-tool entries are derived
@@ -114,11 +137,6 @@ export const TOOL_ALLOWLIST = [
   'Grep',
   'WebSearch',
   'WebFetch',
-  'Task',
-  'TaskOutput',
-  'TaskStop',
-  'TeamCreate',
-  'TeamDelete',
   'TodoWrite',
   'ToolSearch',
   'Skill',
