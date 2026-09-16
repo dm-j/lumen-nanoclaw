@@ -20,6 +20,9 @@ const envConfig = readEnvFile([
   'NANOCLAW_EGRESS_NETWORK',
   'ONECLI_GATEWAY_CONTAINER',
   'SESSION_SYNC_PORT',
+  'DEFAULT_AGENT_ANTHROPIC_BASE_URL',
+  'DEFAULT_AGENT_ANTHROPIC_API_KEY',
+  'DEFAULT_AGENT_BLOCKED_HOSTS',
 ]);
 
 // Host WebSocket port for 'sync'-transport session DB syncing (loopback-only,
@@ -51,6 +54,31 @@ export const DEFAULT_AGENT_PROVIDER = (
 // DEFAULT_AGENT_PROVIDER — see ensureContainerConfig. Per-group
 // `ncl groups config update --model` still overrides it.
 export const DEFAULT_AGENT_MODEL = process.env.DEFAULT_AGENT_MODEL || envConfig.DEFAULT_AGENT_MODEL || undefined;
+
+// Instance-wide default container.json `env`/`blockedHosts` for a *brand-new*
+// group's first-ever materialization — see materializeContainerJson in
+// container-config.ts, which only seeds these when no container.json exists
+// on disk yet (existing groups' files are always preserved as-is, never
+// overwritten). Exists because env/blockedHosts are host-local overrides, not
+// DB-backed, so nothing populated them for a plain `ncl groups create`-made
+// group the way create_agent already inherits them from its spawning parent —
+// a group created that way with DEFAULT_AGENT_MODEL pointing at PrefixRouter
+// had no override actually routing traffic there, and fell straight through
+// to real Anthropic (2026-09-16, building `routine`). Unset means no default
+// is seeded — a group with no `env` block behaves exactly as before this
+// existed (the provider's own default inference endpoint).
+export const DEFAULT_AGENT_ANTHROPIC_BASE_URL =
+  process.env.DEFAULT_AGENT_ANTHROPIC_BASE_URL || envConfig.DEFAULT_AGENT_ANTHROPIC_BASE_URL || undefined;
+export const DEFAULT_AGENT_ANTHROPIC_API_KEY =
+  process.env.DEFAULT_AGENT_ANTHROPIC_API_KEY || envConfig.DEFAULT_AGENT_ANTHROPIC_API_KEY || undefined;
+export const DEFAULT_AGENT_BLOCKED_HOSTS = (
+  process.env.DEFAULT_AGENT_BLOCKED_HOSTS ||
+  envConfig.DEFAULT_AGENT_BLOCKED_HOSTS ||
+  ''
+)
+  .split(',')
+  .map((h) => h.trim())
+  .filter(Boolean);
 
 /**
  * @deprecated WhatsApp adapter copies now read the ASSISTANT_HAS_OWN_NUMBER

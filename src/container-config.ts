@@ -11,7 +11,13 @@
 import fs from 'fs';
 import path from 'path';
 
-import { GROUPS_DIR, TIMEZONE } from './config.js';
+import {
+  DEFAULT_AGENT_ANTHROPIC_API_KEY,
+  DEFAULT_AGENT_ANTHROPIC_BASE_URL,
+  DEFAULT_AGENT_BLOCKED_HOSTS,
+  GROUPS_DIR,
+  TIMEZONE,
+} from './config.js';
 import { getContainerConfig } from './db/container-configs.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import { isValidTimezone } from './timezone.js';
@@ -231,6 +237,18 @@ export function materializeContainerJson(agentGroupId: string): ContainerConfig 
     } catch {
       // ignore unreadable/corrupt file — regenerate clean
     }
+  } else if (DEFAULT_AGENT_ANTHROPIC_BASE_URL) {
+    // Brand-new group, no container.json yet — seed the instance-wide default
+    // routing override so DEFAULT_AGENT_MODEL (e.g. a PrefixRouter alias)
+    // actually has somewhere to route to from turn one, instead of silently
+    // falling through to the provider's real default endpoint. Written once;
+    // the branch above preserves it (or any operator edit) on every
+    // subsequent respawn.
+    config.env = {
+      ANTHROPIC_BASE_URL: DEFAULT_AGENT_ANTHROPIC_BASE_URL,
+      ...(DEFAULT_AGENT_ANTHROPIC_API_KEY ? { ANTHROPIC_API_KEY: DEFAULT_AGENT_ANTHROPIC_API_KEY } : {}),
+    };
+    if (DEFAULT_AGENT_BLOCKED_HOSTS.length > 0) config.blockedHosts = DEFAULT_AGENT_BLOCKED_HOSTS;
   }
 
   fs.writeFileSync(p, JSON.stringify(config, null, 2) + '\n');
