@@ -84,7 +84,11 @@ export const remember: McpToolDefinition = {
     const content = (args.content as string) || '';
     const source = (args.source as string) || '';
     const confidence = (args.confidence as string) || '';
-    const extra = (args.extra as Record<string, unknown>) || {};
+    const rawExtra = args.extra;
+    if (rawExtra !== undefined && (typeof rawExtra !== 'object' || rawExtra === null || Array.isArray(rawExtra))) {
+      return err('extra must be a JSON object of additional frontmatter key/value pairs, not a string or array');
+    }
+    const extra = (rawExtra as Record<string, unknown>) || {};
 
     if (!title || !content || !source || !confidence) {
       return err('title, content, source, and confidence are all required');
