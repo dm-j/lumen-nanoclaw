@@ -6,6 +6,12 @@ export interface AgentGroup {
   folder: string;
   /** @deprecated Use container_configs.provider instead. */
   agent_provider: string | null;
+  /** One-line human-set summary of what this agent is for — surfaced to other
+   *  agent groups' "available agents" CLAUDE.md fragment when they have a
+   *  destination pointing at this group. NULL/undefined if not set. Optional
+   *  on construction so existing call sites building an AgentGroup literal
+   *  don't all need updating for a column that's allowed to start empty. */
+  description?: string | null;
   created_at: string;
 }
 

@@ -18,9 +18,34 @@ import path from 'path';
 
 import { GROUPS_DIR } from './config.js';
 import type { McpServerConfig } from './container-config.js';
+import { getAgentGroup } from './db/agent-groups.js';
 import { getContainerConfig } from './db/container-configs.js';
 import { readGroupPersona } from './group-persona.js';
+import { getDestinations } from './modules/agent-to-agent/db/agent-destinations.js';
 import type { AgentGroup } from './types.js';
+
+const AGENT_ROUTING_FRAGMENT = 'agent-routing.md';
+
+/**
+ * "Available agents" fragment: one row per agent-type destination this group
+ * has, paired with the target's one-line `description` (set via
+ * `ncl groups update --description`). This is the whole routing signal a
+ * coordinating agent needs — `agent_destinations` already gates *whether* it
+ * can message that name; this just adds *what it's for*. Returns null when
+ * the group has no agent-type destinations, so groups that never message
+ * other agents get no fragment at all.
+ */
+function buildAgentRoutingFragment(group: AgentGroup): string | null {
+  const agentDests = getDestinations(group.id).filter((d) => d.target_type === 'agent');
+  if (agentDests.length === 0) return null;
+
+  const rows = agentDests.map((d) => {
+    const target = getAgentGroup(d.target_id);
+    const purpose = target?.description?.trim() || '(no description set)';
+    return `| ${d.local_name} | ${purpose} |`;
+  });
+  return ['## Available agents', '', '| Name | Purpose |', '|------|---------|', ...rows, ''].join('\n');
+}
 
 // Fragment holding a template's persona prepend. Imported FIRST (before the
 // shared base) so the persona is the top of the composed system prompt.
@@ -109,6 +134,12 @@ export function composeGroupClaudeMd(group: AgentGroup): void {
         content: mcp.instructions,
       });
     }
+  }
+
+  // Available-agents routing table — see buildAgentRoutingFragment.
+  const agentRouting = buildAgentRoutingFragment(group);
+  if (agentRouting) {
+    desired.set(AGENT_ROUTING_FRAGMENT, { type: 'inline', content: agentRouting });
   }
 
   // Template persona (if any) — inline so it survives the prune below; imported

@@ -9,3 +9,4 @@ Open items, roughly in priority order. Not a commitment or schedule — just wha
 5. [Task handling](roadmap/task-handling.md) — scope TBD against the existing `ncl tasks` system
 6. [Re-implement or drop `wikilink-query`](roadmap/wikilink-query.md) — v1 vault shim never ported to v2, currently dropped
 7. [Post-turn topics agent, driven by real MCP-shim tools](roadmap/topics-agent-mcp-shims.md) — discussed 2026-08-15, not started
+8. [Dispatcher agent infrastructure](roadmap/dispatcher-agent-infrastructure.md) — all 5 gap items resolved (agent-group `description` + auto-generated routing fragment shipped in code; invocation/workflow-state/frontmatter items needed only prompt fixes); still open: wire real destinations/cli_scope and install the corrected prompt on the live `dispatcher` group

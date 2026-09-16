@@ -110,6 +110,15 @@ registerResource({
         'Directory name under groups/ on the host. Must be unique. Contains CLAUDE.md, skills/, and container.json. Cannot be changed after creation.',
       required: true,
     },
+    {
+      name: 'description',
+      type: 'string',
+      description:
+        'One-line summary of what this agent is for. Surfaced to other agent groups that have a ' +
+        'destination pointing at this one, in their auto-generated "available agents" CLAUDE.md section — ' +
+        "it's the signal another agent uses to decide whether to route work here.",
+      updatable: true,
+    },
     { name: 'created_at', type: 'string', description: 'Auto-set.', generated: true },
   ],
   // `create` and `delete` are custom (below): create needs a `--template`
@@ -142,7 +151,14 @@ registerResource({
           return existing;
         }
         const id = `ag-${randomUUID()}`;
-        const group: AgentGroup = { id, name, folder, agent_provider: null, created_at: new Date().toISOString() };
+        const group: AgentGroup = {
+          id,
+          name,
+          folder,
+          agent_provider: null,
+          description: null,
+          created_at: new Date().toISOString(),
+        };
         createAgentGroup(group);
         // Provision the workspace folder and the `container_configs` row that
         // `getContainerConfig` and the spawn path require. Without this, a
