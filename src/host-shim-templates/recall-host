@@ -1,16 +1,16 @@
 #!/bin/sh
 # recall-host — vault question-answering for a "recall" MCP tool. Mirrors
-# briefing-host's shape (claude -p --agent <X> --output-format json,
-# sanitize, jq-extract) but invokes a Q&A agent (here: `seeker`) instead of
-# `briefer`, and — because that agent's tools are read-only (Read/Glob/Grep/
-# WebSearch/WebFetch, no Write) — this script, not the agent, performs the
-# actual file write for `detail=note` (same division of labor as
-# remember-host: the subagent produces content, the host script persists
-# it). Uses the real Anthropic API (`--agent`, no spoofed key) — unlike
-# briefing-host this isn't routed through a local model proxy, so the
-# `--agent` background-dispatch auth issue documented there doesn't apply
-# here; if you do route this through a spoofed-key proxy, switch to the
-# same `--system-prompt-file` pattern briefing-host uses.
+# briefing-host's shape (claude -p --system-prompt-file, --output-format
+# json, sanitize, jq-extract) and its foreground-dispatch/persona-fold
+# pattern (see briefing-host's own comments for the full rationale — the
+# short version: --agent background dispatch rejects a spoofed
+# ANTHROPIC_API_KEY, so routing through a local model proxy needs
+# --system-prompt-file instead). Invokes a Q&A agent (here: `seeker`)
+# instead of `briefer`, and — because that agent's tools are read-only
+# (Read/Glob/Grep/WebSearch/WebFetch, no Write) — this script, not the
+# agent, performs the actual file write for `detail=note` (same division of
+# labor as remember-host: the subagent produces content, the host script
+# persists it).
 #
 # Calling contract: recall-host <json>
 #   json: {"query": "...", "ask_as": "...", "detail": "sentence|paragraph|bullets|note",
@@ -38,6 +38,17 @@ set -eu
 
 # --- Per-group configuration — edit this for your vault ---
 VAULT_PATH="/CHANGE/ME/path/to/this/groups/obsidian/vault"
+
+# Optional: route this recall call through a local model proxy (e.g.
+# PrefixRouter, Ollama) instead of hitting the real Anthropic API directly
+# against your subscription's rate/cost limits — see briefing-host's own
+# BRIEFING_MODEL comment for the full rationale. Leave empty to use claude's
+# normal default (real Anthropic API, host-side login). Set both to route
+# elsewhere, e.g.:
+#   RECALL_MODEL="ollama/some-model"
+#   PREFIXROUTER_URL="http://localhost:8787"
+RECALL_MODEL=""
+PREFIXROUTER_URL=""
 # --- end configuration ---
 
 if [ ! -d "$VAULT_PATH" ] || [ "$VAULT_PATH" = "/CHANGE/ME/path/to/this/groups/obsidian/vault" ]; then
@@ -98,12 +109,59 @@ question, say so plainly instead of guessing. Your output is the answer
 itself — no process narration, no restating the question, no closing
 remarks."
 
+# Foreground dispatch (see briefing-host for the same trick and its
+# rationale) needs seeker's persona folded into the system prompt instead
+# of selected via `--agent`. Regenerated every call so edits to seeker.md
+# take effect immediately. errors="replace": a vault's own agent files
+# aren't guaranteed clean UTF-8 (hit a real corrupted byte in practice).
+# `--disallowedTools` stands in for the tool restriction `--agent seeker`
+# would otherwise have enforced from seeker.md's own `tools:` frontmatter
+# (read-only by design) — without it, --permission-mode bypassPermissions
+# below would grant full read/write vault access, silently widening
+# seeker's declared read-only contract (this script, not seeker, performs
+# the actual file write for detail=note; see the file header).
+PERSONA_FILE="$(mktemp)"
+trap 'rm -f "$PERSONA_FILE"' EXIT
+python3 -c '
+import re
+with open("'"$VAULT_PATH"'/.claude/agents/seeker.md", encoding="utf-8", errors="replace") as f:
+    text = f.read()
+text = re.sub(r"^---\n.*?\n---\n", "", text, count=1, flags=re.DOTALL)
+print(text, end="")
+' > "$PERSONA_FILE"
+
 cd "$VAULT_PATH"
-RESULT_JSON="$(claude -p --agent seeker \
-  --output-format json \
-  --permission-mode bypassPermissions \
-  --no-session-persistence \
-  "$PROMPT")"
+# set -e is suspended around this call only: a non-zero exit here (rate
+# limit, transient API error, etc.) needs to be reported with whatever
+# `claude` actually said, not silently abort the whole script under set -eu
+# with no diagnostic.
+set +e
+if [ -n "$RECALL_MODEL" ]; then
+  RESULT_JSON="$(ANTHROPIC_BASE_URL="$PREFIXROUTER_URL" ANTHROPIC_API_KEY="ollama" \
+    claude -p --system-prompt-file "$PERSONA_FILE" \
+    --model "$RECALL_MODEL" \
+    --disallowedTools Write,Edit,NotebookEdit,Task,Agent,Bash \
+    --disable-slash-commands \
+    --output-format json \
+    --permission-mode bypassPermissions \
+    --no-session-persistence \
+    "$PROMPT" < /dev/null)"
+else
+  RESULT_JSON="$(claude -p --system-prompt-file "$PERSONA_FILE" \
+    --disallowedTools Write,Edit,NotebookEdit,Task,Agent,Bash \
+    --disable-slash-commands \
+    --output-format json \
+    --permission-mode bypassPermissions \
+    --no-session-persistence \
+    "$PROMPT" < /dev/null)"
+fi
+CLAUDE_EXIT=$?
+set -e
+if [ "$CLAUDE_EXIT" -ne 0 ]; then
+  echo "recall-host: claude exited $CLAUDE_EXIT. Output:" >&2
+  printf '%s\n' "$RESULT_JSON" | head -c 2000 >&2
+  exit 1
+fi
 
 # See briefing-host for why this sanitize step exists: claude's
 # --output-format json occasionally emits raw unescaped control bytes
@@ -114,6 +172,12 @@ data = sys.stdin.read()
 esc = {"\n": "\\n", "\r": "\\r", "\t": "\\t"}
 sys.stdout.write(re.sub(r"[\x00-\x1f]", lambda m: esc.get(m.group(0), ""), data))
 ')"
+
+# claude 2.1.261 changed --output-format json from a single final result
+# object to a JSON array of streamed events (system/assistant/result/...).
+# Unwrap to the "result"-typed event so downstream extraction sees the same
+# object shape either way — tolerates a future revert or an older claude.
+RESULT_JSON="$(printf '%s' "$RESULT_JSON" | jq -c 'if type == "array" then ([.[] | select(.type == "result")] | last) else . end')"
 
 TOKEN_LOG="$(cd "$(dirname "$0")" && pwd)/.recall-tokens.log"
 TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"

@@ -181,6 +181,33 @@ role/cheap-worker` (Fireworks `gpt-oss-120b`) — David's choice, reasoning that
 coordination agent doing more routing than deep reasoning fits the cheaper tier. Dispatcher
 is now ready to wake on demand.
 
+## Addendum 2026-09-16: recall/briefing host-shim fallout (not Dispatcher-specific)
+
+Unrelated to Dispatcher directly, but discovered and fixed in the same session:
+`lumen-dmj`'s `recall-host`/`briefing-host` broke from a `claude` CLI update
+(`--output-format json` shape change), then an expired OAuth token, then were deliberately
+converted off David's personal Anthropic subscription onto PrefixRouter per his request.
+That conversion needed `--disallowedTools` to replace the tool restriction `--agent
+seeker`/`--agent briefer` used to enforce automatically — first attempt used
+`Write,Edit,NotebookEdit,Task,Agent`, verified only against a direct "use the Write tool"
+prompt, and shipped to both live copies and the trunk templates. A follow-up live test
+using a less specific prompt ("write a file using whatever tool is available") got through
+via plain `Bash` (`echo test > file`), which wasn't in that denylist. Corrected everywhere
+(live copies, trunk templates, docs) to `Write,Edit,NotebookEdit,Task,Agent,Bash` — the
+same combination already proven correct in `briefing-host`'s pre-existing band/
+focus-updater dispatch, which should have been the reference from the start rather than
+inventing a new list. Lesson written into `docs/host-shims.md`'s conventions section:
+verify a tool denylist by asking for the *outcome* with "whatever tool is available," not
+by naming one specific tool — naming one only proves that one path is closed.
+
+The (now deleted) `host-shim-templates-drift` roadmap item covering the general
+trunk-vs-live-copy staleness this surfaced has been folded into this addendum and shipped:
+`src/host-shim-templates/recall-host` and `briefing-host` now carry all of the above fixes
+(array-unwrap, diagnostics-on-failure, UTF-8-tolerant persona reads, the full
+`--disallowedTools` list, and — for `recall-host` — the `--system-prompt-file`/PrefixRouter
+conversion with a `RECALL_MODEL` knob mirroring `briefing-host`'s `BRIEFING_MODEL`, empty
+by default rather than hardcoding this install's `role/cheap-worker` alias).
+
 ## What's still open
 
 Dispatcher is now installed, configured (`cli_scope: disabled`, `model:

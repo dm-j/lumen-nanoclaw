@@ -119,7 +119,7 @@ PERSONA_FILE="$(mktemp)"
 trap 'rm -f "$PERSONA_FILE"' EXIT
 python3 -c '
 import re
-with open("'"$VAULT_PATH"'/.claude/agents/briefer.md") as f:
+with open("'"$VAULT_PATH"'/.claude/agents/briefer.md", encoding="utf-8", errors="replace") as f:
     text = f.read()
 text = re.sub(r"^---\n.*?\n---\n", "", text, count=1, flags=re.DOTALL)
 print(text, end="")
@@ -138,36 +138,60 @@ cd "$VAULT_PATH"
 # stdin data received" warning to stderr. Redirecting from /dev/null (the
 # warning's own suggested fix) gives it an immediately-closed stdin instead,
 # skipping the sniff/stall entirely.
-# --disallowedTools Task,Agent: --system-prompt-file (not --agent) means
-# briefer.md's own `tools:` frontmatter is stripped with the rest of the YAML
-# and never enforced by claude -p itself — this flag is the only real
-# enforcement. Without it the model can dispatch a subagent via the Agent/
-# Task tool, which runs under *that* agent's own model frontmatter (a real
-# Anthropic model name, not $BRIEFING_MODEL), inherits this process's
-# spoofed ANTHROPIC_API_KEY/router env regardless, and fails auth.
+# --disallowedTools: --system-prompt-file (not --agent) means briefer.md's
+# own `tools:` frontmatter (read-only by design) is stripped with the rest
+# of the YAML and never enforced by claude -p itself — this flag is the
+# only real enforcement, and --permission-mode bypassPermissions below
+# would otherwise grant full read/write vault access despite briefer's own
+# declared read-only contract. Task,Agent specifically: without denying
+# them the model can dispatch a subagent via the Agent/Task tool, which
+# runs under *that* agent's own model frontmatter (a real Anthropic model
+# name, not $BRIEFING_MODEL), inherits this process's spoofed
+# ANTHROPIC_API_KEY/router env regardless, and fails auth.
 # --disable-slash-commands: without it a "the following skills are
 # available" listing is injected into context whenever the Skill tool is
 # available, independent of the system prompt — a small model can misread
 # that listing as the actual user request. briefer never dispatches skills.
+# set -e is suspended around the claude call only: a non-zero exit here
+# (rate limit, transient API error, etc.) needs to be reported with
+# whatever `claude` actually said, not silently abort under set -eu with no
+# diagnostic. Split out of the REPAIR pipe so $? reflects claude's own exit
+# status, not the sanitizer's (plain /bin/sh has no PIPESTATUS/pipefail).
+set +e
 if [ -n "$BRIEFING_MODEL" ]; then
-  RESULT_JSON="$(ANTHROPIC_BASE_URL="$PREFIXROUTER_URL" ANTHROPIC_API_KEY="ollama" \
+  RAW_JSON="$(ANTHROPIC_BASE_URL="$PREFIXROUTER_URL" ANTHROPIC_API_KEY="ollama" \
     claude -p --system-prompt-file "$PERSONA_FILE" \
     --model "$BRIEFING_MODEL" \
-    --disallowedTools Task,Agent \
+    --disallowedTools Write,Edit,NotebookEdit,Task,Agent,Bash \
     --disable-slash-commands \
     --output-format json \
     --permission-mode bypassPermissions \
     --no-session-persistence \
-    "$PROMPT" < /dev/null | python3 -c "$REPAIR")"
+    "$PROMPT" < /dev/null)"
 else
-  RESULT_JSON="$(claude -p --system-prompt-file "$PERSONA_FILE" \
-    --disallowedTools Task,Agent \
+  RAW_JSON="$(claude -p --system-prompt-file "$PERSONA_FILE" \
+    --disallowedTools Write,Edit,NotebookEdit,Task,Agent,Bash \
     --disable-slash-commands \
     --output-format json \
     --permission-mode bypassPermissions \
     --no-session-persistence \
-    "$PROMPT" < /dev/null | python3 -c "$REPAIR")"
+    "$PROMPT" < /dev/null)"
 fi
+CLAUDE_EXIT=$?
+set -e
+if [ "$CLAUDE_EXIT" -ne 0 ]; then
+  echo "briefing-host: claude exited $CLAUDE_EXIT. Output:" >&2
+  printf '%s\n' "$RAW_JSON" | head -c 2000 >&2
+  exit 1
+fi
+RESULT_JSON="$(printf '%s' "$RAW_JSON" | python3 -c "$REPAIR")"
+
+# claude 2.1.261 changed --output-format json from a single final result
+# object to a JSON array of streamed events (system/assistant/result/...).
+# Unwrap to the "result"-typed event so the token-log jq below and the final
+# python raw_decode extraction both see the same object shape either way —
+# tolerates a future revert or an older claude.
+RESULT_JSON="$(printf '%s' "$RESULT_JSON" | jq -c 'if type == "array" then ([.[] | select(.type == "result")] | last) else . end' 2>/dev/null || printf '%s' "$RESULT_JSON")"
 
 # Per-turn token/cost log — separate from the briefing output itself, for
 # tuning prompt/tail-length changes against actual token burn. Logging
