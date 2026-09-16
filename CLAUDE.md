@@ -176,6 +176,22 @@ onecli agents set-secrets --id <agent-id> --secret-ids ...  # or stay selective,
 
 No container restart needed — the gateway looks up secrets per request.
 
+### Host-side scripts (mcp-shims, host-shims) don't get gateway injection for free
+
+The credential substitution above only fires for requests made *through* the
+OneCLI gateway proxy. In-container calls get this automatically (the
+container's `HTTPS_PROXY` etc. are already wired). `mcp-shims/` and
+`host-shims/` scripts run **host-side**, spawned directly by the NanoClaw
+host process — not through any OneCLI wrapper — so a placeholder credential
+(e.g. `MANAGED_BY_ONECLI` in a query param) will NOT get substituted unless
+the process making the request is itself running with the gateway's proxy
+env injected. `onecli run -- <command>` is the existing wrapper for that
+(`onecli run --dry-run -- echo test` shows what it injects:
+`HTTPS_PROXY`/`HTTP_PROXY`/`NODE_EXTRA_CA_CERTS`/`SSL_CERT_FILE`/etc.), but
+it is not yet plumbed into how the host spawns mcp-shims/host-shims scripts.
+See [docs/roadmap/travel-agent-leave-now.md](docs/roadmap/travel-agent-leave-now.md)
+("Addendum 2026-09-16") for the open question of where to wire this in.
+
 ### Requiring approval for credential use
 
 Approval-gating credentialed actions is a **two-sided** flow:
