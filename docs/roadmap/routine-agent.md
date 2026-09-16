@@ -98,3 +98,47 @@ day in `container/agent-runner/src/providers/claude.ts` (moved to
 `SDK_DISALLOWED_TOOLS`, same treatment already given `SendMessage` for the same category
 of problem), image rebuilt, verified live. `routine` is now both correctly wired and safe
 to rely on.
+
+## Addendum 2026-09-16 (2): two more real bugs found chasing the same test
+
+Getting `routine` to that "correctly wired" state took two more genuine fixes, both found
+by actually retrying the same "what's on my calendar" request repeatedly rather than
+declaring victory on the first mechanically-correct-looking exchange:
+
+1. **Missing `env`/`blockedHosts` on `routine`'s `container.json`.** `ncl groups create`
+   (unlike the `create_agent` MCP tool, which inherits its spawning parent's env) never
+   seeded these — `routine` had been hitting real `api.anthropic.com` via OneCLI on every
+   single turn since creation, immediately misdiagnosed as the `Task`-tool gap above
+   (that fix was real and stays; it just wasn't what caused this). Fixed generically in
+   `materializeContainerJson` — see the roadmap's main log for the commit.
+2. **`role/cheap-worker` (gpt-oss-120b) narrated tool use instead of performing it** —
+   said "Fetching today's calendar events…" and stopped, no actual tool call. Switched
+   `routine` to a new `role/medium-worker` alias (glm-5.3-flash:cloud) added to
+   PrefixRouter for this; it called the tool correctly.
+
+Even after both of those, the *first* clean end-to-end run's answer was still wrong: it
+correctly delegated, correctly called `calendar_personal_today`, and correctly reported
+back — "no events today" — when there were three. That one wasn't an agent-wiring problem
+at all: a real bug in `fetch-calendar.ts` (`mcp-shims/routine/calendar/`), where a
+modified single occurrence of a recurring calendar series (Google: retitle/reschedule one
+instance without touching the series) is nested under the *master* event's `.recurrences`
+map by node-ical, invisible to a flat top-level read. Fixed (also ported to `lumen-dmj`'s
+identical copy, same latent bug there). The other two "missing" events genuinely were
+missing too, for the separately pre-existing, previously-deferred reason: unmodified
+future occurrences of an ongoing weekly series were never expanded at all (a `ponytail:`
+comment had documented this gap before tonight). David asked for that expansion to be
+built rather than left deferred, once it was clear it wasn't hypothetical — real recurring
+events were actually going missing. Implemented via node-ical's attached `rrule.between()`
+per master event, bounded to the query's own date range (unbounded expansion of an old/
+infinite series is unsafe otherwise). One real bug surfaced building *that*: an
+override's "this date is already covered" tracking was scoped globally instead of
+per-series, so one series' override incorrectly suppressed an unrelated series' real
+occurrence landing on the same calendar date — caught by checking the full week's output
+against a second known event before trusting the first fix, not just the one event that
+prompted it. All three of today's real events (the override, and both recurring classes)
+now show correctly, on both copies.
+
+**The lesson, not just the bugs**: "the mechanism produced a plausible, well-formed
+answer" and "the answer was correct" are different claims — this took retrying the exact
+same real request three more times after it looked done to find that out, and a second
+verification pass (a different day's worth of events) to catch the fix's own bug too.
