@@ -90,7 +90,11 @@ mandatory reply, scope discipline), not Dispatcher's full coordinator scaffoldin
 
 Live-tested via a direct Dispatcher → routine work order: the a2a chain worked correctly
 end to end (session created, message routed, `routine` replied, reply routed back). The
-test also surfaced [roadmap/task-tool-subagent-dispatch-gap.md](task-tool-subagent-dispatch-gap.md)
-— a real, systemic issue unrelated to `routine`'s own setup — so treat `routine` as
-correctly wired but not yet safe to rely on for real delegated work until that's resolved
-or at least understood well enough to know how often it bites.
+test also surfaced a real, systemic issue unrelated to `routine`'s own setup: every agent
+container's `TOOL_ALLOWLIST` included `Task`/`TeamCreate` (same-session subagent
+dispatch), which doesn't inherit the container's routed model and fails against real
+Anthropic via OneCLI — hit independently on both Dispatcher and `routine`. Fixed the same
+day in `container/agent-runner/src/providers/claude.ts` (moved to
+`SDK_DISALLOWED_TOOLS`, same treatment already given `SendMessage` for the same category
+of problem), image rebuilt, verified live. `routine` is now both correctly wired and safe
+to rely on.
