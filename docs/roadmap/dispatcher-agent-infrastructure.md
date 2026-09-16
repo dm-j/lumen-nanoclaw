@@ -160,18 +160,36 @@ reply tool call from running) — that residual case still needs a timeout/no-re
 detector on Dispatcher's own side, which remains deferred per item 1's original scoping,
 not solved by this change.
 
+## Addendum 2026-09-15 (3): install + model config
+
+Installed the reviewed prompt as `groups/dispatcher/instructions.prepend.md` (replacing
+the original "experimental, open-ended" stub), set `cli_scope: disabled` (it never needed
+`ncl`), and confirmed both directions of `agent_destinations` already existed
+(`lumen-dmj → dispatcher`, `dispatcher → parent(lumen-dmj)`) from whenever Dispatcher was
+first created — nothing to add there.
+
+Caught a real, previously-latent bug while wiring this up: `container_configs.model` was
+`null` for Dispatcher, which had never surfaced because Dispatcher had never actually
+woken up. With no model set, the Claude Agent SDK falls back to its own unprefixed CLI
+default model name, which matches none of PrefixRouter's prefix rules and falls through to
+its catch-all (`* -> anthropic`, the real `api.anthropic.com`) — but Dispatcher's own
+`container.json` has `blockedHosts: ["api.anthropic.com"]` and a dummy `ANTHROPIC_API_KEY`,
+so that first call was guaranteed to fail. Confirmed via a live wake (Lumen reported
+Dispatcher couldn't reach Anthropic, exactly as predicted from reading the rule table
+before ever triggering it). Fixed with `ncl groups config update --model
+role/cheap-worker` (Fireworks `gpt-oss-120b`) — David's choice, reasoning that a
+coordination agent doing more routing than deep reasoning fits the cheaper tier. Dispatcher
+is now ready to wake on demand.
+
 ## What's still open
 
-The draft prompt (`NanoClaw-Dispatcher-Agent-Prompt.md`, repo root) is now internally
-consistent with what the codebase can actually do, but has not been installed as
-`groups/dispatcher/instructions.prepend.md` — Dispatcher is still running its original
-"experimental, open-ended, ask when ambiguous" instructions. Remaining before this is a
-live agent rather than a reviewed draft:
+Dispatcher is now installed, configured (`cli_scope: disabled`, `model:
+role/cheap-worker`), and reachable both directions via existing `agent_destinations`
+(`lumen-dmj ↔ dispatcher`) — a live agent, not just a reviewed draft. One thing remains
+before it's *useful* rather than merely functional:
 
-- Decide `dispatcher`'s real `agent_destinations` (which agents it may actually route
-  to — today it has none) and `cli_scope` (draft assumes it doesn't need `ncl`; confirm
-  and set `disabled` if so).
-- Install the draft as `groups/dispatcher/instructions.prepend.md` and restart the group.
-- Give at least one other agent a `description` and a destination pointing at it, so the
-  "Available agents" fragment has something real to render before trusting Dispatcher
-  with live delegated work.
+- It has nothing to route to onward. Only `lumen-dmj` and the undescribed `_ping-test`
+  stub exist as other agent groups — give at least one real specialist agent a
+  `description` and a destination from Dispatcher to it, so the "Available agents"
+  fragment has something real to render and a multi-agent chain can actually be
+  exercised, not just the send/reply loop back to Lumen.
