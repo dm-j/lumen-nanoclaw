@@ -1,6 +1,6 @@
 ---
 name: update-nanoclaw
-description: Efficiently bring upstream NanoClaw updates into a customized install, with preview, selective cherry-pick, and low token usage.
+description: Use when the user wants to pull upstream NanoClaw updates into a customized install, or says "update nanoclaw".
 ---
 
 # About

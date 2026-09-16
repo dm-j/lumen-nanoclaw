@@ -1,6 +1,6 @@
 ---
 name: add-opencode
-description: Use OpenCode as an agent provider. OpenRouter, OpenAI, Google, DeepSeek, etc. via OpenCode config — not the Anthropic Agent SDK. Per group via `ncl groups config update --provider opencode`; host passes OPENCODE_* and XDG mount when spawning containers.
+description: Use when the user wants to run an agent group on OpenCode (OpenRouter, OpenAI, Google, DeepSeek, etc.) instead of the Anthropic Agent SDK.
 ---
 
 # OpenCode agent provider

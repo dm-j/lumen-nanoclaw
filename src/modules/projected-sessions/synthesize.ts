@@ -16,6 +16,7 @@ import path from 'path';
 
 import { GROUPS_DIR } from '../../config.js';
 import { getAgentGroup } from '../../db/agent-groups.js';
+import { getContainerConfig } from '../../db/container-configs.js';
 import { getSession } from '../../db/sessions.js';
 import { sessionDir } from '../../session-manager.js';
 import { log } from '../../log.js';
@@ -71,6 +72,10 @@ export async function maybeSynthesizeProjectedContext(agentGroupId: string, sess
     // too (just the latest), so anything reading that file directly is
     // unaffected.
     const briefingHistory = getBriefingHistoryEntries(sessionKey, RESPONDER_BRIEFING_CAP);
+    // Real PrefixRouter cache-liveness check when we know the model the
+    // container's own session will actually call (docs/prefixrouter-cache-status.md);
+    // undefined falls back to the pure 2N-count reset inside renderLiteralTail.
+    const model = getContainerConfig(agentGroupId)?.model ?? undefined;
     const tail = await renderLiteralTail(
       agentGroupId,
       sessionId,
@@ -78,6 +83,8 @@ export async function maybeSynthesizeProjectedContext(agentGroupId: string, sess
       'responder',
       RESPONDER_TAIL_TURNS,
       briefingHistory,
+      undefined,
+      model,
     );
     const dir = sessionDir(agentGroupId, sessionId);
     fs.writeFileSync(path.join(dir, 'briefing.md'), briefing);

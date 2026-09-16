@@ -1,6 +1,6 @@
 ---
 name: update-skills
-description: Re-apply your installed skills to pull their latest code from upstream.
+description: Use when the user wants installed skills refreshed to their latest upstream code, or says "update skills".
 ---
 
 # About

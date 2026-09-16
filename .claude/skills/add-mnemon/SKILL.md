@@ -1,6 +1,6 @@
 ---
 name: add-mnemon
-description: Add persistent graph-based memory via mnemon. Agents recall past context before responding and remember insights after each turn.
+description: Use when the user wants an agent to have persistent graph-based memory, or says "add mnemon".
 ---
 
 # Add Mnemon — Persistent Memory

@@ -81,8 +81,14 @@ its `.env.example`.
 A script can handle `--help` and print JSON to stdout:
 
 ```json
-{ "description": "What this tool does", "inputSchema": { "type": "object", "properties": { ... } } }
+{ "description": "Use when <trigger — the calling model's cue for now vs. not now>", "inputSchema": { "type": "object", "properties": { ... } } }
 ```
+
+Write `description` as a trigger, not documentation — it's the only signal
+the calling model gets to decide whether to reach for this tool right now.
+Lead with "Use when ..." / "Use if the user says ..." / "Use when you need
+to ...", not what the tool does internally or how it's implemented. One
+short line.
 
 If it does: that description and schema become the tool's real MCP schema.
 If it doesn't — no `--help` support, nonzero exit, bad JSON, or a schema
@@ -157,7 +163,7 @@ takes no input.
 case "${1:-}" in
   --help)
     cat <<'EOF'
-{"description": "Get current weather for a city", "inputSchema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}
+{"description": "Use when the user asks for the current weather in a city", "inputSchema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}
 EOF
     exit 0 ;;
 esac

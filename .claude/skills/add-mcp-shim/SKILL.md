@@ -203,7 +203,7 @@ Schema the script will self-describe via `--help`:
 
 ```json
 {
-  "description": "One line: what this tool does",
+  "description": "Use when <trigger> — e.g. the user says \"...\" or you need to ...",
   "inputSchema": {
     "type": "object",
     "properties": { "...": "only the exposed/validated params" },
@@ -212,6 +212,14 @@ Schema the script will self-describe via `--help`:
   "timeoutMs": 60000
 }
 ```
+
+The `description` is the only signal the calling model gets to decide *whether
+to reach for this tool right now* — it is not documentation. Write it like a
+thumbnail, not a manual: what does the model need to see to recognize "this is
+the moment"? Lead with "Use when ..." / "Use if the user says ..." / "Use when
+you need to ...". Leave out what the tool does internally, how it's
+implemented, background on the wrapped API, or anything else that doesn't
+directly help the model decide *now vs. not now*. Keep it to one short line.
 
 Hardcoded parameters never appear in the schema — the agent shouldn't see
 them as something it could set. `timeoutMs` is optional — include it only

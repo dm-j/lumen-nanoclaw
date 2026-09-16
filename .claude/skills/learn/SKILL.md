@@ -60,11 +60,16 @@ Strip the one-off specifics; keep the *repeatable* shape. A good skill answers: 
 ```yaml
 ---
 name: <kebab-case, matches the folder>
-description: "<what it does + when to use it + likely trigger phrases>"
+description: "Use when <trigger>, or if the user says <likely trigger phrases>."
 ---
 ```
 
-`description` is what the agent reads to decide relevance — make it concrete and include the phrases a user would actually say.
+`description` is a trigger signal, not documentation — it's the only thing the
+calling model sees to decide whether to invoke this skill *right now*, before
+reading anything else. Write it like a thumbnail: lead with "Use when ..." /
+"Use if the user says ...", include the actual phrases a user would say, and
+leave out what the skill does internally, how it's implemented, or other
+background. Keep it short.
 
 **Body:** open with one paragraph on what the skill does, then a `## When to use` section and a `## Workflow` of numbered steps (the actual procedure). Use tables for command/file references, and add a short examples or troubleshooting section when the gotchas warrant it.
 

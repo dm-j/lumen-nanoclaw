@@ -1,6 +1,6 @@
 ---
 name: add-wechat
-description: Add WeChat (personal) channel integration via Tencent's official iLink Bot API. Uses long-polling and QR scan — no webhook, no ToS risk, no paid token.
+description: Use when the user wants to add a personal WeChat channel to NanoClaw.
 ---
 
 # Add WeChat Channel

@@ -1,6 +1,6 @@
 ---
 name: init-onecli
-description: Install and initialize OneCLI Agent Vault. Migrates existing .env credentials to the vault. Use after /update-nanoclaw brings in OneCLI as a breaking change, or for first-time OneCLI setup.
+description: Use for first-time OneCLI Agent Vault setup, or after /update-nanoclaw reports OneCLI as a breaking change.
 ---
 
 # Initialize OneCLI Agent Vault

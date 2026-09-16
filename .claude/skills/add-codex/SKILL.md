@@ -1,6 +1,6 @@
 ---
 name: add-codex
-description: Use Codex (OpenAI's codex app-server) as a full agent provider — planning, tool orchestration, MCP tools, server-side history, session resume — alongside or instead of Claude. ChatGPT subscription or OpenAI API key, vault-only via OneCLI. Per-group via `ncl groups config update --provider codex`. Distinct from using OpenAI as an MCP tool (where Claude remains the planner).
+description: Use when the user wants to run an agent group on Codex instead of Claude as the full agent provider.
 ---
 
 # Codex agent provider

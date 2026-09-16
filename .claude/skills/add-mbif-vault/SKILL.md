@@ -1,6 +1,6 @@
 ---
 name: add-mbif-vault
-description: Install MBIF (My-Brain-Is-Full-Crew) as the recommended vault-management layer for a projected-lifecycle agent group, derive a Briefer subagent from MBIF's Seeker for add-projected-sessions' briefing-host script, and seed a real Digester subagent for the vault memory pipeline's digest-generation phase. Fork-specific recommendation (lumen-nanoclaw), not upstream NanoClaw.
+description: Use when the user wants MBIF vault-management set up for a projected-lifecycle agent group.
 ---
 
 # Add MBIF Vault

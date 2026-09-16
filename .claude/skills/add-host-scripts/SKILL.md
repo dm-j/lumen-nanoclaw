@@ -1,6 +1,6 @@
 ---
 name: add-host-scripts
-description: Let a container agent invoke a whitelisted host-side script by name, per agent group, with structural isolation between groups. Fork-specific feature (lumen-nanoclaw), not upstream NanoClaw. Internally called "host-shim" in code/table/column names — this skill is the same thing under a clearer name.
+description: Use when the user wants an agent to be able to run a whitelisted host-side script, or mentions "host-shim", "host script", or giving the agent host access.
 ---
 
 # Add Host Scripts

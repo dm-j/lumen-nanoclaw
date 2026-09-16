@@ -114,7 +114,7 @@ All skills use the [Claude Code skills standard](https://code.claude.com/docs/en
 ```markdown
 ---
 name: my-skill
-description: What this skill does and when to use it.
+description: Use when <trigger — the situation, user phrasing, or need that should make Claude reach for this skill>.
 ---
 
 Instructions here...
@@ -123,7 +123,7 @@ Instructions here...
 **Rules:**
 - Keep SKILL.md **under 500 lines** — move detail to separate reference files
 - `name`: lowercase, alphanumeric + hyphens, max 64 chars
-- `description`: required — Claude uses this to decide when to invoke the skill
+- `description`: required — this is a trigger signal, not documentation. Claude only sees it to decide *whether to invoke the skill right now*, before reading anything else — write it like a thumbnail, not a summary. Lead with "Use when ..." / "Use if the user says ..." / "Use when you need to ...", keep it short, and leave out what the skill does internally, how it's implemented, or other background
 - Put code in separate files, not inline in the markdown
 - See the [skills standard](https://code.claude.com/docs/en/skills) for all available frontmatter fields
 

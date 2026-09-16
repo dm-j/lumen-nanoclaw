@@ -1,6 +1,6 @@
 ---
 name: init-first-agent
-description: Walk the operator through creating the first NanoClaw agent for a DM channel — resolve the operator's channel identity, wire the DM messaging group to a new agent, and trigger a welcome DM via the normal delivery path. Use after channel credentials are configured and the service is running.
+description: Use after channel credentials are configured to bootstrap the first NanoClaw agent for a DM channel.
 ---
 
 # Init First Agent

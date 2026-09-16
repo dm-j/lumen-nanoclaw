@@ -1,6 +1,6 @@
 ---
 name: use-native-credential-proxy
-description: Opt out of the OneCLI gateway and supply Anthropic credentials from .env instead. For users who want simple .env-based credential management without the OneCLI agent vault. Reads the API key or OAuth token from .env and injects it into the container's API requests.
+description: Use when the user wants to opt out of the OneCLI vault and use Anthropic credentials from .env instead.
 ---
 
 # Use Native Credential Proxy

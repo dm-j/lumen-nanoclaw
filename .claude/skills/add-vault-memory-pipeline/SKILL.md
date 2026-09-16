@@ -1,6 +1,6 @@
 ---
 name: add-vault-memory-pipeline
-description: Live per-turn vault transcript export plus scheduled daily and weekly/monthly digest generation — the host-shim scripts that turn NanoClaw's canonical conversation history into MBIF's hierarchical, wikilink-addressable vault format. Fork-specific feature (lumen-nanoclaw), not upstream NanoClaw.
+description: Use when the user wants conversation history exported into a MBIF-format memory vault with scheduled digests.
 ---
 
 # Add Vault Memory Pipeline

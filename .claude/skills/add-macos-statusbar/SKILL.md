@@ -1,6 +1,6 @@
 ---
 name: add-macos-statusbar
-description: Add a macOS menu bar status indicator for NanoClaw. Shows a bolt icon with a green/red dot indicating whether NanoClaw is running, with Start, Stop, and Restart controls. macOS only.
+description: Use when the user wants a macOS menu bar status indicator for NanoClaw with Start/Stop/Restart controls.
 ---
 
 # Add macOS Menu Bar Status Indicator

@@ -1,6 +1,35 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { parseText } from './literal-tail.js';
+import { checkCacheStatus, parseText } from './literal-tail.js';
+
+describe('checkCacheStatus', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('returns true on cache: live', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ model: 'm', cache: 'live' }) }));
+    expect(await checkCacheStatus('m', 's1')).toBe(true);
+  });
+
+  it('returns false on cache: expired', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({ model: 'm', cache: 'expired' }) }),
+    );
+    expect(await checkCacheStatus('m', 's1')).toBe(false);
+  });
+
+  it('returns null (unknown) on non-2xx, e.g. all-circuit-open 503', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 503 }));
+    expect(await checkCacheStatus('m', 's1')).toBeNull();
+  });
+
+  it('returns null (unknown) on network error, not a false reset trigger', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('connect ECONNREFUSED')));
+    expect(await checkCacheStatus('m', 's1')).toBeNull();
+  });
+});
 
 describe('parseText', () => {
   it('returns the text field when present', () => {

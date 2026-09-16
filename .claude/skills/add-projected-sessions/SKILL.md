@@ -1,6 +1,6 @@
 ---
 name: add-projected-sessions
-description: Add an opt-in 'projected' session lifecycle as a self-contained module — a host-side briefing compiler + prefix-cache-aware literal tail replace provider transcript resume, per agent group. Fork-specific feature (lumen-nanoclaw), not upstream NanoClaw.
+description: Use when the user wants to enable projected sessions (briefing-based context instead of provider transcript resume) for an agent group.
 ---
 
 # Add Projected Sessions (Briefing Compiler)

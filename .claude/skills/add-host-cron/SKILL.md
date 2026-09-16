@@ -1,6 +1,6 @@
 ---
 name: add-host-cron
-description: Schedule a host-shim script (add-host-scripts) to run on a cron schedule, per agent group, with no container spawn and no conversation cost. Fork-specific feature (lumen-nanoclaw), not upstream NanoClaw.
+description: Use when the user wants a host-shim script to run on a cron schedule without spawning a container.
 ---
 
 # Add Host Cron

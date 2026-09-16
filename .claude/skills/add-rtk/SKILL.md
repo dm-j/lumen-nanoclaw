@@ -1,6 +1,6 @@
 ---
 name: add-rtk
-description: Install rtk token-compression proxy into agent containers. Routes Bash tool calls through rtk for 60–90% token savings on dev commands (git, cargo, pytest, docker, kubectl, etc.).
+description: Use when the user wants to cut Bash tool token usage on dev commands (git, cargo, pytest, docker, kubectl), or says "add rtk".
 ---
 
 # Add rtk

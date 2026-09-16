@@ -83,7 +83,7 @@ For ad-hoc queries from skills or scripts, use the in-tree wrapper rather than t
 | `src/channels/channel-defaults.ts` | Wiring-creation helpers over adapter-declared channel defaults (`resolveWiringDefaults`, `resolveThreadPolicy`, engage validation) |
 | `src/providers/` | Host-side provider container-config (`claude` baked in; `opencode` etc. installed from the `providers` branch) |
 | `container/agent-runner/src/` | Agent-runner: poll loop, formatter, provider abstraction, MCP tools, destinations |
-| `container/skills/` | Container skills mounted into every agent session (`agent-browser`, `frontend-engineer`, `onecli-gateway`, `self-customize`, `welcome`; opt-in skills like `vercel-cli`, `slack-formatting` and `whatsapp-formatting` install with the `/add-*` skill that adds their capability) |
+| `container/skills/` | Container skills mounted into every agent session (`agent-browser`, `frontend-engineer`, `onecli-gateway`, `research`, `self-customize`, `welcome`; opt-in skills like `vercel-cli`, `slack-formatting` and `whatsapp-formatting` install with the `/add-*` skill that adds their capability) |
 | `groups/<folder>/` | Per-agent-group filesystem (CLAUDE.md, skills) — agent-runner source is a shared read-only mount, not copied per group |
 | `scripts/init-first-agent.ts` | Bootstrap the first DM-wired agent (used by `/init-first-agent` skill) |
 | `scripts/skill-apply.ts` | Deterministic SKILL.md applier — executes `nc:` directive fences; declare/emit core, journaled + idempotent |
@@ -192,7 +192,7 @@ Four types of skills. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full taxono
 - **Channel/provider install skills** — copy the relevant module(s) in from the `channels` or `providers` branch, wire imports, install pinned deps (e.g. `/add-discord`, `/add-slack`, `/add-whatsapp`, `/add-opencode`).
 - **Utility skills** — ship code files alongside `SKILL.md` (e.g. a `scripts/` CLI or helper).
 - **Operational skills** — instruction-only workflows (`/setup`, `/debug`, `/customize`, `/init-first-agent`, `/manage-channels`, `/init-onecli`, `/update-nanoclaw`).
-- **Container skills** — loaded inside agent containers at runtime (`container/skills/`: `agent-browser`, `frontend-engineer`, `onecli-gateway`, `self-customize`, `welcome`; opt-in skills like `vercel-cli` and the channel formatters are copied in by the `/add-*` skill that adds their capability).
+- **Container skills** — loaded inside agent containers at runtime (`container/skills/`: `agent-browser`, `frontend-engineer`, `onecli-gateway`, `research`, `self-customize`, `welcome`; opt-in skills like `vercel-cli` and the channel formatters are copied in by the `/add-*` skill that adds their capability).
 
 | Skill | When to Use |
 |-------|-------------|
@@ -258,6 +258,39 @@ systemctl --user restart nanoclaw-v2-<slug>
 
 Rebuild before restart matters: `pnpm run dev` runs from source live, but the installed service runs `dist/index.js` — after editing `src/`, `pnpm run build` first or the restart just relaunches stale code.
 
+## Setting Lumen's Model
+
+Lumen's inference goes through PrefixRouter (sister project, `~/Projects/PrefixRouter`), not a provider SDK directly — `container.json`'s `ANTHROPIC_BASE_URL` points at `http://host.docker.internal:8787`, so whatever string is set as the agent group's `model` is what PrefixRouter receives as `model` on every request.
+
+```bash
+ncl groups config update --id ag-1785691207755-h9j29a --model "<routing-prefix>/<model-name>[=>fallback...]"
+ncl groups restart --id ag-1785691207755-h9j29a --message "<why>"   # required — config alone doesn't restart running containers
+```
+
+**Routing prefix** — selects which PrefixRouter rule/endpoint handles the request (`config.json` in the PrefixRouter repo, not this one):
+
+| Prefix | Endpoint | Notes |
+|---|---|---|
+| `lmstudio/*` | `http://localhost:1234` | Plain pass-through, no request modification |
+| `lmstudio-qwen/*` | same target as `lmstudio/*` | Injects `enable_thinking: false` — suppresses Qwen3-family chain-of-thought, which otherwise dominates latency (validated 2026-08-20/21: cut reasoning from thousands of chars to near-zero, ~4-5x faster turns) |
+| `ollama/*` | `http://localhost:11434` | |
+| `fireworks/*` | `https://api.fireworks.ai/inference` | Also what the projected-sessions briefing compiler uses (`gpt-oss-120b` — swapped from `gpt-oss-20b` 2026-08-28 after Fireworks deprecated it), independent of Lumen's own conversational model |
+| `anthropic/*` | `https://api.anthropic.com` | |
+
+Whatever comes after the prefix is stripped and sent as the literal upstream model name — for `lmstudio-qwen/prism-ml/bonsai-27b`, that's `prism-ml/bonsai-27b` on the lmstudio endpoint. If a model is Qwen3-family (chain-of-thought reasoning, e.g. names containing `qwen` or `bonsai` — `bonsai-27b` is Qwen3-based despite the name), use `lmstudio-qwen/*` over plain `lmstudio/*`.
+
+**Fallback chain** — `=>`-joined model strings, tried left to right, each independently routed (own prefix, own rule). PrefixRouter splits on `=>` before any rule matching, so this works for any two prefixes, not just a preconfigured pair:
+
+```
+lmstudio-qwen/prism-ml/bonsai-27b=>ollama/deepseek-v4-flash:0731-cloud
+```
+
+A single model (no `=>`) is valid too — the current known-good baseline is just `ollama/deepseek-v4-flash:0731-cloud`, no chain, after ending the lmstudio experiment (2026-08-21).
+
+**Named roles** — instead of hardcoding a literal `provider/model` string here (and in every other script/config that also needs to name a model), PrefixRouter supports caller-facing aliases like `role/cheap-worker` that resolve to a real model in one place (`config.json`), so a provider swap/deprecation is a one-line edit there instead of a grep-and-replace across this repo. `GET http://localhost:8787/aliases` lists what's currently defined and what it resolves to — check that before hardcoding a new literal model string anywhere. See PrefixRouter's own README, "Named model roles" section, for the convention and how to add one.
+
+See PrefixRouter's own README for the full rule-config reference (`stripPrefix`/`replacePrefix`/`rewriteModel`, per-rule `extraBody`, circuit breaker tuning) and the Troubleshooting row below for its logs/status endpoint.
+
 ## Troubleshooting
 
 Check these first when something goes wrong:
@@ -267,6 +300,7 @@ Check these first when something goes wrong:
 | Host logs | `logs/nanoclaw.error.log` first (delivery failures, crash-loop backoff, warnings), then `logs/nanoclaw.log` for the full routing chain |
 | Setup logs | `logs/setup.log` (overall), `logs/setup-steps/*.log` (per-step: bootstrap, environment, container, onecli, mounts, service, etc.) |
 | Session DBs | `data/v2-sessions/<agent-group>/<session>/` — `inbound.db` (`messages_in`: did the message reach the container?), `outbound.db` (`messages_out`: did the agent produce a response?) |
+| PrefixRouter (Lumen's model gateway) | Sister project at `~/Projects/PrefixRouter` (`launchctl list \| grep prefixrouter` for the launchd label, `prefixrouter.log` for stdout/stderr, `logs/<date>.jsonl` for structured per-request logs). `GET http://localhost:8787/status` shows every model it's routed to since last restart plus circuit-breaker state (closed/open/half-open, failure count, retry-in-ms if open) — check this first when an agent group configured with a `provider/model=>provider/model` chain (e.g. `lmstudio/qwen3.8-27b=>ollama/deepseek-v4-flash:0731-cloud`) isn't responding. `GET /readme` shows live endpoint/rule config. Breaker state is in-memory only — resets on `launchctl kickstart -k gui/$(id -u)/com.prefixrouter.server`. |
 
 Note: container logs are lost after the container exits (`--rm` flag). If the agent silently failed inside the container, there's no persistent log to inspect.
 

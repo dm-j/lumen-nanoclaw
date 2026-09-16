@@ -1,6 +1,6 @@
 ---
 name: self-customize
-description: Customize your own agent — add capabilities, install packages, add MCP servers, edit code or CLAUDE.md. Use when the user asks you to add a feature, install a tool, or modify how you work. For non-trivial code changes, delegate to a builder agent via create_agent.
+description: Use when the user asks you to add a feature, install a tool/package, add an MCP server, or modify how you work.
 ---
 
 # Self-Customization

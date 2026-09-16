@@ -1,6 +1,6 @@
 ---
 name: add-vercel
-description: Add Vercel deployment capability to NanoClaw agents. Installs the Vercel CLI in agent containers and sets up OneCLI credential injection for api.vercel.com. Use when the user wants agents to deploy web applications to Vercel.
+description: Use when the user wants NanoClaw agents to be able to deploy web applications to Vercel.
 ---
 
 # Add Vercel

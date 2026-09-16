@@ -1,6 +1,6 @@
 ---
 name: migrate-nanoclaw
-description: Extracts user customizations from a fork, generates a replayable migration guide, and upgrades to upstream by reapplying customizations on a clean base. Replaces merge-based upgrades with intent-based migration.
+description: Use when the user wants to upgrade a customized NanoClaw fork to upstream without a merge.
 ---
 
 # Context

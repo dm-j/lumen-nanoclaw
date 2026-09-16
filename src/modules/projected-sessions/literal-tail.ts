@@ -30,14 +30,22 @@
  * param (migration 028's `*_last_call_at` columns) adds that second,
  * independent reset trigger for callers where it actually applies.
  *
- * Deliberately opt-in, not blanket-applied to every lane: the compiler lane
- * (`compileBriefing`) shells out to a fresh `claude -p --agent briefer`
- * process per call — a real Anthropic API call each time, so the ephemeral
- * cache TTL is a real constraint and this lane passes `cacheTtlMs`. The
- * responder lane (`synthesize.ts`, Lumen's own in-container session) instead
- * feeds a live provider session resume — a different caching path entirely,
- * not proven to share the same TTL behavior — so it omits `cacheTtlMs` and
- * keeps the original pure 2N-count reset until that's verified.
+ * The compiler lane passes `cacheTtlMs` (`DEFAULT_CACHE_TTL_MS`, 5 minutes)
+ * as its fallback: `compileBriefing` shells out to a fresh `claude -p
+ * --agent briefer` process per call, usually straight to the real Anthropic
+ * API (PrefixRouter routing there is per-group opt-in config the TS layer
+ * doesn't see), so a local TTL guess is what's available.
+ *
+ * The responder lane (`synthesize.ts`) passes the group's configured
+ * `model` string instead, so it gets PrefixRouter's actual cache-liveness
+ * signal (`checkCacheStatus` below, `docs/prefixrouter-cache-status.md`) —
+ * that model always routes through PrefixRouter (see CLAUDE.md's "Setting
+ * Lumen's Model"), so the real per-provider TTL is knowable rather than
+ * guessed. A 5-minute sliding-staleness *guess* was tried here (2026-08-20)
+ * and reverted the same day for lacking exactly this — replaced 2026-08-24
+ * by the real endpoint query, which falls back to the pure 2N-count reset
+ * (no guess at all) whenever the endpoint is unreachable or the model isn't
+ * PrefixRouter-routed.
  */
 import fs from 'fs';
 import path from 'path';
@@ -49,6 +57,39 @@ import { captionImage, isContentionError, isImageAttachment } from '../attachmen
 import { resolveAssistantName, resolveGroupTimezone } from '../../container-config.js';
 import { formatLocalIsoOffset } from '../../timezone.js';
 import { getTailAnchor, setTailAnchor, type BriefingHistoryEntry, type TailLane } from './db.js';
+
+const PREFIXROUTER_URL = process.env.PREFIXROUTER_URL || 'http://localhost:8787';
+const CACHE_STATUS_TIMEOUT_MS = 2000;
+
+/**
+ * Queries PrefixRouter's real cache-liveness signal (docs/prefixrouter-cache-status.md)
+ * instead of guessing from a local TTL constant — only meaningful when `model`
+ * actually routes through PrefixRouter (host-side call, so `localhost`, not
+ * `host.docker.internal` — this module runs on the host, not in a container).
+ * Returns `null` (unknown, don't reset) on any network error, non-2xx, or
+ * malformed body — a reachability problem is not a cache signal.
+ */
+export async function checkCacheStatus(model: string, sessionId: string): Promise<boolean | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), CACHE_STATUS_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${PREFIXROUTER_URL}/cache-status`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-session-id': sessionId },
+      body: JSON.stringify({ model }),
+      signal: controller.signal,
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { cache?: string };
+    if (body.cache === 'live') return true;
+    if (body.cache === 'expired') return false;
+    return null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 interface TailRow {
   timestamp: string;
@@ -295,6 +336,7 @@ export async function renderLiteralTail(
   n: number,
   briefingHistory?: BriefingHistoryEntry[],
   cacheTtlMs?: number,
+  model?: string,
 ): Promise<string> {
   const all = await readAllTurns(agentGroupId, sessionId);
 
@@ -313,8 +355,19 @@ export async function renderLiteralTail(
 
   const anchor = getTailAnchor(sessionKey, lane);
 
+  // Real signal beats a local TTL guess whenever the caller knows what model
+  // it's about to call — PrefixRouter reports whether *that model's* cache
+  // is actually still live, per-provider TTL and circuit state included. An
+  // unreachable/unknown result (network error, model not routed through
+  // PrefixRouter, etc.) falls back to the TTL heuristic rather than forcing
+  // a reset — see checkCacheStatus above.
+  const liveStatus = model !== undefined ? await checkCacheStatus(model, sessionKey) : null;
   const cacheStale =
-    cacheTtlMs !== undefined && anchor.lastCallAt !== null && Date.now() - Date.parse(anchor.lastCallAt) > cacheTtlMs;
+    liveStatus !== null
+      ? !liveStatus
+      : cacheTtlMs !== undefined &&
+        anchor.lastCallAt !== null &&
+        Date.now() - Date.parse(anchor.lastCallAt) > cacheTtlMs;
 
   let selected: TailRow[];
   const needsReset = anchor.anchorTs === null || anchor.count >= 2 * n || cacheStale;

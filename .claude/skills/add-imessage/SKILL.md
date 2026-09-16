@@ -1,6 +1,6 @@
 ---
 name: add-imessage
-description: Add iMessage to NanoClaw — one channel, two backends. Local (this Mac's chat.db via the Chat SDK bridge; macOS + Full Disk Access) or Hosted iMessage (via photon.codes — native spectrum-ts with a device-login wizard; any OS, no Mac relay). Triggers on "add imessage", "connect imessage", "add photon", "imessage via photon", "native imessage".
+description: Use when the user wants to add iMessage as a channel, or says "add imessage", "connect imessage", "add photon", "imessage via photon".
 ---
 
 # Add iMessage

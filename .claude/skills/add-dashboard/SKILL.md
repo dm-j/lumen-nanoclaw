@@ -1,6 +1,6 @@
 ---
 name: add-dashboard
-description: Add a monitoring dashboard to NanoClaw. Installs @nanoco/nanoclaw-dashboard and a pusher that sends periodic JSON snapshots.
+description: Use when the user wants a monitoring dashboard for NanoClaw, or says "add dashboard".
 ---
 
 # /add-dashboard — NanoClaw Dashboard

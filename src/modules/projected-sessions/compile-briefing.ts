@@ -25,7 +25,20 @@ import { LOGS_DIR } from '../../config.js';
 // tail) and exact response, so briefing quality can be eyeballed directly
 // when swapping providers/models instead of inferred secondhand from the
 // responder's replies. Lives under logs/, never mounted into containers.
-function writeBriefingDebugLog(agentGroupId: string, prevBriefing: string, promptBody: string, response: string): void {
+// `rawResponse` is always the literal shim stdout (or as close to it as the
+// caller has — e.g. empty on a hard exit-code failure), never the sanitized
+// note Lumen ends up seeing. Discard/failure paths pass `discardNote`
+// separately so this file still shows *why* it was blocked, without ever
+// substituting the note for the actual response — otherwise the one place
+// meant for eyeballing real model output silently loses it on every
+// discarded call, which is exactly when eyeballing it matters most.
+function writeBriefingDebugLog(
+  agentGroupId: string,
+  prevBriefing: string,
+  promptBody: string,
+  rawResponse: string,
+  discardNote?: string,
+): void {
   try {
     const dir = path.join(LOGS_DIR, 'briefing-debug');
     fs.mkdirSync(dir, { recursive: true });
@@ -41,10 +54,11 @@ function writeBriefingDebugLog(agentGroupId: string, prevBriefing: string, promp
       '',
       promptBody,
       '',
-      '## Response',
+      '## Raw response (literal shim stdout)',
       '',
-      response,
+      rawResponse || '(empty)',
       '',
+      ...(discardNote ? ['## Discarded — what Lumen actually saw instead', '', discardNote, ''] : []),
     ].join('\n');
     fs.writeFileSync(path.join(dir, `${agentGroupId}.md`), content);
   } catch (err) {
@@ -64,6 +78,15 @@ function writeBriefingDebugLog(agentGroupId: string, prevBriefing: string, promp
 // half-narrated ("Searching the vault for X now.") instead of finishing it.
 const PECULIAR_OPENING_RE = /^(i\b|i'|i’)/i;
 const NARRATION_STUB_RE = /\b(now|next)\.?\s*$/i;
+
+// Provider/CLI error text that comes back as normal stdout with exit 0 (e.g.
+// a deprecated/unavailable model) — must be checked before the peculiar-
+// content heuristic below, which would otherwise misfile it as "unusable
+// briefing output" and tell the user to use Recall instead of surfacing the
+// actual break. Matched on the raw model/provider complaint shape, not tied
+// to one CLI's wording.
+const PROVIDER_ERROR_RE =
+  /model.{0,40}(may not exist|not found|no longer (available|supported)|is not available|has been (deprecated|retired|removed))/i;
 
 function checkPeculiar(content: string): string[] {
   const trimmed = content.trim();
@@ -210,11 +233,31 @@ export async function compileBriefing(
       // known-good briefing stays in place for the *next* turn's compile to
       // build on. This note is only what's shown to the responder right now.
       const failureNote = briefingFailureNote(errorDetail);
-      writeBriefingDebugLog(agentGroupId, prevBriefing, batchWithTail, failureNote);
+      writeBriefingDebugLog(agentGroupId, prevBriefing, batchWithTail, result.stdout ?? '', failureNote);
       return failureNote;
     }
 
     const content = result.stdout.trim();
+
+    if (PROVIDER_ERROR_RE.test(content)) {
+      log.warn(
+        'compile-briefing: provider/model error in briefer output, passing message through with a failure note',
+        {
+          agentGroupId,
+          sessionKey,
+          content: content.slice(0, 500),
+        },
+      );
+      // Same non-persistence rule as the exit-code failure path above: this
+      // is a broken briefer, not a bad briefing, so prevBriefing stays as
+      // the next compile's baseline. Unlike the peculiar-content path below,
+      // this uses briefingFailureNote's "generation failed" phrasing — it's
+      // accurate here, and tells the user (via the responder) that the
+      // briefing pipeline itself is down, not just this turn's content.
+      const failureNote = briefingFailureNote(content.slice(0, 300));
+      writeBriefingDebugLog(agentGroupId, prevBriefing, batchWithTail, content, failureNote);
+      return failureNote;
+    }
 
     const peculiarReasons = checkPeculiar(content);
     if (peculiarReasons.length > 0) {
@@ -226,7 +269,7 @@ export async function compileBriefing(
       // failed") is misleading here — the call succeeded, the content is
       // just not usable — so this gets its own note.
       const note = `Briefing generation produced unusable output (${peculiarReasons.join(', ')}) and was discarded. Use your Recall tool to search your memory for specific topics in the conversation.`;
-      writeBriefingDebugLog(agentGroupId, prevBriefing, batchWithTail, note);
+      writeBriefingDebugLog(agentGroupId, prevBriefing, batchWithTail, content, note);
       return note;
     }
 
