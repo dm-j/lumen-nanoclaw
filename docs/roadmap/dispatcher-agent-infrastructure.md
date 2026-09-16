@@ -219,4 +219,6 @@ before it's *useful* rather than merely functional:
   stub exist as other agent groups — give at least one real specialist agent a
   `description` and a destination from Dispatcher to it, so the "Available agents"
   fragment has something real to render and a multi-agent chain can actually be
-  exercised, not just the send/reply loop back to Lumen.
+  exercised, not just the send/reply loop back to Lumen. See
+  [roadmap/routine-agent.md](routine-agent.md) — `routine` (reminders + calendar) is the
+  agent decided on to fill this gap.

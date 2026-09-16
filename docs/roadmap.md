@@ -10,3 +10,4 @@ Open items, roughly in priority order. Not a commitment or schedule — just wha
 6. [Re-implement or drop `wikilink-query`](roadmap/wikilink-query.md) — v1 vault shim never ported to v2, currently dropped
 7. [Post-turn topics agent, driven by real MCP-shim tools](roadmap/topics-agent-mcp-shims.md) — discussed 2026-08-15, not started
 8. [Dispatcher agent infrastructure](roadmap/dispatcher-agent-infrastructure.md) — shipped and verified live (installed prompt, `cli_scope`/model configured, destinations wired, message/reply round-trip confirmed); still open: give it a real specialist agent to route to, it currently has nothing to delegate onward to
+9. [`routine` agent — reminders + calendar](roadmap/routine-agent.md) — decided 2026-09-16 as the first non-Dispatcher specialist; tool surface (`ncl tasks` vs. existing vault task-capture shims) and shim ownership still need clarifying before build starts
