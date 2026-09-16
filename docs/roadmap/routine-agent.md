@@ -6,6 +6,24 @@ reminders, plus calendar features. This directly closes the gap flagged in
 [dispatcher-agent-infrastructure.md](dispatcher-agent-infrastructure.md)'s "What's still
 open": Dispatcher is installed and verified live, but has nothing to actually route to.
 
+## Why (the actual long-term goal, not just "give Dispatcher something to route to")
+
+David's stated end state: eventually remove tools from Lumen herself and have her delegate
+to her "Crew" (Dispatcher + specialists like `routine`) instead — so Lumen concentrates on
+*what* needs doing, not *who* should do it or *how*. `routine` is the first concrete step
+toward that, not just a test fixture for Dispatcher's plumbing: reminders and calendar are
+a reasonable first thing to peel off Lumen because the tool surface already exists
+(`mcp-shims/lumen-dmj/task_management/` and `calendar/`) and is self-contained enough to
+relocate without a redesign.
+
+This means the eventual shape isn't just "add `routine` alongside Lumen's existing tools"
+— it's "add `routine`, then remove the equivalent tools from Lumen's own container config
+once `routine` covers the same ground and Dispatcher can route to it reliably." That
+removal step isn't scoped yet (no plan for *which* of Lumen's current mcp-shims move
+first, in what order, or how to avoid a gap where neither Lumen nor `routine` can serve a
+request mid-migration) — worth its own discussion once `routine` actually exists and has
+been exercised for real, not decided speculatively now.
+
 ## What exists already that this could build on
 
 `mcp-shims/lumen-dmj/` already has both halves of this, currently reachable only from
