@@ -102,6 +102,40 @@ to it), archived by the nightly sweep once the task's session(s) close.
 Should be designed together with this, not separately — same underlying
 unit of work.
 
+## Addendum 2026-09-16: report_completion session-closure reverted
+
+Built, shipped, and reverted the same day. `report_completion` briefly
+closed the *caller's own* session on delivery (`agent-route.ts`), with
+`resolveTargetSession` surfacing a closed exact-match instead of falling
+through to a fresh/shared session, so a stray later `send_message` would
+bounce instead of resurrecting it.
+
+David caught the actual bug before it fired live: sessions today are
+**shared across many unrelated work orders**, not one per task — Routine
+and Computation each have exactly one long-lived a2a session, and their
+standing instructions say to `report_completion` on *every* delegated
+work order. The first work order either of them ever completed would
+have closed that session outright, and the closed-target check in
+`resolveTargetSession` would then bounce every *subsequent, unrelated*
+work order Dispatcher tried to send them — "session already complete,"
+permanently, for an agent whose only fault was finishing its first task.
+
+The precondition for this to be safe is exactly what this whole spike
+doc is about: each work order tracked in its own dedicated session
+(`task_id`-keyed, per "The mapping" above). Building the closure
+mechanic ahead of that precondition was the mistake. Reverted
+`resolveTargetSession` to its original plain fallback-through behavior;
+`report_completion` still exists, still carries `noReply` + `status`,
+still cuts the ack-loop off one hop earlier than plain `send_message` —
+it just doesn't touch session lifecycle anymore. Confirmed no live
+breakage occurred (caught before either agent completed a real
+delegated work order post-restart).
+
+**Re-attempt this only after `task_id`-scoped sessions land**, and even
+then scope closure to the specific `task_id`'s session, never "the
+caller's session" as a whole — that's the exact conflation that caused
+this.
+
 ## Open questions for actual implementation (not resolved in this spike)
 
 - **Task lifecycle / closure**: what marks a task "done" so its session(s)

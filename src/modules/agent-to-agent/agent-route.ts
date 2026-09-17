@@ -25,7 +25,7 @@ import { isSafeAttachmentName } from '../../attachment-safety.js';
 import { ensureContainedInboxDir, isPathInside } from '../../inbox-safety.js';
 import { getAgentGroup } from '../../db/agent-groups.js';
 import { getInboundSourceSessionId, getMostRecentPeerSourceSessionId } from '../../db/session-db.js';
-import { getSession, updateSession } from '../../db/sessions.js';
+import { getSession } from '../../db/sessions.js';
 import { wakeContainer } from '../../container-runner.js';
 import { GuardDenyError, guard } from '../../guard/index.js';
 import { log } from '../../log.js';
@@ -206,20 +206,19 @@ export interface RoutableAgentMessage {
  *    has been recorded with `source_session_id` (e.g. fresh installs,
  *    pre-migration data).
  *
- * A candidate found by (1) or (2) that turns out `closed` (e.g. the target
- * already called report_completion and its session was closed) is surfaced
- * to the caller rather than silently falling through to (3) — falling
- * through would silently misroute into an unrelated session for that agent
- * group instead of telling the sender the specific exchange it was
- * addressing is over.
+ * NOTE: closed-session enforcement (bouncing a message aimed at a closed
+ * exact-match candidate instead of falling through to (3)) was tried and
+ * reverted same day (2026-09-16) — see docs/roadmap/task-id-routing-spike.md
+ * "Addendum: report_completion session-closure reverted". Its precondition
+ * (each work order tracked in its own dedicated session) isn't built yet;
+ * today, Routine/Computation/Dispatcher each share ONE long-lived a2a
+ * session across every unrelated work order, so closing "the caller's
+ * session" on one work order's report_completion would silently kill that
+ * agent's ability to receive any further delegation, not just close out
+ * the one exchange. Falling through to (3) here is deliberately the
+ * simple, safe behavior until task_id-scoped sessions exist.
  */
-type TargetSessionResolution = { session: Session } | { closedSession: Session };
-
-function resolveTargetSession(
-  msg: RoutableAgentMessage,
-  sourceSession: Session,
-  targetAgentGroupId: string,
-): TargetSessionResolution {
+function resolveTargetSession(msg: RoutableAgentMessage, sourceSession: Session, targetAgentGroupId: string): Session {
   const srcDb = openInboundDb(sourceSession.agent_group_id, sourceSession.id);
   let originSessionId: string | null = null;
   try {
@@ -237,12 +236,11 @@ function resolveTargetSession(
   }
   if (originSessionId) {
     const candidate = getSession(originSessionId);
-    if (candidate && candidate.agent_group_id === targetAgentGroupId) {
-      if (candidate.status === 'active') return { session: candidate };
-      return { closedSession: candidate };
+    if (candidate && candidate.agent_group_id === targetAgentGroupId && candidate.status === 'active') {
+      return candidate;
     }
   }
-  return { session: resolveSession(targetAgentGroupId, null, null, 'agent-shared').session };
+  return resolveSession(targetAgentGroupId, null, null, 'agent-shared').session;
 }
 
 export async function routeAgentMessage(
@@ -450,63 +448,12 @@ async function blockDelivery(
   if (fresh) await wakeContainer(fresh);
 }
 
-/** Notify the *source* session in place of a delivery withheld because the target session is closed. */
-async function notifySourceOfClosedTarget(
-  session: Session,
-  targetAgentGroupId: string,
-  closedSession: Session,
-): Promise<void> {
-  const targetName = getAgentGroup(targetAgentGroupId)?.name ?? targetAgentGroupId;
-  writeSessionMessage(session.agent_group_id, session.id, {
-    id: `a2a-closed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    kind: 'chat',
-    timestamp: new Date().toISOString(),
-    platformId: targetAgentGroupId,
-    channelType: 'agent',
-    threadId: null,
-    content: withSenderName(
-      JSON.stringify({
-        text: `${targetName}'s session for this exchange is already complete — your message was not delivered.`,
-        noReply: true,
-      }),
-      'system',
-    ),
-    sourceSessionId: closedSession.id,
-  });
-  const fresh = getSession(session.id);
-  if (fresh) await wakeContainer(fresh);
-}
-
 async function performAgentRoute(
   msg: RoutableAgentMessage,
   session: Session,
   targetAgentGroupId: string,
 ): Promise<void> {
-  const resolved = resolveTargetSession(msg, session, targetAgentGroupId);
-  if ('closedSession' in resolved) {
-    // A plain send_message expecting engagement gets told the exchange is
-    // over. A noReply message (acknowledge_completion or report_completion
-    // itself landing on an already-closed target) has nothing left to say
-    // either way, so it's dropped silently rather than bounced.
-    const isNoReply = (() => {
-      try {
-        return !!(JSON.parse(msg.content) as { noReply?: unknown }).noReply;
-      } catch {
-        return false;
-      }
-    })();
-    log.info('Agent message to closed session', {
-      from: session.agent_group_id,
-      to: targetAgentGroupId,
-      closedSessionId: resolved.closedSession.id,
-      dropped: isNoReply,
-    });
-    if (!isNoReply) {
-      await notifySourceOfClosedTarget(session, targetAgentGroupId, resolved.closedSession);
-    }
-    return;
-  }
-  const targetSession = resolved.session;
+  const targetSession = resolveTargetSession(msg, session, targetAgentGroupId);
   const a2aMsgId = `a2a-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
   // If the source message references files (via `send_file`), forward the
@@ -574,23 +521,6 @@ async function performAgentRoute(
   });
   const fresh = getSession(targetSession.id);
   if (fresh) await wakeContainer(fresh);
-
-  // report_completion closes the *caller's own* session once its final
-  // word has actually been delivered — not on the hold/approval path, only
-  // here on real delivery. Prevents a stray later message from resurrecting
-  // a session whose work is done; see resolveTargetSession's closedSession
-  // branch above for the other half of this.
-  const parsedContent = (() => {
-    try {
-      return JSON.parse(msg.content) as { closesSession?: unknown };
-    } catch {
-      return {};
-    }
-  })();
-  if (parsedContent.closesSession) {
-    updateSession(session.id, { status: 'closed' });
-    log.info('Closed session after report_completion', { sessionId: session.id, agentGroupId: session.agent_group_id });
-  }
 }
 
 /**

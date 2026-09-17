@@ -126,7 +126,7 @@ export const sendMessage: McpToolDefinition = {
  * something structural, not just prompt discipline — real acknowledgment
  * loops were observed in practice (2026-09-16).
  */
-function sendNoReply(to: string, text: string, toolName: string, closesSession: boolean) {
+function sendNoReply(to: string, text: string, toolName: string) {
   const routing = resolveRouting(to);
   if ('error' in routing) return err(routing.error);
 
@@ -138,12 +138,7 @@ function sendNoReply(to: string, text: string, toolName: string, closesSession: 
     platform_id: routing.platform_id,
     channel_type: routing.channel_type,
     thread_id: routing.thread_id,
-    // closesSession only on report_completion — tells the host to close
-    // *this* (the caller's own) session once delivered, so a stray later
-    // message can't resurrect it. See agent-route.ts's handling of a
-    // closed target session (bounces plain send_message, no-ops noReply
-    // traffic) and its resulting closure of the sender's session.
-    content: JSON.stringify({ text, noReply: true, ...(closesSession ? { closesSession: true } : {}) }),
+    content: JSON.stringify({ text, noReply: true }),
   });
 
   log(`${toolName}: #${seq} → ${routing.resolvedName}`);
@@ -175,7 +170,7 @@ export const acknowledgeCompletion: McpToolDefinition = {
     const to = args.to as string;
     const note = (args.note as string) || 'Acknowledged.';
     if (!to) return err(`to is required. Options: ${destinationList()}`);
-    return sendNoReply(to, note, 'acknowledge_completion', false);
+    return sendNoReply(to, note, 'acknowledge_completion');
   },
 };
 
@@ -216,7 +211,7 @@ export const reportCompletion: McpToolDefinition = {
     if (!to) return err(`to is required. Options: ${destinationList()}`);
     if (!text) return err('text is required');
     if (status !== 'SUCCESS' && status !== 'FAILURE') return err('status must be SUCCESS or FAILURE');
-    return sendNoReply(to, `${status}: ${text}`, 'report_completion', true);
+    return sendNoReply(to, `${status}: ${text}`, 'report_completion');
   },
 };
 

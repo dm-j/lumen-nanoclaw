@@ -276,7 +276,7 @@ describe('routeAgentMessage return-path', () => {
     expect(s2Rows).toHaveLength(0);
   });
 
-  it('closed origin session: reply is withheld, not silently redelivered elsewhere', async () => {
+  it('stale origin fallback: closed origin session falls through to newest active', async () => {
     // A.S1 sends to B, establishing source_session_id = S1.id on B's inbound.
     await routeAgentMessage(
       { id: 'msg-fwd', platform_id: B, content: JSON.stringify({ text: 'hello' }), in_reply_to: null },
@@ -285,13 +285,13 @@ describe('routeAgentMessage return-path', () => {
     const bRows = readInbound(B, SB.id);
     const inboundId = bRows[0].id;
 
-    // Close S1 — simulates a report_completion close, or session cleanup.
+    // Close S1 — simulates session cleanup or channel disconnect. Falling
+    // through (rather than surfacing the closure) is deliberate as long as
+    // sessions are shared across many unrelated work orders — see
+    // resolveTargetSession's doc comment.
     updateSession(S1.id, { status: 'closed' });
 
-    // B replies. Origin points to S1 (closed) — must NOT be silently
-    // redelivered to A's other active session (S2); that would misroute a
-    // reply meant for a specific, now-closed exchange into unrelated
-    // traffic. Instead B itself gets told the exchange is over.
+    // B replies. origin points to S1 (closed), should fall through to S2.
     await routeAgentMessage(
       { id: 'msg-reply-stale', platform_id: A, content: JSON.stringify({ text: 'reply' }), in_reply_to: inboundId },
       SB,
@@ -300,55 +300,7 @@ describe('routeAgentMessage return-path', () => {
     const s1Rows = readInbound(A, S1.id);
     const s2Rows = readInbound(A, S2.id);
     expect(s1Rows).toHaveLength(0);
-    expect(s2Rows).toHaveLength(0);
-
-    const bRowsAfter = readInbound(B, SB.id);
-    expect(bRowsAfter).toHaveLength(2);
-    const notice = JSON.parse(bRowsAfter[1].content) as { text: string; noReply?: boolean };
-    expect(notice.text).toContain('already complete');
-    expect(notice.noReply).toBe(true);
-  });
-
-  it('closed origin session: a noReply message (e.g. acknowledge_completion) is dropped silently, no bounce', async () => {
-    await routeAgentMessage(
-      { id: 'msg-fwd2', platform_id: B, content: JSON.stringify({ text: 'hello' }), in_reply_to: null },
-      S1,
-    );
-    const bRows = readInbound(B, SB.id);
-    const inboundId = bRows[0].id;
-
-    updateSession(S1.id, { status: 'closed' });
-
-    await routeAgentMessage(
-      {
-        id: 'msg-ack-stale',
-        platform_id: A,
-        content: JSON.stringify({ text: 'thanks', noReply: true }),
-        in_reply_to: inboundId,
-      },
-      SB,
-    );
-
-    expect(readInbound(A, S1.id)).toHaveLength(0);
-    expect(readInbound(A, S2.id)).toHaveLength(0);
-    // No bounce notice either — B's inbound is unchanged from before the ack.
-    expect(readInbound(B, SB.id)).toHaveLength(1);
-  });
-
-  it('report_completion (closesSession) closes the sender session once actually delivered', async () => {
-    await routeAgentMessage(
-      {
-        id: 'msg-report',
-        platform_id: B,
-        content: JSON.stringify({ text: 'SUCCESS: done', noReply: true, closesSession: true }),
-        in_reply_to: null,
-      },
-      S1,
-    );
-
-    expect(readInbound(B, SB.id)).toHaveLength(1);
-    const { getSession } = await import('../../db/sessions.js');
-    expect(getSession(S1.id)?.status).toBe('closed');
+    expect(s2Rows).toHaveLength(1);
   });
 
   it('cross-agent-group guard: origin session belonging to wrong agent group is rejected', async () => {
