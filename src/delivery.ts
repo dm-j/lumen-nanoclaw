@@ -218,11 +218,20 @@ async function drainSession(session: Session): Promise<void> {
         if (msg.kind === 'chat') {
           const { appendDeliveredOutboundTurn } = await import('./modules/vault-transcript/index.js');
           const { resolveAssistantName } = await import('./container-config.js');
+          // a2a delivery — disambiguate the transcript line with who this
+          // actually went to, since it's no longer safe to assume every
+          // outbound turn was addressed to the human (see the a2a sender
+          // tagging fix in agent-route.ts for the inbound-side equivalent).
+          const recipientName =
+            msg.channel_type === 'agent' && msg.platform_id
+              ? (getAgentGroup(msg.platform_id)?.name ?? msg.platform_id)
+              : undefined;
           void appendDeliveredOutboundTurn(
             session.agent_group_id,
             resolveAssistantName(session.agent_group_id),
             msg.timestamp,
             msg.content,
+            recipientName,
           );
         }
 
