@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import { getConfig } from './config.js';
 import { findByName, getAllDestinations, type DestinationEntry } from './destinations.js';
 import { isProjectedSession } from './projected-sessions.js';
+import { isStatelessTaskSession } from './stateless-session.js';
 import {
   getPendingMessages,
   markProcessing,
@@ -145,13 +146,21 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
   // + literal tail into /workspace/*.md instead (see formatMessages). The
   // stored continuation key is simply never read or written in this mode.
   const projected = isProjectedSession();
+  // Stateless task sessions (ncl tasks create/update --stateless) similarly
+  // never resume — but unlike projected, there's no compiled replacement
+  // context either. The task's own prompt each fire is the whole context;
+  // nothing about a previous run is needed. See
+  // docs/roadmap/task-id-routing-spike.md's addendum on task-series
+  // sessions otherwise accumulating transcript for no benefit.
+  const statelessTask = isStatelessTaskSession();
+  const noResume = projected || statelessTask;
 
   // Resume the agent's prior session from a previous container run if one
   // was persisted. The continuation is opaque to the poll-loop — the
   // provider decides how to use it (Claude resumes a .jsonl transcript,
   // other providers may reload a thread ID, etc.). Keyed per-provider so
   // a Codex thread id never gets handed to Claude or vice versa.
-  let continuation: string | undefined = projected ? undefined : migrateLegacyContinuation(config.providerName);
+  let continuation: string | undefined = noResume ? undefined : migrateLegacyContinuation(config.providerName);
 
   // Before resuming, drop a session whose on-disk transcript has grown too
   // large/old to cold-resume within the host's idle ceiling. Without this a
@@ -323,7 +332,7 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
         prompt,
         continuation,
       );
-      if (!projected && result.continuation && result.continuation !== continuation) {
+      if (!noResume && result.continuation && result.continuation !== continuation) {
         continuation = result.continuation;
         setContinuation(config.providerName, continuation);
       }
@@ -586,7 +595,7 @@ export async function processQuery(
         // container died between `init` and `result`, the SDK session was
         // effectively orphaned and the next message started a blank
         // Claude session with no prior context.
-        if (!isProjectedSession()) setContinuation(providerName, event.continuation);
+        if (!isProjectedSession() && !isStatelessTaskSession()) setContinuation(providerName, event.continuation);
       } else if (event.type === 'result') {
         // A result — with or without text — means the turn is done. Mark
         // the initial batch completed now so the host sweep doesn't see

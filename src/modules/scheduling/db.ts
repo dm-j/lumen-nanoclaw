@@ -87,6 +87,7 @@ export interface TaskUpdate {
   script?: string | null;
   recurrence?: string | null;
   processAfter?: string;
+  stateless?: boolean;
 }
 
 // Merges content JSON in-place so callers can update prompt/script without
@@ -104,7 +105,7 @@ export function updateTask(db: Database.Database, taskId: string, update: TaskUp
 
   const setProcessAfter = update.processAfter !== undefined;
   const setRecurrence = update.recurrence !== undefined;
-  const mergeContent = update.prompt !== undefined || update.script !== undefined;
+  const mergeContent = update.prompt !== undefined || update.script !== undefined || update.stateless !== undefined;
 
   const tx = db.transaction(() => {
     for (const row of rows) {
@@ -113,6 +114,7 @@ export function updateTask(db: Database.Database, taskId: string, update: TaskUp
         const parsed = JSON.parse(row.content) as Record<string, unknown>;
         if (update.prompt !== undefined) parsed.prompt = update.prompt;
         if (update.script !== undefined) parsed.script = update.script;
+        if (update.stateless !== undefined) parsed.stateless = update.stateless;
         content = JSON.stringify(parsed);
       }
 

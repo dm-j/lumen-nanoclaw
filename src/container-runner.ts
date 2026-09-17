@@ -54,6 +54,7 @@ import {
   writeSessionRouting,
 } from './session-manager.js';
 import { dueMessagesAreAllGatedTasks } from './db/session-db.js';
+import { isTaskThread } from './db/sessions.js';
 import type { AgentGroup, Session } from './types.js';
 
 /**
@@ -183,6 +184,50 @@ export async function wakeContainer(session: Session): Promise<boolean> {
   return promise;
 }
 
+/**
+ * A scheduled task can be marked `stateless` (`ncl tasks create/update
+ * --stateless`) — its content JSON carries `stateless: true`, and
+ * `insertRecurrence` copies content verbatim to every future fire, so this
+ * only needs to check the most recent task row for the series each spawn.
+ *
+ * Writes/removes a marker file in the session's own dir (not the shared
+ * group dir — this is per-session, unlike projected-sessions' per-group
+ * marker) that poll-loop.ts checks the same way it checks the
+ * projected-sessions marker: never resume the provider transcript, start
+ * every fire clean. See docs/roadmap/task-id-routing-spike.md's addendum
+ * on task-series sessions accumulating unbounded transcript otherwise.
+ */
+function syncStatelessMarker(agentGroupId: string, session: Session): void {
+  if (!isTaskThread(session.thread_id)) return;
+  const markerPath = path.join(sessionDir(agentGroupId, session.id), '.task-stateless');
+  let stateless = false;
+  try {
+    const db = openInboundDb(agentGroupId, session.id);
+    try {
+      const row = db.prepare(`SELECT content FROM messages_in WHERE kind = 'task' ORDER BY seq DESC LIMIT 1`).get() as
+        | { content: string }
+        | undefined;
+      if (row) {
+        try {
+          stateless = (JSON.parse(row.content) as { stateless?: unknown }).stateless === true;
+        } catch {
+          stateless = false;
+        }
+      }
+    } finally {
+      db.close();
+    }
+  } catch (err) {
+    log.warn('syncStatelessMarker: failed to read task content, leaving marker as-is', { sessionId: session.id, err });
+    return;
+  }
+  if (stateless) {
+    fs.writeFileSync(markerPath, '');
+  } else {
+    fs.rmSync(markerPath, { force: true });
+  }
+}
+
 async function spawnContainer(session: Session): Promise<void> {
   const agentGroup = getAgentGroup(session.agent_group_id);
   if (!agentGroup) {
@@ -198,6 +243,7 @@ async function spawnContainer(session: Session): Promise<void> {
     writeDestinations(agentGroup.id, session.id);
   }
   writeSessionRouting(agentGroup.id, session.id);
+  syncStatelessMarker(agentGroup.id, session);
 
   // Materialize container.json from DB — writes fresh file and returns
   // the config object, threaded through provider resolution, buildMounts,

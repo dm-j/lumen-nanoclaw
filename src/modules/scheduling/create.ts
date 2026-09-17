@@ -30,6 +30,7 @@ export interface PreparedScheduledTask {
   recurrence: string | null;
   script: string | null;
   processAfter: string;
+  stateless: boolean;
 }
 
 export interface ScheduledTaskRow {
@@ -114,6 +115,7 @@ export function prepareScheduledTask(input: {
   script?: string | null;
   dangerouslyOverrideRecurrenceLimit?: boolean;
   timezone?: string;
+  stateless?: boolean;
 }): PreparedScheduledTask {
   if (!input.prompt) throw new Error('--prompt is required');
   const recurrence = input.recurrence ?? null;
@@ -131,7 +133,14 @@ export function prepareScheduledTask(input: {
     processAfter = parseProcessAfter(input.processAfter, tz);
   }
 
-  return { name: input.name, prompt: input.prompt, recurrence, script, processAfter };
+  return {
+    name: input.name,
+    prompt: input.prompt,
+    recurrence,
+    script,
+    processAfter,
+    stateless: input.stateless === true,
+  };
 }
 
 /** Persist a prepared task through NanoClaw's single task/session representation. */
@@ -156,6 +165,7 @@ export function createScheduledTask(
         prompt: task.prompt,
         script: task.script,
         originSessionId: options?.originSessionId ?? null,
+        ...(task.stateless ? { stateless: true } : {}),
       }),
       status: options?.status ?? 'pending',
     });

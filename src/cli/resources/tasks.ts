@@ -187,6 +187,7 @@ function createTask(args: Record<string, unknown>, ctx: CallerContext) {
     script,
     dangerouslyOverrideRecurrenceLimit: bool(args.dangerously_override_recurrence_limit),
     timezone: resolveGroupTimezone(group),
+    stateless: bool(args.stateless),
   });
   const { session, row } = createScheduledTask(group, prepared, {
     originSessionId: ctx.caller === 'agent' ? ctx.sessionId : null,
@@ -363,6 +364,7 @@ function updateTaskCommand(args: Record<string, unknown>, ctx: CallerContext) {
     update.recurrence = recurrence;
   }
   if (script !== undefined) update.script = script;
+  if (args.stateless !== undefined) update.stateless = bool(args.stateless);
   const fields = Object.keys(update);
   if (fields.length === 0) throw new Error('nothing to update');
 
@@ -539,6 +541,12 @@ registerResource({
           description: 'Pre-task gate script (bash) — see the --script contract above.',
         },
         {
+          name: 'stateless',
+          type: 'boolean',
+          description:
+            'This run never needs to remember a previous run — common knowledge plus whatever data/tools it is given each fire is enough. Skips resuming the prior transcript entirely (starts clean every fire) instead of the default behavior, which resumes it up to a 12MB/14-day cap before rotating. Set this for something like a routine data check or a digest; leave it unset for anything that builds on its own history across runs.',
+        },
+        {
           name: 'group',
           type: 'string',
           description: 'Agent group id (host callers; auto-filled to your own group inside a container).',
@@ -594,6 +602,12 @@ registerResource({
             'Schedule more than 4 fires/day anyway. Only after the user explicitly confirmed they understand the quota/token cost and you agree it is right.',
         },
         { name: 'script', type: 'string', description: 'New pre-task script; "null"/"none" removes it.' },
+        {
+          name: 'stateless',
+          type: 'boolean',
+          description:
+            'Mark the task stateless (true) or not (false) — a stateless run never resumes its prior transcript, starting clean every fire. Set this only for a task whose work is fully self-contained each run (common knowledge plus whatever data/tools it is given that run) and never needs to remember a previous run.',
+        },
         {
           name: 'group',
           type: 'string',
