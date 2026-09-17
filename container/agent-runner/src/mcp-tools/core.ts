@@ -49,7 +49,16 @@ function destinationList(): string {
 function resolveRouting(
   to: string,
 ): { channel_type: string; platform_id: string; thread_id: string | null; resolvedName: string } | { error: string } {
-  const dest = findByName(to);
+  // Defensive: an agent replying to an a2a message might copy the rendered
+  // `sender="X (Agent)"` display name into `to` instead of the actual
+  // destination name — strip the suffix, then fall back to a case-insensitive
+  // match against known destination names (local_name is normally lowercase;
+  // the display name in `sender` isn't).
+  const normalizedTo = to.endsWith(' (Agent)') ? to.slice(0, -' (Agent)'.length) : to;
+  const dest =
+    findByName(normalizedTo) ??
+    findByName(to) ??
+    getAllDestinations().find((d) => d.name.toLowerCase() === normalizedTo.toLowerCase());
   if (!dest) return { error: `Unknown destination "${to}". Known: ${destinationList()}` };
   if (dest.type === 'channel') {
     // If the destination is the same channel the session is bound to,

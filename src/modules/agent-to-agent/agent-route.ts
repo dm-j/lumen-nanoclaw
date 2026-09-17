@@ -303,6 +303,18 @@ function parseMessageContent(contentStr: string): { text: string; files: string[
   }
 }
 
+/** Set/overwrite `content.sender` on a message content JSON string, preserving other fields. */
+function withSenderName(contentStr: string, sender: string): string {
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(contentStr);
+  } catch {
+    parsed = { text: contentStr };
+  }
+  parsed.sender = sender;
+  return JSON.stringify(parsed);
+}
+
 function buildGateQuestion(sourceName: string, targetName: string, contentStr: string): string {
   const { text, files } = parseMessageContent(contentStr);
   const body = text.length > GATE_CARD_BODY_MAX ? `${text.slice(0, GATE_CARD_BODY_MAX)}… (truncated)` : text;
@@ -321,6 +333,109 @@ function buildGateQuestion(sourceName: string, targetName: string, contentStr: s
  * guard decision (the approve continuation re-enters with a grant rather
  * than calling this directly).
  */
+// Consecutive identical a2a messages from the same source session, on the
+// target's own last N inbound turns, before the route is broken instead of
+// delivered — a backstop against a confused agent (e.g. one that mistakes
+// the other for a human and echoes) looping forever on the same content.
+const REPEAT_LOOP_THRESHOLD = 3;
+
+/**
+ * True if the target session's last `REPEAT_LOOP_THRESHOLD - 1` a2a inbound
+ * messages from this exact source session already carry the same text —
+ * meaning this next delivery would be the Nth repeat in a row.
+ */
+function isRepeatLoop(
+  targetAgentGroupId: string,
+  targetSessionId: string,
+  sourceSessionId: string,
+  text: string,
+): boolean {
+  if (!text) return false;
+  const db = openInboundDb(targetAgentGroupId, targetSessionId);
+  try {
+    const rows = db
+      .prepare(
+        `SELECT content FROM messages_in
+         WHERE kind = 'chat' AND channel_type = 'agent' AND source_session_id = ?
+         ORDER BY seq DESC LIMIT ?`,
+      )
+      .all(sourceSessionId, REPEAT_LOOP_THRESHOLD - 1) as Array<{ content: string }>;
+    if (rows.length < REPEAT_LOOP_THRESHOLD - 1) return false;
+    return rows.every((r) => {
+      try {
+        return (JSON.parse(r.content) as { text?: string }).text === text;
+      } catch {
+        return false;
+      }
+    });
+  } finally {
+    db.close();
+  }
+}
+
+// Total a2a messages one source session may send to one target session
+// before delivery stops — a broader backstop than the repeat-loop check
+// above, for a runaway back-and-forth whose content *varies* turn to turn
+// (so isRepeatLoop never trips) but never actually resolves anything. 30 is
+// meant to comfortably cover a legitimate multi-hop exchange (e.g. Lumen
+// asks Dispatcher something, Dispatcher asks for clarification, Lumen
+// clarifies, Dispatcher delegates to a specialist) while still catching a
+// genuine loop well before it burns unbounded turns.
+//
+// This counts a *consecutive streak*, not a lifetime total: sessions here
+// are long-lived (Dispatcher and Lumen don't get a fresh session per
+// exchange), so a raw COUNT(*) would eventually block a pair permanently
+// off totally unrelated legitimate traffic over weeks, not just a loop.
+// The streak resets the moment anything else lands in the target's inbox —
+// the human messaging in, a different agent, anything not this exact source
+// session back-to-back — which is exactly what "this exchange never
+// resolved" should mean.
+const MAX_PAIR_MESSAGES = 30;
+// Bounds the backward scan below; matches the safety-cap pattern in
+// projected-sessions/literal-tail.ts.
+const PAIR_STREAK_SCAN_CAP = 200;
+
+function pairMessageStreak(targetAgentGroupId: string, targetSessionId: string, sourceSessionId: string): number {
+  const db = openInboundDb(targetAgentGroupId, targetSessionId);
+  try {
+    const rows = db
+      .prepare(
+        `SELECT channel_type, source_session_id FROM messages_in
+         WHERE kind = 'chat' ORDER BY seq DESC LIMIT ?`,
+      )
+      .all(PAIR_STREAK_SCAN_CAP) as Array<{ channel_type: string | null; source_session_id: string | null }>;
+    let streak = 0;
+    for (const row of rows) {
+      if (row.channel_type !== 'agent' || row.source_session_id !== sourceSessionId) break;
+      streak++;
+    }
+    return streak;
+  } finally {
+    db.close();
+  }
+}
+
+/** Notify the target session in place of a delivery the caller decided to withhold. */
+async function blockDelivery(
+  targetAgentGroupId: string,
+  targetSession: Session,
+  sourceSession: Session,
+  reasonText: string,
+): Promise<void> {
+  writeSessionMessage(targetAgentGroupId, targetSession.id, {
+    id: `a2a-block-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    kind: 'chat',
+    timestamp: new Date().toISOString(),
+    platformId: sourceSession.agent_group_id,
+    channelType: 'agent',
+    threadId: null,
+    content: withSenderName(JSON.stringify({ text: reasonText }), 'system'),
+    sourceSessionId: sourceSession.id,
+  });
+  const fresh = getSession(targetSession.id);
+  if (fresh) await wakeContainer(fresh);
+}
+
 async function performAgentRoute(
   msg: RoutableAgentMessage,
   session: Session,
@@ -336,6 +451,45 @@ async function performAgentRoute(
   // read the bytes — they live in a session dir it doesn't mount.
   const forwardedContent = forwardFileAttachments(msg, a2aMsgId, session, targetAgentGroupId, targetSession.id);
 
+  const sourceName = getAgentGroup(session.agent_group_id)?.name ?? session.agent_group_id;
+  // Suffix distinguishes a2a senders from a real human in the same field the
+  // formatter renders most prominently (`sender=`) — the "unknown" default
+  // that content with no explicit sender used to render as was too easy to
+  // mistake for the human on the other end of a fast back-and-forth.
+  const contentWithSender = withSenderName(forwardedContent, `${sourceName} (Agent)`);
+
+  if (isRepeatLoop(targetAgentGroupId, targetSession.id, session.id, parseMessageContent(contentWithSender).text)) {
+    log.warn('Agent-to-agent repeat loop detected, message dropped', {
+      from: session.agent_group_id,
+      to: targetAgentGroupId,
+      msgId: a2aMsgId,
+    });
+    await blockDelivery(
+      targetAgentGroupId,
+      targetSession,
+      session,
+      `Loop detected: the last ${REPEAT_LOOP_THRESHOLD} messages from "${sourceName}" were identical, so this repeat was not delivered. Stop echoing and send something substantive, or drop it.`,
+    );
+    return;
+  }
+
+  const pairCount = pairMessageStreak(targetAgentGroupId, targetSession.id, session.id);
+  if (pairCount >= MAX_PAIR_MESSAGES) {
+    log.warn('Agent-to-agent pair message limit reached, message dropped', {
+      from: session.agent_group_id,
+      to: targetAgentGroupId,
+      msgId: a2aMsgId,
+      pairCount,
+    });
+    await blockDelivery(
+      targetAgentGroupId,
+      targetSession,
+      session,
+      `Message limit reached: "${sourceName}" has sent ${pairCount} messages in this exchange without it resolving. This one was not delivered — stop and escalate to a human instead of continuing.`,
+    );
+    return;
+  }
+
   writeSessionMessage(targetAgentGroupId, targetSession.id, {
     id: a2aMsgId,
     kind: 'chat',
@@ -343,7 +497,7 @@ async function performAgentRoute(
     platformId: session.agent_group_id,
     channelType: 'agent',
     threadId: null,
-    content: forwardedContent,
+    content: contentWithSender,
     sourceSessionId: session.id,
   });
   log.info('Agent message routed', {
