@@ -556,6 +556,39 @@ Implementation:
 3. Copy the file into that outbox directory
 4. Write a `messages_out` row (`kind: 'chat'`) with content `{ text, files: [filename] }`
 
+#### assign_task, acknowledge_completion, report_completion (2026-09-16)
+
+Three a2a-specific tools layered on the same `resolveRouting`/`writeMessageOut` path as
+`send_message`, added the same day to fix live acknowledgment loops and give delegated
+work its own session:
+
+```typescript
+{ name: 'assign_task', params: { to: string, task: string } }
+{ name: 'acknowledge_completion', params: { to: string, note?: string } }
+{ name: 'report_completion', params: { to: string, text: string, status?: 'SUCCESS' | 'FAILURE' } }
+```
+
+- **`assign_task`** stamps the outbound content with a fresh `assignTaskId`. The host's
+  `performAgentRoute` (`src/modules/agent-to-agent/agent-route.ts`) checks for this and, if
+  present, skips the normal reply-chain/peer-affinity/shared-session resolution entirely —
+  it always creates a brand-new session on the target, keyed `system:a2a-task:<taskId>`,
+  with `sessions.parent_session_id` pointing back to the assigner's session (see
+  `docs/db-central.md` §1.8). Subsequent traffic in that exchange (questions, answers, the
+  eventual completion report) routes normally through the existing reply-chain mechanism —
+  no further `task_id` plumbing needed.
+- **`acknowledge_completion`** and **`report_completion`** both mark the outbound content
+  `noReply: true`, rendered to the receiving agent as `no_reply="true"` on the `<message>`
+  tag (`formatter.ts`) so it knows not to reply back. `report_completion` additionally
+  prepends `status` (`"SUCCESS: ..."` / `"FAILURE: ..."`) and sets `closesSession: true`;
+  the host closes the *caller's own* session on delivery, but only when
+  `session.parent_session_id` is set — i.e. only a session created via `assign_task`, never
+  an agent's ordinary shared a2a session. See `docs/roadmap/task-id-routing-spike.md` for
+  why that gate exists (a same-day revert after an ungated version would have closed
+  Routine/Computation's only a2a session on their first ever completed task).
+
+Full design/history: `docs/roadmap/task-id-routing-spike.md` and
+`docs/roadmap/stateless-scheduled-tasks.md`.
+
 #### send_card
 
 Send a structured card (interactive or display-only).

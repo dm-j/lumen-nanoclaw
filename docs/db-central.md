@@ -157,7 +157,8 @@ CREATE TABLE sessions (
   status             TEXT DEFAULT 'active',
   container_status   TEXT DEFAULT 'stopped',
   last_active        TEXT,
-  created_at         TEXT NOT NULL
+  created_at         TEXT NOT NULL,
+  parent_session_id  TEXT
 );
 CREATE INDEX idx_sessions_agent_group ON sessions(agent_group_id);
 CREATE INDEX idx_sessions_lookup     ON sessions(messaging_group_id, thread_id);
@@ -165,6 +166,7 @@ CREATE INDEX idx_sessions_lookup     ON sessions(messaging_group_id, thread_id);
 
 - **Resolved by:** `resolveSession()` in `src/session-manager.ts`.
 - Creating a session also provisions the session folder and both session DBs via `initSessionFolder()` — see [db-session.md](db-session.md).
+- **`parent_session_id`** (migration 033): set only for a session created by `assign_task` — points back to the assigner's own session. NULL for every other session (channel-originated, scheduled-task, legacy 'agent-shared'). Gates `report_completion`'s session-closure in `src/modules/agent-to-agent/agent-route.ts` — only a session with this set is guaranteed dedicated to one work order, so only that kind is safe to close on its own completion. See `docs/roadmap/task-id-routing-spike.md`.
 
 ### 1.9 `pending_questions`
 
