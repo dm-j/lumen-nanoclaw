@@ -218,14 +218,24 @@ async function drainSession(session: Session): Promise<void> {
         if (msg.kind === 'chat') {
           const { appendDeliveredOutboundTurn } = await import('./modules/vault-transcript/index.js');
           const { resolveAssistantName } = await import('./container-config.js');
-          // a2a delivery — disambiguate the transcript line with who this
-          // actually went to, since it's no longer safe to assume every
-          // outbound turn was addressed to the human (see the a2a sender
-          // tagging fix in agent-route.ts for the inbound-side equivalent).
-          const recipientName =
-            msg.channel_type === 'agent' && msg.platform_id
-              ? (getAgentGroup(msg.platform_id)?.name ?? msg.platform_id)
-              : undefined;
+          // Disambiguate the transcript line with who this actually went
+          // to — it's no longer safe to assume every outbound turn was
+          // addressed to the same human (an agent group can be wired to
+          // more than one channel/person, on top of a2a traffic; see the
+          // sender tagging fix in agent-route.ts for the inbound-side
+          // equivalent). Channel deliveries resolve to the platform user's
+          // display name (`users.id` is already the namespaced
+          // `<channel_type>:<handle>` that `platform_id` carries for a
+          // channel row); a2a deliveries resolve to the target agent's name.
+          let recipientName: string | undefined;
+          if (msg.platform_id) {
+            if (msg.channel_type === 'agent') {
+              recipientName = getAgentGroup(msg.platform_id)?.name ?? msg.platform_id;
+            } else {
+              const { getUser } = await import('./modules/permissions/db/users.js');
+              recipientName = getUser(msg.platform_id)?.display_name ?? msg.platform_id;
+            }
+          }
           void appendDeliveredOutboundTurn(
             session.agent_group_id,
             resolveAssistantName(session.agent_group_id),

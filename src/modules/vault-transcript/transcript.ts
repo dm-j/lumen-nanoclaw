@@ -221,12 +221,14 @@ export async function appendPendingInboundTurns(agentGroupId: string, sessionId:
  * Append one delivered outbound chat turn. Called from delivery.ts right
  * after markDelivered.
  *
- * `recipientName`, when given (a2a deliveries — the target agent group's
- * name), is folded into the speaker string as "Assistant → Recipient" so
- * the transcript reader doesn't have to assume every outbound line went to
- * the human. Channel deliveries (recipientName omitted) render exactly as
- * before — the shim script's header format never changes, so no per-group
- * transcript-append-host re-deploy is needed for this.
+ * `recipientName` — the resolved human display name (channel deliveries) or
+ * target agent group name (a2a deliveries) — is folded into the speaker
+ * string as "Assistant → Recipient" so the transcript reader never has to
+ * assume who an outbound line went to. Left optional/omittable (falls back
+ * to plain `assistantName`) for callers that genuinely can't resolve one;
+ * delivery.ts always passes it today. The shim script's header format never
+ * changes either way, so no per-group transcript-append-host re-deploy is
+ * needed for this.
  */
 export async function appendDeliveredOutboundTurn(
   agentGroupId: string,
