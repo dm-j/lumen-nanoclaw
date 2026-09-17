@@ -117,6 +117,109 @@ export const sendMessage: McpToolDefinition = {
   },
 };
 
+/**
+ * Shared write for both noReply-flagged tools below. Marks the outbound
+ * content `noReply: true`, which the receiving agent's formatter renders
+ * distinctly (see formatter.ts) so the model on the other end doesn't feel
+ * obligated to reply to a reply. Backstops the "don't acknowledge an
+ * acknowledgment" standing instruction in container/CLAUDE.md with
+ * something structural, not just prompt discipline — real acknowledgment
+ * loops were observed in practice (2026-09-16).
+ */
+function sendNoReply(to: string, text: string, toolName: string, closesSession: boolean) {
+  const routing = resolveRouting(to);
+  if ('error' in routing) return err(routing.error);
+
+  const id = generateId();
+  const seq = writeMessageOut({
+    id,
+    in_reply_to: getCurrentInReplyTo(),
+    kind: 'chat',
+    platform_id: routing.platform_id,
+    channel_type: routing.channel_type,
+    thread_id: routing.thread_id,
+    // closesSession only on report_completion — tells the host to close
+    // *this* (the caller's own) session once delivered, so a stray later
+    // message can't resurrect it. See agent-route.ts's handling of a
+    // closed target session (bounces plain send_message, no-ops noReply
+    // traffic) and its resulting closure of the sender's session.
+    content: JSON.stringify({ text, noReply: true, ...(closesSession ? { closesSession: true } : {}) }),
+  });
+
+  log(`${toolName}: #${seq} → ${routing.resolvedName}`);
+  return ok(`Sent to ${routing.resolvedName} (id: ${seq})`);
+}
+
+/**
+ * Closes out an a2a exchange from the coordinator's side — "the other
+ * agent just told me it's done, and I have nothing further to add."
+ */
+export const acknowledgeCompletion: McpToolDefinition = {
+  tool: {
+    name: 'acknowledge_completion',
+    description:
+      "Use to close out another agent's completion report without triggering a further reply. Not for replying to David — use send_message for that.",
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        to: {
+          type: 'string',
+          description: 'Destination name of the agent whose completion you are acknowledging.',
+        },
+        note: { type: 'string', description: 'Optional short note. Defaults to a plain acknowledgment.' },
+      },
+      required: ['to'],
+    },
+  },
+  async handler(args) {
+    const to = args.to as string;
+    const note = (args.note as string) || 'Acknowledged.';
+    if (!to) return err(`to is required. Options: ${destinationList()}`);
+    return sendNoReply(to, note, 'acknowledge_completion', false);
+  },
+};
+
+/**
+ * Closes out an a2a exchange from the worker's side — the counterpart to
+ * acknowledgeCompletion. Delegated work orders end with a mandatory final
+ * reply; sending that reply through this tool instead of plain
+ * send_message means the coordinator sees it's the end of the line and
+ * doesn't reply back, cutting an ack loop off one hop earlier than relying
+ * on the coordinator to call acknowledge_completion itself.
+ */
+export const reportCompletion: McpToolDefinition = {
+  tool: {
+    name: 'report_completion',
+    description:
+      "Use for your final reply after finishing delegated work — reports the result and signals there's nothing further to discuss. Not for mid-task updates or questions — use send_message for those.",
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        to: {
+          type: 'string',
+          description: 'Destination name of the agent that delegated this work to you.',
+        },
+        text: { type: 'string', description: 'The result or outcome to report.' },
+        status: {
+          type: 'string',
+          enum: ['SUCCESS', 'FAILURE'],
+          description: 'Outcome of the delegated work. Defaults to SUCCESS.',
+        },
+      },
+      required: ['to', 'text'],
+    },
+  },
+  async handler(args) {
+    const to = args.to as string;
+    const text = args.text as string;
+    const status = (args.status as string) || 'SUCCESS';
+    if (!to) return err(`to is required. Options: ${destinationList()}`);
+    if (!text) return err('text is required');
+    if (status !== 'SUCCESS' && status !== 'FAILURE') return err('status must be SUCCESS or FAILURE');
+    return sendNoReply(to, `${status}: ${text}`, 'report_completion', true);
+  },
+};
+
 export const sendFile: McpToolDefinition = {
   tool: {
     name: 'send_file',
@@ -248,4 +351,4 @@ export const addReaction: McpToolDefinition = {
   },
 };
 
-registerTools([sendMessage, sendFile, editMessage, addReaction]);
+registerTools([sendMessage, acknowledgeCompletion, reportCompletion, sendFile, editMessage, addReaction]);

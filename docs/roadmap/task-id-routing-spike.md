@@ -105,13 +105,38 @@ unit of work.
 ## Open questions for actual implementation (not resolved in this spike)
 
 - **Task lifecycle / closure**: what marks a task "done" so its session(s)
-  can be archived and its shared folder swept? Likely: the top-level
-  assignee's session going idle with nothing pending, but decomposition
-  trees complicate "done" — a parent task isn't done until all its
-  sub-tasks report back. Needs a real definition, possibly a small ledger
-  table (`agent_tasks`: id, parent_task_id, assigner_group_id, assignee_group_id,
-  status, created_at, closed_at) rather than inferring closure purely from
-  session activity.
+  can be archived and its shared folder swept? `report_completion`
+  (`container/agent-runner/src/mcp-tools/core.ts`, added 2026-09-16 for the
+  ack-loop fix) is a strong candidate for the actual closure signal, not
+  just a routing nicety — it's already the structurally-marked "this is my
+  final word on this work order" message a worker sends, so the host could
+  treat delivery of a `report_completion` call carrying a given `task_id`
+  as the trigger to close that task's session(s) and archive its shared
+  folder, rather than inferring closure from session idleness. Still needs
+  the decomposition-tree case worked out — a parent task isn't done until
+  all its sub-tasks report back, so closure likely still wants a small
+  ledger table (`agent_tasks`: id, parent_task_id, assigner_group_id,
+  assignee_group_id, status, created_at, closed_at) that `report_completion`
+  writes to, rather than the tool being the entire mechanism by itself.
+- **Staleness detection (2026-09-16 addendum)**: separately from closure,
+  David raised tracking an explicit `WORKING` state (behavior-tree
+  convention) so the host can flag a task session that's been outstanding
+  too long with no `report_completion` — a stuck/abandoned delegation, not
+  just a loop. Landed same day: `sessions.status` is a plain `TEXT` column
+  (no DB constraint) but the TS type is a strict `'active' | 'closed'`
+  binary, and routing code (`findSessionByAgentGroup`'s SQL filter,
+  `resolveTargetSession`'s candidate check, the new `closedSession` check)
+  all hardcode `status === 'active'` as "is this session usable." Adding a
+  third value to that same column would silently break every one of those.
+  Cleaner: a separate `work_status` column/field (`'working' | null`),
+  orthogonal to `status` — `status` keeps its existing lifecycle meaning,
+  `work_status` is the new layer. Set `'working'` when a delegated task
+  session is created (ties into the `agent_tasks` ledger above — probably
+  belongs on that table, not on `sessions`, once it exists), cleared when
+  `report_completion` closes it. A sweep mirroring `host-sweep.ts`'s
+  existing "close spent task session" pass could then flag anything still
+  `working` past a threshold. Not built — needs the `agent_tasks` ledger
+  decided first, since this is really a field on that table.
 - **Observability**: should `ncl` grow a `tasks` (or `agent-tasks`, to not
   collide with the existing scheduled-`tasks` resource) list/get surface
   for live a2a task delegations, mirroring `ncl tasks list`? Useful for

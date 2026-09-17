@@ -183,8 +183,12 @@ function formatSingleChat(msg: MessageInRow): string {
   const attachmentsSuffix = formatAttachments(content.attachments);
 
   const fromAttr = originAttr(msg);
+  // Set by acknowledge_completion (core.ts) — closes out an a2a exchange.
+  // No reply expected; flagged in the rendered attribute rather than left
+  // to prompt discipline alone, since real ack-loops were observed live.
+  const noReplyAttr = content.noReply ? ' no_reply="true"' : '';
 
-  return `<message${idAttr}${fromAttr} sender="${escapeXml(sender)}" time="${escapeXml(time)}"${replyAttr}>${replyPrefix}${escapeXml(text)}${attachmentsSuffix}</message>`;
+  return `<message${idAttr}${fromAttr} sender="${escapeXml(sender)}" time="${escapeXml(time)}"${replyAttr}${noReplyAttr}>${replyPrefix}${escapeXml(text)}${attachmentsSuffix}</message>`;
 }
 
 /**
