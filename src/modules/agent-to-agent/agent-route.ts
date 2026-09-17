@@ -25,7 +25,7 @@ import { isSafeAttachmentName } from '../../attachment-safety.js';
 import { ensureContainedInboxDir, isPathInside } from '../../inbox-safety.js';
 import { getAgentGroup } from '../../db/agent-groups.js';
 import { getInboundSourceSessionId, getMostRecentPeerSourceSessionId } from '../../db/session-db.js';
-import { getSession } from '../../db/sessions.js';
+import { getSession, updateSession } from '../../db/sessions.js';
 import { wakeContainer } from '../../container-runner.js';
 import { GuardDenyError, guard } from '../../guard/index.js';
 import { log } from '../../log.js';
@@ -448,12 +448,38 @@ async function blockDelivery(
   if (fresh) await wakeContainer(fresh);
 }
 
+/**
+ * assign_task (core.ts) stamps `assignTaskId` on the outbound content
+ * instead of adding a new field to RoutableAgentMessage — the approval-hold
+ * replay path (message-gate.ts) only forwards `content` verbatim, so
+ * reading it back out of content here means the hold/approve round-trip
+ * needs no changes to carry it through.
+ */
+function assignTaskId(contentStr: string): string | null {
+  try {
+    const parsed = JSON.parse(contentStr) as { assignTaskId?: unknown };
+    return typeof parsed.assignTaskId === 'string' ? parsed.assignTaskId : null;
+  } catch {
+    return null;
+  }
+}
+
 async function performAgentRoute(
   msg: RoutableAgentMessage,
   session: Session,
   targetAgentGroupId: string,
 ): Promise<void> {
-  const targetSession = resolveTargetSession(msg, session, targetAgentGroupId);
+  const taskId = assignTaskId(msg.content);
+  // assign_task always gets a brand-new, dedicated session — never the
+  // reply-chain/peer-affinity/shared-session resolution used for ordinary
+  // a2a traffic. That's the entire point: a session created this way is
+  // guaranteed scoped to exactly one work order, which is what makes
+  // report_completion's session-closure safe to key off parent_session_id
+  // (see resolveTargetSession's doc comment for why closure was reverted
+  // for the shared-session case).
+  const targetSession = taskId
+    ? resolveSession(targetAgentGroupId, null, `system:a2a-task:${taskId}`, 'per-thread', session.id).session
+    : resolveTargetSession(msg, session, targetAgentGroupId);
   const a2aMsgId = `a2a-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
   // If the source message references files (via `send_file`), forward the
@@ -521,6 +547,35 @@ async function performAgentRoute(
   });
   const fresh = getSession(targetSession.id);
   if (fresh) await wakeContainer(fresh);
+
+  // report_completion closes the *caller's own* session once its final word
+  // has actually been delivered (not on the hold/approval path — only
+  // here, on real delivery). Gated on parent_session_id rather than just
+  // the closesSession flag: only a session created via assign_task is
+  // guaranteed dedicated to exactly one work order, so only that kind of
+  // session is safe to close on its own completion. Ordinary shared a2a
+  // sessions (Routine/Computation's one long-lived session today) have no
+  // parent_session_id and are never touched — this is exactly the
+  // precondition whose absence caused the same closure logic to be
+  // reverted earlier the same day (2026-09-16); see
+  // docs/roadmap/task-id-routing-spike.md.
+  if (session.parent_session_id) {
+    const parsedContent = (() => {
+      try {
+        return JSON.parse(msg.content) as { closesSession?: unknown };
+      } catch {
+        return {};
+      }
+    })();
+    if (parsedContent.closesSession) {
+      updateSession(session.id, { status: 'closed' });
+      log.info('Closed task session after report_completion', {
+        sessionId: session.id,
+        agentGroupId: session.agent_group_id,
+        parentSessionId: session.parent_session_id,
+      });
+    }
+  }
 }
 
 /**

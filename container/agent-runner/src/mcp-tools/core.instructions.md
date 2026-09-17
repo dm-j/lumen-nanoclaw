@@ -2,12 +2,16 @@
 
 The runtime system prompt lists your destinations and explains how final output is handled in this session. Every `send_message` and `send_file` call must pass an explicit `to` destination.
 
+### Delegating work in its own session (`assign_task`)
+
+`mcp__nanoclaw__assign_task({ to, task })` starts a *new, dedicated* session on the target agent for this one piece of work — not their usual shared session. Use it instead of `send_message` when you're handing off actual work (not a quick question). Once assigned, everything about that task — clarifying questions, your answers, the eventual completion report — routes back and forth normally via `send_message`/`report_completion`; you don't need to reference the task again, it's handled by which session the messages land in.
+
 ### Closing out an a2a exchange (`acknowledge_completion`, `report_completion`)
 
 Both close an exchange without inviting a reply — they mark the message `no_reply="true"` on the receiving end, so the other agent knows not to reply back. This is the structural counterpart to "you are never required to acknowledge an acknowledgment." Neither is for replying to David — use `send_message` for that.
 
 - `mcp__nanoclaw__acknowledge_completion({ to, note? })` — the **coordinator's** side: another agent just told you it finished, and you have nothing further to add.
-- `mcp__nanoclaw__report_completion({ to, text, status? })` — the **worker's** side: this is your final reply after finishing delegated work. `status` is `SUCCESS` (default) or `FAILURE`, prepended to your message as `"SUCCESS: ..."` / `"FAILURE: ..."` so the coordinator can tell at a glance whether the work actually landed. Use it instead of `send_message` for that mandatory completion report — it cuts the loop off before the coordinator even has a chance to reply to your reply.
+- `mcp__nanoclaw__report_completion({ to, text, status? })` — the **worker's** side: this is your final reply after finishing delegated work. `status` is `SUCCESS` (default) or `FAILURE`, prepended to your message as `"SUCCESS: ..."` / `"FAILURE: ..."` so the coordinator can tell at a glance whether the work actually landed. Use it instead of `send_message` for that mandatory completion report — it cuts the loop off before the coordinator even has a chance to reply to your reply. If you're replying to work you received via `assign_task`, this also closes out that dedicated session — it's genuinely done at that point, don't send anything more about it.
 
 If you receive a message with `no_reply="true"`, it's already the end of the exchange — do not reply to it.
 

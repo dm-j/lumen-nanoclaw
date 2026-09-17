@@ -156,6 +156,14 @@ export interface Session {
   container_status: 'running' | 'idle' | 'stopped';
   last_active: string | null;
   created_at: string;
+  /**
+   * The session that created this one via assign_task — NULL/absent for
+   * every session created any other way. See migration 033. Optional
+   * (rather than required-but-nullable) so the many existing Session
+   * literals across the codebase that never touch this field don't all
+   * need updating — createSession defaults it to null.
+   */
+  parent_session_id?: string | null;
 }
 
 // ── Session DB entities ──

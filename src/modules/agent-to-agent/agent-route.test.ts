@@ -303,6 +303,87 @@ describe('routeAgentMessage return-path', () => {
     expect(s2Rows).toHaveLength(1);
   });
 
+  it('assign_task: creates a fresh dedicated session, not the shared one', async () => {
+    // A already has an ordinary shared exchange with B going (mechanism 1/2
+    // would normally route here).
+    await routeAgentMessage(
+      { id: 'msg-ordinary', platform_id: B, content: JSON.stringify({ text: 'hi' }), in_reply_to: null },
+      S1,
+    );
+    expect(readInbound(B, SB.id)).toHaveLength(1);
+
+    // A now assigns a task instead — must NOT land in SB, must create a new session.
+    await routeAgentMessage(
+      {
+        id: 'msg-assign',
+        platform_id: B,
+        content: JSON.stringify({ text: 'do the thing', assignTaskId: 'task-abc123' }),
+        in_reply_to: null,
+      },
+      S1,
+    );
+
+    expect(readInbound(B, SB.id)).toHaveLength(1); // unchanged — task did not land here
+
+    const { getSessionsByAgentGroup } = await import('../../db/sessions.js');
+    const bSessions = getSessionsByAgentGroup(B);
+    const taskSession = bSessions.find((s) => s.thread_id === 'system:a2a-task:task-abc123');
+    expect(taskSession).toBeDefined();
+    expect(taskSession?.parent_session_id).toBe(S1.id);
+
+    const taskRows = readInbound(B, taskSession!.id);
+    expect(taskRows).toHaveLength(1);
+    expect(JSON.parse(taskRows[0].content).text).toBe('do the thing');
+  });
+
+  it('report_completion closes a dedicated assign_task session, but not an ordinary shared one', async () => {
+    // Ordinary shared exchange: report_completion here must NOT close S1 —
+    // S1 has no parent_session_id, it's Routine/Computation's everyday
+    // long-lived session in the real system.
+    await routeAgentMessage(
+      { id: 'msg-fwd', platform_id: B, content: JSON.stringify({ text: 'hello' }), in_reply_to: null },
+      S1,
+    );
+    const bRows = readInbound(B, SB.id);
+    await routeAgentMessage(
+      {
+        id: 'msg-report-shared',
+        platform_id: A,
+        content: JSON.stringify({ text: 'SUCCESS: done', noReply: true, closesSession: true }),
+        in_reply_to: bRows[0].id,
+      },
+      SB,
+    );
+    const { getSession } = await import('../../db/sessions.js');
+    expect(getSession(SB.id)?.status).toBe('active');
+
+    // Dedicated assign_task session: report_completion from *that* session
+    // (parent_session_id set) DOES close it.
+    await routeAgentMessage(
+      {
+        id: 'msg-assign2',
+        platform_id: B,
+        content: JSON.stringify({ text: 'do another thing', assignTaskId: 'task-def456' }),
+        in_reply_to: null,
+      },
+      S1,
+    );
+    const bSessions = (await import('../../db/sessions.js')).getSessionsByAgentGroup(B);
+    const taskSession = bSessions.find((s) => s.thread_id === 'system:a2a-task:task-def456')!;
+    const taskRows = readInbound(B, taskSession.id);
+
+    await routeAgentMessage(
+      {
+        id: 'msg-report-task',
+        platform_id: A,
+        content: JSON.stringify({ text: 'SUCCESS: done', noReply: true, closesSession: true }),
+        in_reply_to: taskRows[0].id,
+      },
+      taskSession,
+    );
+    expect(getSession(taskSession.id)?.status).toBe('closed');
+  });
+
   it('cross-agent-group guard: origin session belonging to wrong agent group is rejected', async () => {
     // Third agent group C sends to B, stamping source_session_id = SC on B's inbound.
     const C = 'ag-C';

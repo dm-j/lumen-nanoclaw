@@ -8,10 +8,10 @@ export const TASKS_SYSTEM_THREAD_ID = 'system:tasks';
 export function createSession(session: Session): void {
   getDb()
     .prepare(
-      `INSERT INTO sessions (id, agent_group_id, messaging_group_id, thread_id, agent_provider, status, container_status, last_active, created_at)
-       VALUES (@id, @agent_group_id, @messaging_group_id, @thread_id, @agent_provider, @status, @container_status, @last_active, @created_at)`,
+      `INSERT INTO sessions (id, agent_group_id, messaging_group_id, thread_id, agent_provider, status, container_status, last_active, created_at, parent_session_id)
+       VALUES (@id, @agent_group_id, @messaging_group_id, @thread_id, @agent_provider, @status, @container_status, @last_active, @created_at, @parent_session_id)`,
     )
-    .run(session);
+    .run({ ...session, parent_session_id: session.parent_session_id ?? null });
 }
 
 export function getSession(id: string): Session | undefined {

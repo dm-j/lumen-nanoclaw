@@ -126,7 +126,7 @@ export const sendMessage: McpToolDefinition = {
  * something structural, not just prompt discipline — real acknowledgment
  * loops were observed in practice (2026-09-16).
  */
-function sendNoReply(to: string, text: string, toolName: string) {
+function sendNoReply(to: string, text: string, toolName: string, closesSession: boolean) {
   const routing = resolveRouting(to);
   if ('error' in routing) return err(routing.error);
 
@@ -138,12 +138,74 @@ function sendNoReply(to: string, text: string, toolName: string) {
     platform_id: routing.platform_id,
     channel_type: routing.channel_type,
     thread_id: routing.thread_id,
-    content: JSON.stringify({ text, noReply: true }),
+    // closesSession (report_completion only) tells the host to close *this*
+    // session once delivered — safe now because a task session created by
+    // assign_task is guaranteed dedicated to one work order (has a
+    // parent_session_id); the host re-checks that before actually closing
+    // anything, this flag alone can't close a shared session. See
+    // agent-route.ts's parent_session_id gate.
+    content: JSON.stringify({ text, noReply: true, ...(closesSession ? { closesSession: true } : {}) }),
   });
 
   log(`${toolName}: #${seq} → ${routing.resolvedName}`);
   return ok(`Sent to ${routing.resolvedName} (id: ${seq})`);
 }
+
+/**
+ * Delegates work to another agent in a brand-new, dedicated session — not
+ * the target's usual shared a2a session. Questions and answers within that
+ * one delegation still route normally (the existing reply-chain/
+ * source_session_id mechanism in agent-route.ts already handles that); what
+ * assign_task changes is that the *first* message starts a session scoped
+ * to exactly this one work order, so its eventual report_completion can
+ * safely close only that session — never the target's ongoing traffic with
+ * anyone else. See docs/roadmap/task-id-routing-spike.md.
+ */
+export const assignTask: McpToolDefinition = {
+  tool: {
+    name: 'assign_task',
+    description:
+      'Delegate work to another agent in a fresh, dedicated session for just this task — use instead of send_message when starting new delegated work (not for a quick question or an ongoing exchange).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        to: {
+          type: 'string',
+          description: 'Destination name of the agent to delegate to.',
+        },
+        task: { type: 'string', description: 'The work order — what you need done.' },
+      },
+      required: ['to', 'task'],
+    },
+  },
+  async handler(args) {
+    const to = args.to as string;
+    const task = args.task as string;
+    if (!to) return err(`to is required. Options: ${destinationList()}`);
+    if (!task) return err('task is required');
+
+    const dest = findByName(to);
+    if (dest?.type === 'channel') return err(`"${to}" is a channel, not an agent — assign_task only targets agents.`);
+
+    const routing = resolveRouting(to);
+    if ('error' in routing) return err(routing.error);
+
+    const taskId = `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const id = generateId();
+    const seq = writeMessageOut({
+      id,
+      in_reply_to: getCurrentInReplyTo(),
+      kind: 'chat',
+      platform_id: routing.platform_id,
+      channel_type: routing.channel_type,
+      thread_id: routing.thread_id,
+      content: JSON.stringify({ text: task, assignTaskId: taskId }),
+    });
+
+    log(`assign_task: #${seq} → ${routing.resolvedName} (task ${taskId})`);
+    return ok(`Task assigned to ${routing.resolvedName} in a new session (id: ${seq})`);
+  },
+};
 
 /**
  * Closes out an a2a exchange from the coordinator's side — "the other
@@ -170,7 +232,7 @@ export const acknowledgeCompletion: McpToolDefinition = {
     const to = args.to as string;
     const note = (args.note as string) || 'Acknowledged.';
     if (!to) return err(`to is required. Options: ${destinationList()}`);
-    return sendNoReply(to, note, 'acknowledge_completion');
+    return sendNoReply(to, note, 'acknowledge_completion', false);
   },
 };
 
@@ -211,7 +273,7 @@ export const reportCompletion: McpToolDefinition = {
     if (!to) return err(`to is required. Options: ${destinationList()}`);
     if (!text) return err('text is required');
     if (status !== 'SUCCESS' && status !== 'FAILURE') return err('status must be SUCCESS or FAILURE');
-    return sendNoReply(to, `${status}: ${text}`, 'report_completion');
+    return sendNoReply(to, `${status}: ${text}`, 'report_completion', true);
   },
 };
 
@@ -346,4 +408,4 @@ export const addReaction: McpToolDefinition = {
   },
 };
 
-registerTools([sendMessage, acknowledgeCompletion, reportCompletion, sendFile, editMessage, addReaction]);
+registerTools([sendMessage, assignTask, acknowledgeCompletion, reportCompletion, sendFile, editMessage, addReaction]);

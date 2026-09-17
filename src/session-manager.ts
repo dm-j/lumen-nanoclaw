@@ -94,6 +94,7 @@ export function resolveSession(
   messagingGroupId: string | null,
   threadId: string | null,
   sessionMode: 'shared' | 'per-thread' | 'agent-shared',
+  parentSessionId: string | null = null,
 ): { session: Session; created: boolean } {
   // agent-shared: single session per agent group, regardless of messaging group
   if (sessionMode === 'agent-shared') {
@@ -123,11 +124,19 @@ export function resolveSession(
     container_status: 'stopped',
     last_active: null,
     created_at: new Date().toISOString(),
+    parent_session_id: parentSessionId,
   };
 
   createSession(session);
   initSessionFolder(agentGroupId, id);
-  log.info('Session created', { id, agentGroupId, messagingGroupId, threadId: lookupThreadId, sessionMode });
+  log.info('Session created', {
+    id,
+    agentGroupId,
+    messagingGroupId,
+    threadId: lookupThreadId,
+    sessionMode,
+    parentSessionId,
+  });
 
   return { session, created: true };
 }
@@ -150,6 +159,7 @@ export function resolveTaskSession(agentGroupId: string, seriesId: string): { se
     container_status: 'stopped',
     last_active: null,
     created_at: new Date().toISOString(),
+    parent_session_id: null,
   };
 
   createSession(session);

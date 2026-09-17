@@ -1,11 +1,32 @@
-# Task-ID routing spike (`AssignTask`)
+# Task-ID routing (`assign_task`) — shipped 2026-09-16
 
-Branch: `spike/task-id-routing`. Planning spike, no implementation yet —
-started 2026-09-16 to resolve the open design questions on
-[transient-session-mode.md](transient-session-mode.md) and the shared
-intermediate-data-folder idea (see "Addendum" note below), after the
-session-heuristic fix (peer-affinity fallback) turned out to be the wrong
-level to solve this at.
+Started as a planning spike on `spike/task-id-routing`, to resolve the open
+design questions on [transient-session-mode.md](transient-session-mode.md)
+and the shared intermediate-data-folder idea (see "Addendum" note below),
+after the session-heuristic fix (peer-affinity fallback) turned out to be
+the wrong level to solve this at. Built and live same day, after the
+report_completion-session-closure revert below made the actual precondition
+obvious: each work order needed a genuinely dedicated session before
+closing it on completion could ever be safe.
+
+**What's live**: `assign_task({ to, task })` (`container/agent-runner/src/mcp-tools/core.ts`)
+creates a fresh session on the target, keyed `system:a2a-task:<taskId>`,
+with `sessions.parent_session_id` (migration 033) pointing back to the
+assigner's own session. Everything else about the exchange — clarifying
+questions, answers, the eventual `report_completion` — routes through the
+*existing* reply-chain/`source_session_id` mechanism unchanged; no new
+`task_id` plumbing needed on `send_message`/`report_completion` themselves.
+`report_completion`'s session-closure (reverted earlier the same day) is
+back, gated on `parent_session_id` being set — only a session created via
+`assign_task` can close itself this way, so Routine/Computation/
+Dispatcher's ordinary shared sessions are structurally untouched. Dispatcher
+and Lumen's standing instructions now say to use `assign_task` for
+delegating actual work, `send_message` for everything else.
+
+**Not built**: the `agent_tasks` ledger (parent/child tracking beyond the
+single `parent_session_id` pointer, `ncl` observability), the shared
+intermediate-data folder, `work_status`/staleness detection, and cleanup/
+archival of closed task sessions — all still open per the sections below.
 
 ## The problem this replaces
 
