@@ -4,7 +4,7 @@ The runtime system prompt lists your destinations and explains how final output 
 
 ### Delegating work in its own session (`assign_task`)
 
-`mcp__nanoclaw__assign_task({ to, task })` starts a *new, dedicated* session on the target agent for this one piece of work — not their usual shared session. Use it instead of `send_message` when you're handing off actual work (not a quick question). Once assigned, everything about that task — clarifying questions, your answers, the eventual completion report — routes back and forth normally via `send_message`/`report_completion`; you don't need to reference the task again, it's handled by which session the messages land in.
+`mcp__nanoclaw__assign_task({ to, task })` starts a *new, dedicated* session on the target agent for this one piece of work — not their usual shared session. Use it for handing off actual work, but also for a question only another agent can answer — by its domain, its data, or a tool it has and you don't. Once assigned, everything about that task — clarifying questions, your answers, the eventual completion report — routes back and forth normally via `send_message`/`report_completion`; you don't need to reference the task again, it's handled by which session the messages land in. Usual contact rules still apply — `assign_task` doesn't bypass destination permissions or approval gates, it only changes which session the message lands in.
 
 ### Closing out an a2a exchange (`acknowledge_completion`, `report_completion`)
 

@@ -152,20 +152,23 @@ function sendNoReply(to: string, text: string, toolName: string, closesSession: 
 }
 
 /**
- * Delegates work to another agent in a brand-new, dedicated session — not
+ * Delegates work — or a question another agent is better placed to answer,
+ * by domain, data, or tool access — to a brand-new, dedicated session, not
  * the target's usual shared a2a session. Questions and answers within that
  * one delegation still route normally (the existing reply-chain/
  * source_session_id mechanism in agent-route.ts already handles that); what
  * assign_task changes is that the *first* message starts a session scoped
  * to exactly this one work order, so its eventual report_completion can
  * safely close only that session — never the target's ongoing traffic with
- * anyone else. See docs/roadmap/task-id-routing-spike.md.
+ * anyone else. Doesn't bypass the normal a2a guard (destination ACL,
+ * approval gates) — same checks as send_message, just a different session
+ * target. See docs/roadmap/task-id-routing-spike.md.
  */
 export const assignTask: McpToolDefinition = {
   tool: {
     name: 'assign_task',
     description:
-      'Delegate work to another agent in a fresh, dedicated session for just this task — use instead of send_message when starting new delegated work (not for a quick question or an ongoing exchange).',
+      'Delegate work, or ask a question only another agent can answer (its domain, its data, or a tool it has and you don\'t) — in a fresh, dedicated session for just this. Use instead of send_message when starting something new. Usual contact rules apply (destination permissions, approval gates) — this only changes which session the message lands in.',
     inputSchema: {
       type: 'object' as const,
       properties: {
