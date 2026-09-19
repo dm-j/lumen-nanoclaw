@@ -70,6 +70,13 @@ exists.
   sentences each) rather than being forced into one sentence.
 - **Omit days with nothing reportable** (pure noise, or a full same-day revert-to-nothing)
   from the index entirely. Never write a filler entry.
+- **Never report changes to the local-patch-notes document set itself** (this skill, its
+  worker/dispatch files, `docs/local-patch-notes.md`, or anything under
+  `docs/local-patch-notes/`) as a bullet. Reporting "updated the patch notes" inside the
+  patch notes creates a change that describes itself, which the next run would then also
+  need to report, forever. If a day's only local activity was maintaining this document
+  set, that day has nothing reportable and is omitted entirely — same as any other day
+  with nothing to say.
 - **The index stays thin**: one line per day, one broad orienting sentence, no per-item
   essays — detail lives only in that day's own file.
 

@@ -17,3 +17,5 @@ A history of what's been locally changed on this NanoClaw install, on top of ups
 13. [2026-09-02](local-patch-notes/2026-09-02.md) — Scheduled tasks skip unnecessary briefing compilation on cold gated-task-only wakes.
 14. [2026-09-15](local-patch-notes/2026-09-15.md) — Laid the groundwork for multi-agent delegation: agent group descriptions plus an auto-generated routing table for coordinator agents.
 15. [2026-09-16](local-patch-notes/2026-09-16.md) — Multi-agent delegation goes live: the `routine` agent, per-task a2a sessions (`assign_task`), ack-loop breakers, and `--stateless` scheduled tasks.
+16. [2026-09-18](local-patch-notes/2026-09-18.md) — Added a per-agent-group `wake_script` and wired/verified Routine's daily-note awareness; fixed a vault-transcript recipient routing bug; scoped a plan for Routine to read/edit the calendar via the vault's local mirror.
+17. [2026-09-19](local-patch-notes/2026-09-19.md) — Roadmap-staleness sweep (closed 3 stale items, corrected 4 more) and a strengthened roadmap-maintenance rule; fixed a `tsx` deprecation warning and added the Minimal Friction principle to CLAUDE.md.
