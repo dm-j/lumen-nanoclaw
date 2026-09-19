@@ -91,8 +91,18 @@ exists.
 
 ## Delegating this to a subagent
 
-This is commit-archaeology work across two repos and can involve reading many commit
-bodies — reasonable to hand to a subagent (fresh context, e.g. a `general-purpose` or
-`sonnet`-model agent) rather than doing it inline. When you do, give the subagent this
-file's content directly (it has no memory of this conversation) plus the specific date
-range to cover, rather than re-deriving the rules from scratch each time.
+**This section is for whoever first invokes this skill in an interactive session,
+deciding how to route the work — it is not an instruction to whichever agent ends up
+actually doing the work.** If you are already the agent tasked with producing the patch
+notes (you were dispatched specifically for this, or you're executing this skill's steps
+directly), do the work yourself: read the commits, apply the rules above, write the
+files. Do not spawn a further subagent to do it "for" you — there is no reason for this
+work to run more than one layer deep, and doing so just burns tokens re-deriving the same
+context with nothing gained.
+
+For the invoker: this is commit-archaeology work across two repos and can involve
+reading many commit bodies — reasonable to hand to a single subagent (fresh context, e.g.
+a `general-purpose` or `sonnet`-model agent) rather than doing it inline yourself. When
+you do, give that subagent this file's content directly (it has no memory of this
+conversation) plus the specific date range to cover, rather than making it re-derive the
+rules from scratch. One layer of delegation, never more.
