@@ -35,6 +35,15 @@ export interface ContainerConfigRow {
   host_shims_dir: string | null; // NULL = default to groups/<folder>/host-shims/
   mcp_shims_dir: string | null; // NULL = default to groups/<folder>/mcp-shims/
   transport: string | null; // 'file' | 'sync'; NULL = 'file' (bind-mounted session DBs)
+  /**
+   * Script run once at the start of every wake, regardless of what
+   * triggered it (scheduled task fire or a2a `assign_task` session) — the
+   * per-task `script` column only fires for `kind: 'task'` messages, which
+   * misses the a2a path. Same contract: last stdout line is JSON
+   * `{wakeAgent, data?}`; `data` is rendered into the prompt. NULL = no
+   * wake script. See docs/roadmap/routine-daily-notes.md.
+   */
+  wake_script: string | null;
   updated_at: string;
 }
 

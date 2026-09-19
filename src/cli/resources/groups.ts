@@ -61,6 +61,7 @@ function presentConfig(row: ContainerConfigRow): Record<string, unknown> {
     host_shims_dir: row.host_shims_dir,
     mcp_shims_dir: row.mcp_shims_dir,
     transport: row.transport ?? 'file',
+    wake_script: row.wake_script,
     updated_at: row.updated_at,
   };
 }
@@ -329,7 +330,8 @@ registerResource({
         '--timezone (IANA id like "Europe/Lisbon"; "" clears back to the install default; scheduled-task times follow it immediately, message display after restart), ' +
         '--host-shims-dir (path to this group\'s host-shim whitelist directory; "" clears back to the default groups/<folder>/host-shims/), ' +
         '--mcp-shims-dir (path to this group\'s mcp-shims whitelist directory; "" clears back to the default mcp-shims/<folder>/, never mounted into the container), ' +
-        '--transport (session DB transport: "file" [default, bind-mounted inbound.db/outbound.db] or "sync" [host-local + container-local DBs reconciled over WebSocket, macOS-only, opt-in — see docs/db.md]).',
+        '--transport (session DB transport: "file" [default, bind-mounted inbound.db/outbound.db] or "sync" [host-local + container-local DBs reconciled over WebSocket, macOS-only, opt-in — see docs/db.md]), ' +
+        '--wake-script (bash script run at the start of every wake — scheduled task fire or a2a assign_task session alike; last stdout line must be JSON {"wakeAgent": bool, "data"?: any}, and `data` is rendered into that turn\'s prompt; "" clears it).',
       handler: async (args) => {
         const id = args.id as string;
         if (!id) throw new Error('--id is required');
@@ -350,6 +352,7 @@ registerResource({
             | 'host_shims_dir'
             | 'mcp_shims_dir'
             | 'transport'
+            | 'wake_script'
           >
         > = {};
         if (args.provider !== undefined) updates.provider = args.provider as string;
@@ -382,6 +385,10 @@ registerResource({
           // 'file' is the column's NULL default — store NULL, not the literal
           // string, so existing rows and freshly-defaulted rows read identically.
           updates.transport = transport === 'file' ? null : transport;
+        }
+        const wakeScriptFlag = args['wake-script'] ?? args.wake_script;
+        if (wakeScriptFlag !== undefined) {
+          updates.wake_script = (wakeScriptFlag as string) === '' ? null : (wakeScriptFlag as string);
         }
 
         if (Object.keys(updates).length === 0) {

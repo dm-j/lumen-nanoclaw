@@ -50,6 +50,7 @@ describe('execHostShim', () => {
       timezone: null,
       mcp_shims_dir: null,
       transport: null,
+      wake_script: null,
       updated_at: new Date().toISOString(),
     };
     createContainerConfig({ ...base, agent_group_id: 'ag-a', host_shims_dir: dirA });

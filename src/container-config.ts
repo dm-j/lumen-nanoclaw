@@ -165,6 +165,11 @@ export interface ContainerConfig {
   mcpShims: McpShimManifestEntry[];
   /** Session DB transport: 'file' (bind-mounted, default) or 'sync' (host/container-local DBs over WebSocket). */
   transport: 'file' | 'sync';
+  /**
+   * Script run once at the start of every wake (scheduled task fire or a2a
+   * `assign_task` session alike). See `container_configs.wake_script`.
+   */
+  wakeScript?: string;
 }
 
 /**
@@ -205,6 +210,7 @@ export function configFromDb(row: ContainerConfigRow, group: AgentGroup): Contai
     timezone: row.timezone && isValidTimezone(row.timezone) ? row.timezone : undefined,
     mcpShims: [],
     transport: row.transport === 'sync' ? 'sync' : 'file',
+    wakeScript: row.wake_script ?? undefined,
   };
 }
 
