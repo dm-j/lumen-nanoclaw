@@ -111,7 +111,9 @@ scoped, just the plausible seam.
   features touch the same folder structure for related-but-different reasons; worth
   reviewing both together once this is scoped, not assuming they're fully independent.
 
-## Status: not started
+## Status: NEXT — promoted 2026-09-19, not started
 
-Idea only — captured per the roadmap-maintenance rule so it isn't lost, not because any
-part of it has been designed yet.
+David promoted this to the top of `docs/roadmap.md` as the next thing to build,
+explicitly so it doesn't rely on memory. Design/investigation above is done (sync
+pipeline identified and read, risk assessed as low, trigger point decided as
+read-triggered rather than global `wake_script`) — no code written yet.
