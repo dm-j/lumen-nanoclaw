@@ -111,20 +111,69 @@ returned today's real note, `append-host` appended a test line and it round-trip
 correctly on the next read — then reverted via `create ... overwrite` back to the
 pre-test content (today's note is calendar-pipeline-owned; the test line wasn't left in).
 
-## Status: shim built and verified; not yet wired to Routine
+## Wired and verified live — 2026-09-18
 
-What's landed: `daily_note` read/append shims exist under `mcp-shims/routine/`.
-`discoverMcpShims` picks them up automatically at Routine's next container spawn (no
-action needed there). What's still open:
+`--wake-script` set on `routine`'s container config: a `/bin/sh` script that calls
+`host-shim daily_note/read`, captures its stdout into an env var, and uses `node -e` to
+build the `{"wakeAgent": true, "data": "..."}` envelope (avoids manual JSON-escaping —
+`WAKE_NOTE_CONTENT="$CONTENT" node -e '...JSON.stringify(...process.env...)'`). Live-fire
+tested by manually triggering a scheduled task run (`ncl tasks run`) and by a purpose-
+built one-shot diagnostic task asking `routine` to quote back everything that preceded
+its actual prompt verbatim — confirmed via the raw a2a message content in Dispatcher's
+`inbound.db` (not just `routine`'s own summary of what it did) that the exact `_index.md`
+content arrived as a `<wake-context>` block, and that `routine` completed its actual
+assigned task normally afterward (no breakage to normal operation). `wake_script`
+live-update timing confirmed in practice: no separate container restart ceremony was
+needed beyond the respawn that already happens between wakes.
 
-- **Not yet exercised by `routine` itself** — no live agent turn has called either tool
-  yet, only direct CLI invocation during build.
-- **The actual `--wake-script` on `routine`'s container config and scheduled task(s)** —
-  the one-liner that calls `host-shim daily_note read` at wake time and emits
-  `{"wakeAgent": true, "data": "<contents>"}`, closing the loop with the mechanism built
-  earlier today. Not set yet.
-- **`wake_script` live-update timing not yet separately verified** — `container.json` is
-  only re-materialized at container spawn (per `materializeContainerJson`'s doc comment),
-  so a `--wake-script` set via `ncl groups config update` needs `routine`'s container to
-  at least respawn before it takes effect, same as any other `container.json` field. Not
-  confirmed in practice yet since no wake-script value has been set.
+One real defect found from that same live test, fixed same day: the `<wake-context>`
+content was the **literal, unrendered `dataview` query source** (`dataview` blocks only
+render inside Obsidian's own UI — a plain file read returns the query text, not results).
+Worse than useless — could be mistaken for real event data. Fixed in
+`shared.ts`'s `stripDataviewBlocks`: strips the template's paired `# Events` heading +
+dataview block together (so a note with nothing else in it isn't left with an orphaned,
+contentless heading), with a second bare-dataview-block pass as a fallback. Calendar data
+has its own dedicated tools (`calendar_personal_*`) anyway — the daily note was never the
+right place for it to also live.
+
+`daily_note_read`/`daily_note_append` both extended with an optional `day` parameter
+(`"today"` default, `"yesterday"`, `"tomorrow"`, a case-insensitive weekday name —
+**always** the next occurrence that hasn't happened yet, never today or a past one even
+if today matches — or an exact `"YYYY-MM-DD"`). `append` deliberately extended to
+future days too, on David's reasoning: a note left on a future day today is a legitimate
+"my routine" pattern (leave yourself something that becomes part of that day's note when
+it arrives), so restricting `append` to today-only (my original suggestion) would have
+cut a use case David actually wanted. Tool descriptions and `routine`'s
+`instructions.prepend.md` were also reworded to say a note "always exists" rather than
+exposing the create-on-demand implementation detail — from `routine`'s perspective that
+distinction shouldn't matter.
+
+Landed in two commits on `routine-daily-notes` (delivery.ts transcript-recipient fix
+split out separately, unrelated to this feature but found/fixed in the same session):
+`fix: fall back to session's messaging group when a delivered chat message has no
+platform_id`, `feat: per-agent-group wake_script, unconditional on trigger kind`.
+
+## Future ideas — not scoped, captured 2026-09-18 so they aren't lost
+
+David, thinking out loud (not requesting either be built yet):
+
+- **Fold the daily note into Lumen's own briefing.** Lumen's briefing compiler
+  (`src/modules/projected-sessions/compile-briefing.ts`) already runs a host-side step
+  before Lumen wakes — structurally the same shape of problem `routine`'s wake-script
+  just solved, just a different injection point/consumer. Two different amounts of work
+  hide under "include the daily note": (a) mechanically concatenate the same raw content
+  routine sees, cheap, same pattern as this doc; or (b) have the briefing compiler (or a
+  dedicated "briefer" step) *read the note and selectively incorporate* pertinent
+  content, which means giving that step actual judgment about relevance, not just
+  injection — a materially bigger scope than (a). Needs deciding which one before
+  building either.
+- **Let `routine` edit existing note content, not just append.** David's framing: "not
+  every note is permanently true... a note that is true in the morning might not be in
+  the afternoon" — an edit-text-tool-style capability (possibly a wrapped `obsidian`
+  invocation using its own `property:set`/targeted-edit commands rather than a blind
+  find-and-replace). This directly reopens the tension the no-overwrite decision above
+  was made to avoid: the note's `# Events`/dataview section is pipeline-owned, and a
+  generic edit tool risks an agent corrupting that structure. Whatever gets built needs
+  an explicit boundary — e.g. scoped to a `## Notes` section only, never touching
+  frontmatter or the dataview block — decided as part of the design, not assumed safe by
+  default.
