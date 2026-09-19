@@ -22,6 +22,8 @@ export interface RunnerConfig {
   effort?: string;
   /** Session DB transport: 'file' (bind-mounted, default) or 'sync' (WebSocket, opt-in). */
   transport?: 'file' | 'sync';
+  /** Script run at the start of every wake — scheduled task fire or a2a assign_task session alike. */
+  wakeScript?: string;
 }
 
 const DEFAULT_MAX_MESSAGES = 10;
@@ -52,6 +54,7 @@ export function loadConfig(): RunnerConfig {
     model: (raw.model as string) || undefined,
     effort: (raw.effort as string) || undefined,
     transport: raw.transport === 'sync' ? 'sync' : 'file',
+    wakeScript: (raw.wakeScript as string) || undefined,
   };
 
   return _config;

@@ -23,6 +23,10 @@ The host is a single Node process that orchestrates per-session agent containers
 
 **Everything is a message.** There is no IPC, no file watcher, no stdin piping between host and container. The two session DBs are the sole IO surface.
 
+## Minimal Friction
+
+Surface friction clearly, so it can be addressed before enough of it collects to become a hinderance on progress. A silent workaround — filtering a noisy warning, retrying past a flaky command, routing around a broken tool — fixes the immediate step but hides a signal from the person who could actually get the underlying thing fixed. Every one of those left unspoken is a small cognitive tax that compounds: on you (context spent re-discovering and re-working around the same friction next time, since nothing was ever done about the cause), and on the user (who can't direct a fix at a problem they were never told exists). Just because something *can* be worked around doesn't mean it should be, silently. When you hit friction — a deprecation warning, an environment mismatch, a flaky dependency, a workaround you're about to reach for out of habit — say so plainly, and prefer actually fixing the root cause over routing around it again, unless the fix is genuinely out of scope for the moment.
+
 ## Entity Model
 
 ```
@@ -343,6 +347,8 @@ This project uses pnpm with `minimumReleaseAge: 4320` (3 days) in `pnpm-workspac
 Whenever a feature or change is discussed and agreed on scope/shape but not implemented in the same session — a "let's do this next time" or "document this so we don't lose it" moment — write it up before the session ends, not just into the conversation. Capture: what was decided, what's still open/undecided, and why (the reasoning, not just the conclusion — future-you needs to judge tradeoffs the same way, not just execute a checklist).
 
 [docs/roadmap.md](docs/roadmap.md) is a thin index only — one line per item, linking out to `docs/roadmap/<item>.md`. Keep it that way: a new item gets its own file plus one new line in the index, not a paragraph inline in the index itself. This keeps the index cheap to scan and lets one item's file be edited without touching any other item's. When a listed item ships, delete its file and remove its index line rather than leaving it stale; when new drift or scope is discovered while working on something else, add a dated addendum to that item's own file (see `roadmap/reconcile-host-shim-templates.md` for the pattern) rather than editing the index. The point is that the roadmap, not anyone's memory of the conversation, is the durable record of what's next and why — don't make the user re-explain a plan that was already agreed on.
+
+An item doesn't only get resolved by someone finishing it directly — it can go stale as a side effect of unrelated work (e.g. building agent A's capability happens to close the gap another item was waiting on, without that item ever being mentioned). So this isn't just "update the item you're working on": after any substantial build/change, briefly scan the rest of `docs/roadmap.md`'s index for anything the just-finished work plausibly resolves or contradicts, not only the item that motivated the session — a stale "still open" line the user has to catch themselves is exactly the failure this file exists to prevent. A dated research sweep (one check per open item) periodically, not only when directly prompted, catches what routine spot-checks miss — see the 2026-09-19 sweep in `docs/roadmap.md`'s own "Closed" section for the pattern and how much had drifted.
 
 ## Docs Index
 

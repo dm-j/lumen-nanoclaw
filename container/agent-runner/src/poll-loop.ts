@@ -128,6 +128,15 @@ export interface PollLoopConfig {
    * polling forever and stealing messages from the next test's DB.
    */
   signal?: AbortSignal;
+  /**
+   * Script run once at the start of every wake, regardless of trigger kind
+   * (scheduled task fire or a2a `assign_task` session's first message
+   * alike) — unlike a task's own `--script`, which only fires for
+   * `kind: 'task'` rows and misses the a2a path. Same contract: last
+   * stdout line is JSON `{wakeAgent, data?}`; `data` is rendered into the
+   * prompt. See docs/roadmap/routine-daily-notes.md.
+   */
+  wakeScript?: string;
 }
 
 /**
@@ -303,9 +312,23 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
       await syncBriefingNow();
     }
 
+    // Wake script: runs once per wake regardless of what triggered it
+    // (scheduled task or a2a assign_task session), unlike the per-task
+    // `script` column above which only fires for kind:'task' rows.
+    let wakeContext = '';
+    if (config.wakeScript) {
+      const { runScript } = await import('./scheduling/task-script.js');
+      const wakeResult = await runScript(config.wakeScript, `wake-${Date.now()}`);
+      if (wakeResult?.data !== undefined) {
+        const rendered =
+          typeof wakeResult.data === 'string' ? wakeResult.data : JSON.stringify(wakeResult.data, null, 2);
+        wakeContext = `<wake-context>\n${rendered}\n</wake-context>\n\n`;
+      }
+    }
+
     // Format messages: passthrough commands get raw text (only if the
     // provider natively handles slash commands), others get XML.
-    const prompt = formatMessagesWithCommands(keep, config.provider.supportsNativeSlashCommands);
+    const prompt = wakeContext + formatMessagesWithCommands(keep, config.provider.supportsNativeSlashCommands);
 
     log(`Processing ${keep.length} message(s), kinds: ${[...new Set(keep.map((m) => m.kind))].join(',')}`);
 

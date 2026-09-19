@@ -228,12 +228,32 @@ async function drainSession(session: Session): Promise<void> {
           // `<channel_type>:<handle>` that `platform_id` carries for a
           // channel row); a2a deliveries resolve to the target agent's name.
           let recipientName: string | undefined;
-          if (msg.platform_id) {
-            if (msg.channel_type === 'agent') {
-              recipientName = getAgentGroup(msg.platform_id)?.name ?? msg.platform_id;
+          let effectivePlatformId = msg.platform_id;
+          let effectiveChannelType = msg.channel_type;
+          if (!effectivePlatformId && session.messaging_group_id) {
+            // Default (non-tool-call) replies inherit routing from whichever
+            // message woke the container (extractRouting picks the wake
+            // batch's first row) — if that trigger carried no platform_id
+            // (e.g. a system/a2a-adjacent row), fall back to the session's
+            // own bound destination rather than showing no recipient at all.
+            const mg = getMessagingGroup(session.messaging_group_id);
+            if (mg) {
+              effectivePlatformId = mg.platform_id;
+              effectiveChannelType = mg.channel_type;
+              log.warn('transcript recipient fallback: msg had no platform_id, used session messaging group', {
+                sessionId: session.id,
+                msgId: msg.id,
+                msgChannelType: msg.channel_type,
+                messagingGroupId: mg.id,
+              });
+            }
+          }
+          if (effectivePlatformId) {
+            if (effectiveChannelType === 'agent') {
+              recipientName = getAgentGroup(effectivePlatformId)?.name ?? effectivePlatformId;
             } else {
               const { getUser } = await import('./modules/permissions/db/users.js');
-              recipientName = getUser(msg.platform_id)?.display_name ?? msg.platform_id;
+              recipientName = getUser(effectivePlatformId)?.display_name ?? effectivePlatformId;
             }
           }
           void appendDeliveredOutboundTurn(
