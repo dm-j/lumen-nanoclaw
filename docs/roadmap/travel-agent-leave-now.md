@@ -78,3 +78,27 @@ long-lived NanoClaw host process itself and skip the per-call wrapper.
 Needs its own investigation — not blocking `Travel` agent design work, but
 blocking that agent's Mapbox calls from actually resolving a real
 credential once one exists.
+
+## Addendum 2026-09-19 — status check, roadmap-staleness sweep
+
+Confirmed via a research agent: no `Travel` agent group exists (`ls groups/` — only
+`_ping-test, computation, dispatcher, lumen-dmj, readpendingbatch, routine,
+tailpersist, vaulttranscript`), no wiring/destinations, no "leave now" task type. Only
+one commit since 2026-09-16 touches this topic at all (`2f38c35b`, this doc itself) —
+still exactly at the design/prep stage described above, nothing stale to fix.
+
+Two things worth knowing before picking this up:
+- **A working travel-time source already exists, independent of the blocked Mapbox
+  plan**: `mcp-shims/departure/travel/route_time-host` — a standalone Python shim
+  (Nominatim geocoding + OSRM routing, both free/keyless, no OneCLI credential gap to
+  solve) with a "HOME" shortcut for David's address. Worth using this instead of
+  waiting on the Mapbox/OneCLI proxy-injection gap above, unless Mapbox's specific
+  data quality is actually needed.
+- **`mcp-shims/departure/` still exists** despite a "departure" agent (task-scoped, not
+  domain-scoped) being removed 2026-08-29 — the lesson from that removal: scope a
+  single-purpose agent to a *domain* (e.g. "Travel"), not a *task* (e.g. "Departure").
+  Either this directory predates that removal and was never cleaned up,
+  or it was deliberately kept as a shim library independent of the removed agent —
+  worth resolving which before building `Travel` on top of it, so the new agent
+  doesn't inherit a naming/scope mismatch from something already flagged as the wrong
+  shape once.

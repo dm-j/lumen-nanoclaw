@@ -6,6 +6,20 @@ Related: [db.md §4](db.md#4-cross-mount-visibility) (the problem this replaces)
 
 ---
 
+## 0. Current status, as of 2026-09-19 (read this first)
+
+**Done**: Phases 0–2 (scaffolding, host WebSocket server, container sync client + spawn wiring), Bugs A/B/C from the 2026-08-16 canary, and outbound retry-across-reconnect (§8.12) are all built, merged to `main`, and unit-tested. The mechanism itself works.
+
+**Where we actually are**: `'sync'` is not live anywhere real. Verified directly against the running DB just now (`ncl groups config get`) — `lumen-dmj`, `dispatcher`, and `routine` are all `"transport": "file"`. Only the `_ping-test` sandbox group runs `'sync'`. The three real groups were briefly flipped live on 2026-08-16 and rolled back the same night (§8.11) after a Docker Desktop networking bug surfaced (connections dropping every ~40s over the container→host path) — that flip-and-revert is likely what's behind a hazy memory of "having worked on this further."
+
+**Blocker**: the Docker Desktop drop (§8.11's item (a)) has had zero further investigation since the rollback — no version-specific research, no mitigation attempt. Outbound retry (b) shipping afterward helps but doesn't clear it alone (§8.12) — a drop mid-call still fails that call, retry just means a *future* call isn't permanently broken by it.
+
+**On "the corruption errors seem to have stopped"** — checked directly, and this needs a caveat: `logs/nanoclaw.error.log` (29,012 lines, current file) shows all 29 `DB_RETRY_EXHAUSTED` occurrences clustered in a single stretch (mid-August, matching Lumen's own contemporaneous journal entries about the VirtioFS bug), none since. But **no code fix for the actual root cause has shipped**: `journal_mode=DELETE` predates the corruption entirely (present since v2's original foundation commit, not a fix for this), and the "migrate session DBs to named Docker volumes" idea Lumen proposed in her own reflections at the time (`git log`/error-log search) was never implemented — `container-runner.ts:653` still does a plain bind mount (`-v hostPath:containerPath`), unchanged. So the quiet stretch is real but currently unexplained — possibly a Docker Desktop update, a macOS update, or a changed load pattern, not a fix in this codebase. Treat it as "currently not reproducing," not "resolved," since nothing here would prevent a recurrence.
+
+**Next, if picked back up**: either (a) investigate the Docker Desktop drop directly (start with release notes/known issues for the installed version), or (b) actually build the named-volume migration that was proposed but never done, or (c) just redo §8.4's staged canary for real and see if the drop still reproduces on the current Docker Desktop version — cheapest option, and would also answer whether the quiet stretch reflects an environment change worth trusting.
+
+---
+
 ## 1. The problem
 
 `inbound.db`/`outbound.db` are bind-mounted into the container so both host and container can open them. On macOS, this corrupts: `SqliteError: attempt to write a readonly database`, `database disk image is malformed`, recurring in production (`logs/nanoclaw.error.log`) across many sessions over weeks.
@@ -243,3 +257,9 @@ Triggered by Lumen (the cutover canary, still the only real group ever on `'sync
 
 - **Automatic transport selection** (e.g. "detect VirtioFS corruption and self-heal onto `'sync'`"). Speculative until `'sync'` itself has a real production track record under 8.4.
 - **A default-flip for macOS.** §3 already states the eventual intent (`'sync'` becomes the macOS default once proven out), but that's a separate, later decision gated on 8.4 actually completing for real groups, not part of building the switch mechanism itself.
+
+### 8.12 Addendum 2026-09-19 — outbound retry-across-reconnect shipped, staleness note
+
+§8.11's "what to redo" list named two options: (a) fix/mitigate the Docker Desktop drop, or (b) build outbound retry-across-reconnect symmetric to §8.9's inbound replay. (b) shipped shortly after this doc's last edit — `feat: retry-across-reconnect for sync-outbound-push (session-sync track 2)` (`a77533f1`), merged to `main` via `a35878cd` — but this doc was never updated to say so, so it read as if nothing had moved since the 2026-08-16 rollback. It hadn't been re-flagged until a routine roadmap-staleness sweep (dispatching one research agent per open roadmap item) caught the gap.
+
+Current state as of 2026-09-19: `src/session-sync/` is fully built out (server, transport, outbound-retry, tests for all three). All live agent groups (`lumen-dmj`, `dispatcher`, `computation`, `routine`) remain on `'file'` transport per their `container.json`; only the `_ping-test` sandbox group is on `'sync'`. (a) — the actual Docker networking root cause — has seen no further investigation; no fresh staged canary (§8.4) has been attempted since the rollback. Per the original "likely both are worth doing" note, (b) alone doesn't clear the bar to re-attempt a real cutover — still needs either (a) or a fresh, real staged canary before touching a live group again.
