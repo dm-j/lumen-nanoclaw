@@ -23,6 +23,10 @@ The host is a single Node process that orchestrates per-session agent containers
 
 **Everything is a message.** There is no IPC, no file watcher, no stdin piping between host and container. The two session DBs are the sole IO surface.
 
+## Minimal Friction
+
+Surface friction clearly, so it can be addressed before enough of it collects to become a hinderance on progress. A silent workaround — filtering a noisy warning, retrying past a flaky command, routing around a broken tool — fixes the immediate step but hides a signal from the person who could actually get the underlying thing fixed. Every one of those left unspoken is a small cognitive tax that compounds: on you (context spent re-discovering and re-working around the same friction next time, since nothing was ever done about the cause), and on the user (who can't direct a fix at a problem they were never told exists). Just because something *can* be worked around doesn't mean it should be, silently. When you hit friction — a deprecation warning, an environment mismatch, a flaky dependency, a workaround you're about to reach for out of habit — say so plainly, and prefer actually fixing the root cause over routing around it again, unless the fix is genuinely out of scope for the moment.
+
 ## Entity Model
 
 ```
