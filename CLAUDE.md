@@ -226,6 +226,7 @@ Four types of skills. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full taxono
 | `/migrate-memory` | Carry a group's agent memory across a provider switch (operator-run, both directions) |
 | `/mcp-shims` | Reference: turn a script into an MCP tool without writing an MCP server (facade/constrain/compose a real one, or wrap a CLI/API) |
 | `/add-mcp-shim` | Guided, step-by-step build of one new mcp-shims tool (naming, wrapper type, language, per-parameter expose/hardcode/validate) |
+| `/local-patch-notes` | Maintain the per-day local-changes history (`docs/local-patch-notes.md`), merged across this repo and the private instance repo |
 
 ## Contributing
 
@@ -234,6 +235,8 @@ Before creating a PR, adding a skill, or preparing any contribution, you MUST re
 ## Git Hooks
 
 This repo uses **husky** with `core.hooksPath` set to `.husky/_` — `.git/hooks/*` is bypassed entirely and any script written there is dead code. Add hook logic to `.husky/<hookname>` (e.g. `.husky/pre-commit`, `.husky/post-commit`); husky's dispatcher shims in `.husky/_/` invoke it automatically. See [docs/instance-repo-split.md](docs/instance-repo-split.md) for the pre-commit/post-commit pair that syncs `groups/`/`mcp-shims/`/`host-shims/` into the private instance repo.
+
+**This sync is already automatic on every commit here** — `pre-commit` stages the instance repo's pending changes, `post-commit` backgrounds a `claude -p` call that commits them there with a real summary (not pushed). Nothing else needs to happen for a commit made through normal `git commit` in this repo. The one way to accidentally lose this: `--no-verify` skips husky entirely, so don't use it on a commit here unless the user has explicitly said to (per the Git Safety Protocol above) — and if you ever do, commit the equivalent change in `lumen-nanoclaw-instance` yourself so it isn't silently dropped.
 
 ## PR Hygiene
 
