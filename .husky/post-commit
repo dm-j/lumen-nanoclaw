@@ -4,8 +4,8 @@
 # doesn't block `git commit` here; the instance repo's own post-commit hook
 # handles the data/*.db backup snapshot once this lands.
 INSTANCE_REPO="/Users/lumen/Projects/lumen-nanoclaw-instance"
-if [ -d "$INSTANCE_REPO/.git" ] && ! git -C "$INSTANCE_REPO" diff --cached --quiet; then
-  (cd "$INSTANCE_REPO" && claude -p \
+if [ -d "$INSTANCE_REPO/.git" ] && ! env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE git -C "$INSTANCE_REPO" diff --cached --quiet; then
+  (cd "$INSTANCE_REPO" && env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE claude -p \
     "Commit all currently staged changes in this repo as a SINGLE commit (do not split into multiple commits). Write a concise commit message summarizing what changed. Do not push." \
     --allowedTools "Bash(git add:*) Bash(git commit:*) Bash(git status:*) Bash(git diff:*)" \
     >/dev/null 2>&1) &
