@@ -67,14 +67,11 @@ client that merely calls its tools. Putting the scripts inside
 `groups/<folder>/` would defeat that — the agent could just read (or edit)
 its own tool implementations directly.
 
-**Not git-tracked** — same reasoning as `host-shims/`: scripts here
+**Not tracked in this repo** — same reasoning as `host-shims/`: scripts here
 routinely embed real per-install specifics (absolute paths, local service
-ports, model routing) that don't belong in version control. `.gitignore`
-excludes the whole top-level `mcp-shims/` directory. If you want a script
-versioned/shared, keep its canonical source under version control elsewhere
-(a separate repo, a project doc) and treat the copy under `mcp-shims/` as
-deployed, per-install state — the same relationship a `.env` file has to
-its `.env.example`.
+ports, model routing). `.gitignore` excludes the top-level `mcp-shims/`, which
+is a symlink into the private instance repo where the scripts are versioned
+(see `docs/instance-repo-split.md`). Full overview: `docs/mcp-shims.md`.
 
 ## Self-description (optional, but worth doing)
 
@@ -159,7 +156,7 @@ takes no input.
 
 ```sh
 #!/bin/sh
-# groups/my-group/mcp-shims/weather/current-host
+# mcp-shims/my-group/weather/current-host
 case "${1:-}" in
   --help)
     cat <<'EOF'

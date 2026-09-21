@@ -233,11 +233,10 @@ Create the directory and the script:
 mkdir -p mcp-shims/<folder>/<server>
 ```
 
-Unlike the rest of `groups/<folder>/`, mcp-shims scripts are **git-tracked**
-(`.gitignore` carves an explicit exception — see the `mcp-shims` skill for
-why). Never hardcode a credential/secret inline in the script; read it from
-`.env` or a local config file the way any host-shim would, since this file
-is expected to end up in version control.
+`mcp-shims/` is gitignored in this repo and is a symlink into the private
+instance repo (see `docs/instance-repo-split.md`), where the script gets
+versioned. Never hardcode a credential/secret inline in the script; read it
+from `.env` or a local config file the way any host-shim would.
 
 Write `mcp-shims/<folder>/<server>/<name>-host` with:
 - A `--help` branch printing the exact JSON from step 8 to stdout, exit 0.
@@ -333,9 +332,9 @@ real one.** The `--help` output either isn't valid JSON, doesn't set
 all (nonzero exit or hung — discovery gives it 3s). Run `<script> --help`
 directly and check its exit code and stdout.
 
-**Tool call times out.** Default is 30s. See step 7 — only a server-name
-prefix (`digest`, `recall`, `remember`, `briefing`) gets 180s; there's no
-per-tool override yet.
+**Tool call times out.** Default is 30s. Declare a top-level `timeoutMs` in
+the `--help` JSON (step 7); the server-name prefix fallback (`digest`,
+`recall`, `remember`, `briefing` → 180s) only applies when it's absent.
 
 **Tool creates/writes something with the literal JSON text as its value**
 (a filename or title like `{"description":"..."}` instead of the actual
