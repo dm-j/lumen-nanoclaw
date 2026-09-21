@@ -17,5 +17,6 @@ done
 # ponytail: stage everything in the private instance repo too; post-commit commits it.
 INSTANCE_REPO="/Users/lumen/Projects/lumen-nanoclaw-instance"
 if [ -d "$INSTANCE_REPO/.git" ]; then
-  git -C "$INSTANCE_REPO" add -A
+  # Unset GIT_* env git exports to hooks: in a worktree they override -C and stage the instance repo into THIS repo's index.
+  env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE git -C "$INSTANCE_REPO" add -A
 fi
