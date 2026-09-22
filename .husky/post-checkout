@@ -1,0 +1,30 @@
+# ponytail: a fresh `git worktree add` checkout has neither the private-instance
+# symlinks nor node_modules (both gitignored, so git worktree never carries them
+# over — see docs/instance-repo-split.md). Recreate both here so a worktree can
+# commit and read groups/mcp-shims/host-shims right away instead of failing the
+# pre-commit hook or seeing them missing. Only acts inside a worktree: the main
+# checkout already has both, and re-running `pnpm install` on every branch switch
+# there would be pure waste.
+git_dir=$(git rev-parse --git-dir)
+common_dir=$(git rev-parse --git-common-dir)
+[ "$git_dir" = "$common_dir" ] && exit 0
+
+ROOT=$(git rev-parse --show-toplevel)
+cd "$ROOT" || exit 0
+
+INSTANCE_REPO="/Users/lumen/Projects/lumen-nanoclaw-instance"
+for name in groups mcp-shims host-shims; do
+  [ -L "$ROOT/$name" ] && continue
+  [ -d "$INSTANCE_REPO/$name" ] || continue
+  ln -s "$INSTANCE_REPO/$name" "$ROOT/$name"
+done
+
+if [ ! -d "$ROOT/node_modules" ]; then
+  # ponytail: pin to the .nvmrc'd Node — a bare `pnpm install` here would build
+  # native deps (better-sqlite3) against whatever Node is first on PATH, which
+  # on this box is not always the project's pinned version.
+  NODE22="/opt/homebrew/opt/node@22/bin"
+  [ -d "$NODE22" ] && PATH="$NODE22:$PATH"
+  export PATH
+  pnpm install --frozen-lockfile
+fi
