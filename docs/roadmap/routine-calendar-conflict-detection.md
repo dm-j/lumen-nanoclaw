@@ -2,87 +2,111 @@
 
 Raised 2026-09-22, right after [routine-vault-calendar.md]'s replacement of the ICS-feed
 shims shipped (that item's own file has since been deleted — see `docs/roadmap.md`'s
-"Closed 2026-09-22" entry for what it covered). Not scoped, not started.
+"Closed 2026-09-22" entry for what it covered). Design decided 2026-09-22; not built yet.
 
 ## The problem
 
-`routine` can now add its own events to the vault's local calendar copy
-(`calendar_personal_add`, `kind: "routine"` frontmatter so the sync pipeline's own
-staleness sweep never touches them — see the Closed entry for why that field matters).
-But nothing stops the *same* event from also landing on the real upstream calendar
-separately (David adds it directly in Google Calendar, or another integration does) —
+`routine` can add its own events to the vault's local calendar copy (`calendar_personal_add`,
+`kind: "routine"` frontmatter so the sync pipeline's own staleness sweep never touches
+them). Nothing stops the *same* event from also landing on the real upstream calendar
+independently (David adds it directly in Google Calendar, or a second integration does) —
 sync.js then pulls it in as its own `kind: "personal"` (or eventually `"work"`) note,
 landing in the same day folder as a note routine already created for what might be the
-identical event.
+identical event. Left alone, both records exist forever with no reconciliation.
 
-## Desired behavior (David's framing, 2026-09-22)
+## Decided (2026-09-22)
 
-1. Detect when a routine-owned note and a newly-synced authoritative note plausibly
-   describe the same event.
-2. Wake `routine` with both records shown side by side.
-3. If `routine` is confident they're the same event: keep the authoritative (synced)
-   version, merge any notes/content from routine's version into it, then routine may
-   delete its own note.
-4. If `routine` can't confidently decide: escalate to Lumen (a2a, already wired live
-   `routine` → `lumen-dmj`). If Lumen doesn't know either, she asks David directly (her
-   own existing approval/DM path — no new mechanism needed for this hop).
-5. Mark the routine-owned note with `conflicts-with: [[wikilink-to-the-authoritative-note]]`
-   frontmatter once resolved (or once surfaced, TBD which) so the same pair is never
-   re-flagged and routine is never woken over it again.
-6. Applies to any `kind` pair, not just `personal` — the work calendar (`kind: "work"`,
-   not live yet) will need the same treatment once it exists.
+1. **Trigger**: a new dedicated stateless scheduled task (a 5th series alongside routine's
+   existing 4 calendar-check series — `docs/roadmap.md`'s `--stateless` scheduled tasks
+   item), running hourly (matching sync.js's own hourly `--days=1` cadence — tune later if
+   too chatty). Its `--script` gate calls a new **host-shim** (not an agent-facing
+   mcp-shim — matches the documented "scheduled-task gate calling a host-shim" pattern in
+   `docs/host-shims.md`) that scans for candidate conflicts and returns them as JSON. The
+   task script sets `wakeAgent: true` with the candidates embedded in the wake prompt only
+   when the scan finds at least one; otherwise `wakeAgent: false`, same as routine's
+   existing calendar-check series.
+2. **Match heuristic**: the host-shim scan surfaces cheap *candidates* only — same local
+   day (group's own timezone), one note `kind: "routine"` lacking `conflicts-with`, another
+   note in the same day folder with a different `kind`, and their time ranges either
+   overlap or start within 30 minutes of each other. The 30-minute window is a starting
+   constant, tunable once this runs against real data. The actual "is this really the same
+   event" judgment is routine's own call once woken with both full records shown — the
+   scan never tries to decide this itself.
+3. **New delete tool — `calendar_personal_delete`** (mcp-shim, agent-facing, routine-owned
+   notes only — refuses the same way `calendar_personal_edit` already does): a *soft*
+   delete, never destructive. Input: `{path, reason}` (`reason` required — a short
+   explanation of why). Behavior:
+   - Sets `status: "deleted"` (a new status value, distinct from `"cancelled"` — cancelled
+     means "the real event was called off"; deleted means "routine's own record was
+     wrong/superseded").
+   - Renames the file to `DELETED-<original filename>` (via `obsidian-cli move`).
+   - Appends the `reason` to the note's body under a `**Deleted:**` line — never
+     overwrites existing body content.
+   - **Read-path filters need updating to match**: `vault-events.ts`'s `readDayEvents`
+     currently only skips `status === "cancelled"`; it needs to skip `"deleted"` too so a
+     soft-deleted note stops appearing in `calendar_personal_today/tomorrow/week`.
+   - **Known gap, not blocking**: the vault's own `_index.md` dataview query (in every
+     already-created day folder) filters `where status != "cancelled"` only — a `"deleted"`
+     note won't be hidden from Obsidian's own native calendar view unless that query is
+     also updated. The `DELETED-` filename prefix makes it visually obvious if seen, but
+     it will still be *listed*. Fixing this properly means either extending the query text
+     used for newly-created `_index.md` files (doesn't retrofit existing days) or teaching
+     `readEventNote`-adjacent tooling to patch existing `_index.md` queries too — deferred:
+     decide when this tool is actually built, not now.
+4. **`conflicts-with` marker**: set on the routine-owned note only, via `obsidian-cli
+   property:set` (single-field, not a full frontmatter rewrite), value = a wikilink to the
+   authoritative note. **Set the moment a candidate is surfaced** (i.e. as part of the same
+   wake that shows routine the pair), not only once actually resolved — this is what makes
+   "never woken over it again" true even if the human side of escalation (Lumen → David)
+   stalls. Accepted tradeoff: a candidate that gets flagged but never actually resolved
+   (nobody answers) won't get a second automatic nudge. Not solving that now; revisit if it
+   becomes a real problem in practice.
+5. **Generalize past `kind: "personal"` now**, since the work calendar (`kind: "work"`)
+   isn't live yet but will need identical treatment. The scan and both new tools key off
+   "any `kind` other than `routine`" vs. `"routine"`, never a hardcoded `"personal"` string.
 
-## What's already there, free
+## Still needed, not yet built: merge-append tool
 
-- a2a routing `routine` → `lumen-dmj` is live and already used (confirmed via delivery
-  logs, `docs/roadmap/routine-agent.md`).
-- Lumen's own ask-the-human path (approval/DM) already exists — the "Lumen doesn't know,
-  asks David" hop needs no new code, just routine's own prompt/persona describing the
-  escalation policy.
-- `isRoutineOwned`/`kind: "routine"` (from `routine-vault-calendar.md`'s work, now closed)
-  already distinguishes routine's own notes from synced ones — the exact predicate a
-  detector needs on one side of the comparison.
+Confirming a duplicate means merging routine's own notes into the *authoritative* note's
+body before deleting routine's copy. `calendar_personal_edit` can't be reused for this — it
+deliberately refuses to touch anything not owned by routine (that refusal is the whole
+point of the ownership check, and stays as-is). A separate tool is needed:
 
-## Not decided — needs scoping before building
+- **`calendar_note_append`** (mcp-shim, agent-facing): appends free text to the *body* of
+  any event note by path, routine-owned or not, touching frontmatter not at all. Safe
+  against sync.js because sync.js's own upsert patches specific frontmatter fields in
+  place and never rewrites the body wholesale (confirmed by reading `sync.js` during the
+  original vault-calendar investigation).
 
-- **Trigger mechanism.** Nothing today diffs routine-owned notes against freshly-synced
-  ones. Cheapest fit: fold a comparison pass into (or add alongside) the existing
-  stateless calendar-check task series (`docs/roadmap.md`'s `--stateless` scheduled tasks
-  item, `roadmap/stateless-scheduled-tasks.md`) rather than inventing a new wake path —
-  but not decided which task, or whether a dedicated new series is cleaner.
-- **Match heuristic.** A detector should surface cheap *candidates* only (same day,
-  overlapping/near time window, one note `kind: "routine"` + the other not) — the actual
-  "is this really the same event" judgment call belongs to routine's own reasoning once
-  woken with both records shown, not a fragile title/string-match in code. Needs a
-  concrete definition of "overlapping/near" (exact time match? ±N minutes? same day
-  regardless of time?).
-- **Two new tools needed**, neither exists yet:
-  - A delete tool for routine-owned notes (`calendar_personal_add`/`edit` exist;
-    "cancel via `status: cancelled`" is the only removal path today — David's ask here is
-    real deletion, not cancellation, for the confirmed-duplicate case).
-  - A way to append content onto an arbitrary *event* note, not just the daily note
-    (`daily_note_append` only targets the day's `_index.md`) — needed for "merge routine's
-    notes into the authoritative record" before deleting routine's copy.
-- **`conflicts-with` marker mechanics.** Goes on the routine-owned note only (matches "never
-  re-wake on this pair" — the predicate a detector checks is "routine note lacks
-  `conflicts-with`"). Should be set via `obsidian property:set` (single-field), not a full
-  frontmatter rewrite via `vault-events.ts`'s current `rewriteEventNote`
-  (`create ... overwrite`) approach. Not decided: does the marker get set the moment a
-  candidate is surfaced (so routine is never re-woken even before Lumen/David resolve
-  it), or only once actually resolved (Lumen/David's answer applied)? The "never re-wake"
-  requirement in David's framing reads like the former, but that risks a candidate sitting
-  unresolved indefinitely with no second nudge if the first wake's answer never lands.
-- **Escalation transport specifics.** "Wake routine and show the conflicting records" —
-  as a task wake (`wakeAgent: true` with both records' content in the prompt), or some
-  other injection point? Match the existing `wake_script` / stateless-task wake pattern
-  (`roadmap/routine-daily-notes.md`, `roadmap/stateless-scheduled-tasks.md`) rather than
-  inventing a new one.
-- **Generalizing beyond `kind: "personal"` now**, even though the work calendar isn't
-  live — so this doesn't need revisiting the moment it lands. Concretely: the detector
-  and the two new tools should operate on "any non-routine `kind`" vs. `"routine"`, not
-  hardcode `"personal"`.
+## Escalation flow (uses existing infra, no new mechanism)
 
-## Status: not started
+When woken with a candidate pair, routine sees both records' full frontmatter + body and
+decides:
+- **Confident duplicate** → `calendar_note_append` routine's notes onto the authoritative
+  note, then `calendar_personal_delete` its own note with a `reason` explaining the merge.
+- **Not confident** → message Lumen via the existing live `routine` → `lumen-dmj` a2a route
+  with both records, asking for a second opinion.
+- **Lumen also unsure** → she asks David directly via her own existing approval/DM path.
+  No new mechanism needed for this hop — just routine's (and Lumen's) prompt/persona
+  needs to describe this policy in prose.
 
-Scoped at a "does this make sense" level 2026-09-22; the open questions above need answers
-before implementation starts.
+## Tool/asset inventory for the build
+
+New:
+- Host-shim: `calendar_conflict_scan` (task-gate only, not agent-facing).
+- New stateless task series: hourly conflict check, wired to the host-shim above.
+- mcp-shim: `calendar_personal_delete` (soft delete, routine-owned only).
+- mcp-shim: `calendar_note_append` (body-only append, any event note).
+
+Changed:
+- `vault-events.ts`'s `readDayEvents`: skip `status === "deleted"` alongside `"cancelled"`.
+- routine's persona/prompt: describe the escalation policy (confident → merge+delete;
+  unsure → ask Lumen; Lumen unsure → ask David) and the `conflicts-with` convention.
+
+Deferred, flagged, not blocking:
+- Retrofitting `_index.md`'s dataview query (existing and/or template) to also exclude
+  `status: "deleted"` from Obsidian's own native calendar view.
+
+## Status: designed, not built
+
+Take a breath, re-read this, then implement.
