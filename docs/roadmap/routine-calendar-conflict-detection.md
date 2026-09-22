@@ -17,17 +17,47 @@ identical event. Left alone, both records exist forever with no reconciliation.
 
 ## Decided (2026-09-22, final)
 
-1. **Trigger — no new task, no host-shim.** David's call: "multiple tasks stepping on
-   each other's toes seems like a terrible idea." The scan folds into the existing
-   `morning-calendar-digest-a3cc` stateless task (`ncl tasks get --id
-   morning-calendar-digest-a3cc --group ag-32059f15-f18a-4505-9d2e-e62b55131587`) as one
-   more prompt step, alongside its existing today/tomorrow digest + boop/verify-task
-   creation. That task is pure-prompt (no `--script` gate — `has_script: 0`), so the scan
-   is a new **agent-facing mcp-shim**, `calendar_conflict_scan`, called directly by the
-   agent mid-prompt like `calendar_personal_today` already is — not a host-shim (the
-   task-gate/host-shim pattern in `docs/host-shims.md` only applies to `--script`-gated
-   tasks, which this isn't). Runs once daily at 6am alongside the existing digest;
-   revisit cadence only if real conflicts turn out to need faster catching than that.
+1. **Trigger — chained after the vault's own hourly sync, not a new independent schedule.**
+   David's revised call: doing this once a day (folded into the morning digest, the
+   original plan) is too infrequent — the vault's hourly `sync.js --days=1` cron is what
+   actually introduces new authoritative events, so that's when a conflict can first
+   exist. Rather than give the conflict-check its own independent cron schedule ("multiple
+   tasks stepping on each other's toes seems like a terrible idea" — David's words from the
+   original trigger discussion, still the operative constraint), the vault's own hourly
+   crontab line now chains straight into it:
+
+   ```
+   0 * * * * cd .../scripts/calendar-sync && node sync.js --days=1 >> logs/sync-1d.log 2>&1 \
+     && PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin /Users/lumen/.local/bin/ncl tasks run \
+        --id calendar-conflict-check-8b4f --group ag-32059f15-f18a-4505-9d2e-e62b55131587 \
+        >> .../scripts/calendar-sync/logs/conflict-check-trigger.log 2>&1
+   ```
+
+   `ncl tasks run` fires an existing task series immediately without touching its own
+   schedule (queues an extra run, doesn't consume/advance the series) — so the check only
+   ever actually runs right after a sync, on real new data, not on an independent clock
+   that could overlap with anything else.
+
+   **Task series**: `calendar-conflict-check-8b4f` (Routine, `ag-32059f15-...`), created
+   `--stateless` (each run is self-contained) with a sparse `0 13 * * *` (1pm daily)
+   fallback recurrence — a safety net only, in case the cron chain ever silently breaks;
+   the real trigger is always the chained `ncl tasks run` call. It's a pure-prompt task
+   (no `--script` gate), so the scan is a new **agent-facing mcp-shim**,
+   `calendar_conflict_scan`, called directly by the agent like `calendar_personal_today`
+   already is — not a host-shim (the task-gate/host-shim pattern in `docs/host-shims.md`
+   only applies to `--script`-gated tasks, which this isn't).
+
+   **Cron-env gotcha, caught and fixed before wiring**: `ncl` execs `pnpm exec tsx`
+   internally, and cron's minimal default `PATH` doesn't include `/opt/homebrew/bin`
+   (where this install's `pnpm`/`node` live) — confirmed by reproducing the exact failure
+   with `env -i PATH=/usr/bin:/bin ncl ...` (`exec: pnpm: not found`) before touching the
+   real crontab, then confirming the fix (`PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`
+   prefixed on the chained call) resolves it. This is the same class of gotcha
+   `docs/host-shims.md` already documents for host-shims under launchd — cron and launchd
+   both start from a stripped environment.
+
+   **Crontab backup taken before editing**: `~/crontab-backup-20260922-145428.txt` — full
+   pre-change crontab, for rollback (`crontab ~/crontab-backup-20260922-145428.txt`).
 2. **Match heuristic — confirmed as originally proposed.** `calendar_conflict_scan`
    surfaces cheap *candidates* only: same local day (group's own timezone), one note
    `kind: "routine"`, another note in the same day folder with a different `kind`, and
@@ -88,7 +118,7 @@ A separate tool is needed:
 
 ## Escalation flow (uses existing infra, no new mechanism)
 
-When the morning digest task's new step finds candidates, it shows routine both records'
+When `calendar-conflict-check-8b4f` fires and finds candidates, it shows routine both records'
 full frontmatter + body and routine decides:
 - **Confident duplicate** → `calendar_note_append` routine's notes onto the authoritative
   note, then `calendar_personal_delete` its own note with a `reason` explaining the merge.
@@ -100,22 +130,31 @@ full frontmatter + body and routine decides:
 
 ## Tool/asset inventory for the build
 
-New:
-- mcp-shim: `calendar_conflict_scan` (agent-facing; called as a new step in the existing
-  `morning-calendar-digest-a3cc` task's prompt — no new task, no host-shim).
-- mcp-shim: `calendar_personal_delete` (soft delete, routine-owned only).
-- mcp-shim: `calendar_note_append` (body-only append, any event note).
+Still to build (mcp-shims — none exist yet):
+- `calendar_conflict_scan` (agent-facing) — the actual match-heuristic logic (#2 above),
+  reading/comparing notes across the day folder and appending to `conflicts-with`.
+- `calendar_personal_delete` (soft delete, routine-owned only, per #4 above).
+- `calendar_note_append` (body-only append, any event note, per the merge-append section
+  above).
 
-Changed (done 2026-09-22):
+Done 2026-09-22:
 - `_index.md` dataview query (both generators + 95-file backfill) — excludes `"deleted"`,
   shows title + time range instead of filename.
 - `vault-events.ts`'s `readDayEvents` — skips `status: "deleted"` alongside `"cancelled"`.
+- **Trigger wired end-to-end**, ahead of the tools that will actually do the work:
+  task series `calendar-conflict-check-8b4f` created (Routine), hourly-sync crontab line
+  chains `ncl tasks run` into it, cron-env `PATH` gotcha reproduced and fixed, crontab
+  backed up first. Fired once manually to confirm the chain itself works — that test run
+  will fail/no-op today since `calendar_conflict_scan` doesn't exist yet; that's expected,
+  not a problem with the trigger.
 
 Still to change:
-- `morning-calendar-digest-a3cc`'s prompt — add the conflict-scan step.
 - routine's persona/prompt — describe the escalation policy (confident → merge+delete;
-  unsure → ask Lumen; Lumen unsure → ask David) and the `conflicts-with` list convention.
+  unsure → ask Lumen; Lumen unsure → ask David) and the `conflicts-with` list convention,
+  beyond what's already in `calendar-conflict-check-8b4f`'s own task prompt.
 
-## Status: designed, ready to build
+## Status: trigger wired live, three mcp-shims still to build
 
-Two rounds of review done (2026-09-22). Take a breath, re-read this, then implement.
+Design finalized across two review rounds, then the trigger itself (task series +
+crontab chain + PATH fix) built and confirmed live, all 2026-09-22. Next: build
+`calendar_conflict_scan`, `calendar_personal_delete`, `calendar_note_append`.
