@@ -63,16 +63,19 @@ Locomotion is bounded and gated by a hazard latch.
 
 | Tool | Purpose |
 |---|---|
-| `calendar_personal_today` | Today's personal calendar, what's next, time until a meeting. Reads the vault's local calendar-file mirror (not a live ICS fetch — see `docs/roadmap/routine-vault-calendar.md`), syncing it inline first. |
+| `calendar_personal_today` | Today's personal calendar, what's next, time until a meeting. Reads the vault's local calendar-file mirror (not a live ICS fetch), syncing it inline first. |
 | `calendar_personal_tomorrow` | Tomorrow's events. Same vault-backed read. |
 | `calendar_personal_week` | This week / next few days. Same vault-backed read. |
 | `calendar_personal_add` | Add an event to routine's own local calendar copy only — never the real upstream calendar. |
 | `calendar_personal_edit` | Edit an event previously added via `calendar_personal_add`; refuses any note not owned by routine (`kind: "routine"`, not a synced `"personal"` note) to avoid fighting the sync pipeline's own staleness sweep. |
+| `calendar_personal_delete` | Soft-delete an event previously added via `calendar_personal_add` — `status: "deleted"`, required reason appended to the body, filename renamed to `DELETED-<original>`. Never a real file delete; refuses non-routine-owned notes. |
+| `calendar_conflict_scan` | Finds routine-owned events that plausibly collide with an independently-synced authoritative event (same day, overlapping/near time); appends the authoritative note's wikilink to the routine note's `conflicts-with` list the moment a candidate surfaces so it's never re-flagged. Called by the `calendar-conflict-check` task, chained after the vault's hourly calendar-sync cron. |
+| `calendar_note_append` | Appends free text to the body of any event note by path (routine-owned or not) — used to merge routine's notes onto the authoritative record before deleting routine's duplicate. Never touches frontmatter. |
 | `daily_note_read` | Read a day's note (`today` default, `yesterday`, `tomorrow`, weekday, date). |
 | `daily_note_append` | Append a note, reminder or log line to a day's note, including future days. |
 
 The `calendar` server has helper modules alongside the `-host` wrappers
-(`vault-events.ts`, `filter-calendar.ts`, `range-events.ts`, `format-event.ts`,
+(`vault-events.ts`, `filter-calendar.ts`, `range-events.ts`, `format-event.ts`, `conflict-scan.ts`,
 `group-timezone.ts`). `daily_note` shares `shared.ts`. None of these are tools:
 only `*-host` files are registered.
 

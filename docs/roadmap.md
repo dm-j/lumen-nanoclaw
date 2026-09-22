@@ -2,8 +2,7 @@
 
 Open items, roughly in priority order. Not a commitment or schedule — just what's known to be outstanding. Each item is its own file under `docs/roadmap/` — this index stays a thin list of links on purpose, so adding, reordering, or updating one item never touches the others.
 
-1. **[NEXT]** [`routine` — detect and resolve Routine-added vs. authoritative calendar conflicts](roadmap/routine-calendar-conflict-detection.md) — when a note routine added to its local calendar copy turns out to also exist on the real upstream calendar (added independently), detect the collision, have routine compare both records, resolve (merge + soft-delete via a new `calendar_personal_delete` — never destructive) or escalate (routine → Lumen → David) if unsure, and append to the routine-owned note's `conflicts-with` list (a list, not a single link — "potentially many") the moment a candidate is surfaced. Design finalized 2026-09-22; the `_index.md` dataview query fix (exclude `deleted`, show title+time instead of filename) and the trigger (a new task series chained after the vault's hourly calendar-sync cron via `ncl tasks run`, not an independent schedule) are both live. Still to build: the three mcp-shims that do the actual work (`calendar_conflict_scan`, `calendar_personal_delete`, `calendar_note_append`)
-2. [Session-sync WebSocket transport](session-sync-transport.md) — mechanism fully built (all phases + outbound retry-across-reconnect), but not live anywhere real: all real groups (`lumen-dmj`, `dispatcher`, `routine`) confirmed on `'file'` transport as of 2026-09-19; blocked on the still-uninvestigated Docker Desktop ~40s connection-drop from the 2026-08-16 rollback. See the doc's own "Current status" section (added 2026-09-19) for the full picture, including a caveat on the DB-corruption symptom going quiet with no actual root-cause fix shipped
+1. [Session-sync WebSocket transport](session-sync-transport.md) — mechanism fully built (all phases + outbound retry-across-reconnect), but not live anywhere real: all real groups (`lumen-dmj`, `dispatcher`, `routine`) confirmed on `'file'` transport as of 2026-09-19; blocked on the still-uninvestigated Docker Desktop ~40s connection-drop from the 2026-08-16 rollback. See the doc's own "Current status" section (added 2026-09-19) for the full picture, including a caveat on the DB-corruption symptom going quiet with no actual root-cause fix shipped
 2. [Container runner as a pluggable interface](roadmap/container-runner-interface.md) — decouple container spawn/lifecycle from `container-runner.ts`'s local-Docker assumption, so a runner can register itself and run anywhere; discussed 2026-08-15, not started, depends on session-sync landing first
 3. [`.ics` generation + attachment-level handling](roadmap/ics-handling.md) — ingestion is done (Routine's calendar shims); narrowed 2026-09-19 to what's still actually unbuilt: generating/writing `.ics` files, and parsing calendar invites arriving as attachments
 4. [Email handling](roadmap/email-handling.md) — a `/add-resend` skill exists (channels branch) but isn't installed/wired in this install as of 2026-09-19
@@ -15,6 +14,28 @@ Open items, roughly in priority order. Not a commitment or schedule — just wha
 10. [`routine` — daily-note awareness](roadmap/routine-daily-notes.md) — auto-injected access to today's Obsidian daily note via a new per-agent-group `wake_script` mechanism (covers both scheduled-task and a2a `assign_task` wakes) plus `daily_note_read`/`daily_note_append` MCP tools; built and verified live 2026-09-18; also holds two not-yet-scoped follow-on ideas (folding the note into Lumen's own briefing, letting `routine` edit existing note content)
 
 ## Closed 2026-09-22
+
+- **`routine` — detect and resolve Routine-added vs. authoritative calendar conflicts** —
+  shipped end-to-end and verified against real vault data. When a note routine added to
+  its local calendar copy turns out to also exist on the real upstream calendar (added
+  independently), `calendar_conflict_scan` finds the collision (same local day, time
+  overlap or near-start, or same-day all-day) and appends the authoritative note's
+  wikilink to the routine note's `conflicts-with` list the moment it's surfaced (a list,
+  not a single link — "potentially many," per David). Resolution: `calendar_note_append`
+  merges routine's notes onto the authoritative record, then `calendar_personal_delete`
+  soft-deletes routine's copy (`status: "deleted"`, required reason appended,
+  `DELETED-`-prefixed filename — never a real file delete). Unsure → escalates to Lumen
+  (a2a) → David, via routine's existing prompt/persona, no new mechanism. Trigger: a new
+  stateless task (`calendar-conflict-check-8b4f`, Routine) chained after the vault's
+  hourly `sync.js` cron via `ncl tasks run`, not an independent schedule ("multiple tasks
+  stepping on each other's toes seems like a terrible idea" — David) — caught and fixed a
+  cron-`PATH` gotcha (`ncl` execs `pnpm`, not on cron's default `PATH`) before wiring, with
+  a crontab backup taken first. Also fixed the `_index.md` dataview query along the way:
+  excludes `status: "deleted"`, shows event title + time range instead of the bare
+  filename, backfilled across all 95 existing day folders. One real bug caught during
+  testing: the `conflicts-with` list parser initially matched the frontmatter's own
+  closing `---` as a bogus list entry — fixed by requiring real indentation before the
+  dash. See `docs/mcp-shims-inventory.md`'s `routine` section for the tool list.
 
 - **`routine` — read/edit calendar via the vault's local copy** — shipped: `calendar_personal_today/tomorrow/week` now read the vault's local `07-Daily/Calendar/{Y}/{M}/{D}/*.md` mirror (syncing it inline via `sync.js --days=N` first) instead of the live ICS feed, which was removed outright (`fetch-calendar.ts`/`ics-events.ts` deleted). Added `calendar_personal_add`/`calendar_personal_edit` for routine's own local-only events. One correction to this item's own prior investigation, found live during testing: the doc had assumed sync.js's staleness sweep only touches notes matching an upstream event's own `uid`, but `cancelStale` actually cancels *any* note whose `kind` is in `config.json`'s tracked kinds list (just `["personal"]`) if its key isn't in that sync run's fetch results — a routine-added `kind: "personal"` note got cancelled by the very next sync call. Fixed by giving routine-owned notes `kind: "routine"` instead, outside the tracked-kinds list (`sync.js` itself untouched). See `docs/mcp-shims-inventory.md`'s `routine` section for the current tool list.
 
