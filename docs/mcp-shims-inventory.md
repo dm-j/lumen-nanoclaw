@@ -63,14 +63,16 @@ Locomotion is bounded and gated by a hazard latch.
 
 | Tool | Purpose |
 |---|---|
-| `calendar_personal_today` | Today's personal calendar, what's next, time until a meeting. |
-| `calendar_personal_tomorrow` | Tomorrow's events. |
-| `calendar_personal_week` | This week / next few days. |
+| `calendar_personal_today` | Today's personal calendar, what's next, time until a meeting. Reads the vault's local calendar-file mirror (not a live ICS fetch — see `docs/roadmap/routine-vault-calendar.md`), syncing it inline first. |
+| `calendar_personal_tomorrow` | Tomorrow's events. Same vault-backed read. |
+| `calendar_personal_week` | This week / next few days. Same vault-backed read. |
+| `calendar_personal_add` | Add an event to routine's own local calendar copy only — never the real upstream calendar. |
+| `calendar_personal_edit` | Edit an event previously added via `calendar_personal_add`; refuses any note not owned by routine (`kind: "routine"`, not a synced `"personal"` note) to avoid fighting the sync pipeline's own staleness sweep. |
 | `daily_note_read` | Read a day's note (`today` default, `yesterday`, `tomorrow`, weekday, date). |
 | `daily_note_append` | Append a note, reminder or log line to a day's note, including future days. |
 
 The `calendar` server has helper modules alongside the `-host` wrappers
-(`fetch-calendar.ts`, `filter-calendar.ts`, `ics-events.ts`, `format-event.ts`,
+(`vault-events.ts`, `filter-calendar.ts`, `range-events.ts`, `format-event.ts`,
 `group-timezone.ts`). `daily_note` shares `shared.ts`. None of these are tools:
 only `*-host` files are registered.
 
