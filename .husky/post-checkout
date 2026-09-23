@@ -12,6 +12,12 @@ common_dir=$(git rev-parse --git-common-dir)
 ROOT=$(git rev-parse --show-toplevel)
 cd "$ROOT" || exit 0
 
+# Record this worktree in the global registry (see ~/.claude/CLAUDE.md). Runs before the
+# install below so a failed install never leaves a worktree unregistered. Best-effort:
+# the script lives outside the repo and may be absent on another machine.
+REGISTRY="$HOME/.claude/hooks/worktree-registry.sh"
+[ -x "$REGISTRY" ] && "$REGISTRY" sync "$ROOT" || true
+
 INSTANCE_REPO="/Users/lumen/Projects/lumen-nanoclaw-instance"
 for name in groups mcp-shims host-shims; do
   [ -L "$ROOT/$name" ] && continue
@@ -23,8 +29,9 @@ if [ ! -d "$ROOT/node_modules" ]; then
   # ponytail: pin to the .nvmrc'd Node — a bare `pnpm install` here would build
   # native deps (better-sqlite3) against whatever Node is first on PATH, which
   # on this box is not always the project's pinned version.
-  NODE22="/opt/homebrew/opt/node@22/bin"
-  [ -d "$NODE22" ] && PATH="$NODE22:$PATH"
+  # ponytail: git hooks spawned by Claude Code get a minimal PATH with no /opt/homebrew/bin,
+  # where pnpm lives, so add it explicitly (a bare `pnpm` was "command not found" there).
+  PATH="/opt/homebrew/opt/node@22/bin:/opt/homebrew/bin:$PATH"
   export PATH
   pnpm install --frozen-lockfile
 fi
