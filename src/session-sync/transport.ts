@@ -189,7 +189,22 @@ export function createSyncServer(
           return;
         }
         const handler = handlers[envelope.channel];
-        if (handler) handler(sessionId, ws, envelope.body);
+        if (!handler) return;
+        // Required: a handler throwing synchronously here (malformed payload,
+        // any future bug) would otherwise propagate up through ws.emit
+        // ('message', ...) as an uncaught exception on the process — fatal to
+        // the whole host, not just this connection. Same rationale as the
+        // 'error' handler below; see its comment.
+        try {
+          handler(sessionId, ws, envelope.body);
+        } catch (err) {
+          log.warn('session-sync: channel handler threw, terminating connection', {
+            sessionId,
+            channel: envelope.channel,
+            error: String(err),
+          });
+          ws.terminate();
+        }
       });
       // Required: an unhandled 'error' event on any EventEmitter (ws sockets
       // included) throws and takes the whole host process down with it — a

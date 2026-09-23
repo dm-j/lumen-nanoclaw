@@ -241,6 +241,66 @@ describe('createSyncServer heartbeat', () => {
   });
 });
 
+describe('channel handler throwing', () => {
+  it('does not crash the process, and terminates just the offending connection', async () => {
+    const secret = 'throw-secret';
+    const handled: unknown[] = [];
+    const server = createSyncServer(0, secret, 60_000, {
+      'test-channel': (_sessionId, _ws, body) => {
+        handled.push(body);
+        // Simulate a handler bug/malformed-payload crash, e.g. verifyChain
+        // calling Hash.update() on a missing field.
+        throw new TypeError('simulated handler crash');
+      },
+    });
+    const port = (server.httpsServer.address() as { port: number }).port;
+    const token = signToken('sess-throw', secret, 60_000);
+    const client = new NodeWebSocket(`wss://127.0.0.1:${port}`, token, { rejectUnauthorized: false });
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('no open event received in time')), 2000);
+        client.on('open', () => {
+          clearTimeout(timeout);
+          resolve();
+        });
+        client.on('error', reject);
+      });
+
+      client.send(JSON.stringify({ channel: 'test-channel', body: { kind: 'noop-burst', i: 1 } }));
+
+      // The connection must be terminated cleanly rather than the process
+      // dying uncaught.
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('connection was not terminated in time')), 2000);
+        client.on('close', () => {
+          clearTimeout(timeout);
+          resolve();
+        });
+      });
+
+      expect(handled).toEqual([{ kind: 'noop-burst', i: 1 }]);
+
+      // The server (and this test process) must still be functional
+      // afterwards: a fresh, well-formed connection works normally.
+      const secondToken = signToken('sess-throw-2', secret, 60_000);
+      const second = new NodeWebSocket(`wss://127.0.0.1:${port}`, secondToken, { rejectUnauthorized: false });
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('second connection did not open in time')), 2000);
+        second.on('open', () => {
+          clearTimeout(timeout);
+          resolve();
+        });
+        second.on('error', reject);
+      });
+      second.close();
+    } finally {
+      client.close();
+      await server.close();
+    }
+  });
+});
+
 describe('cert pinning (mirrors how the container client trusts the host)', () => {
   it("connects when the client pins the host's actual cert as its sole CA", async () => {
     const server = createSyncServer(0, 'pin-secret', 60_000, {});

@@ -154,7 +154,18 @@ export function connectSyncClient(
         return;
       }
       const handler = handlers[envelope.channel];
-      if (handler) handler(envelope.body);
+      if (!handler) return;
+      // Required: a handler throwing synchronously here (malformed payload,
+      // any future bug) would otherwise propagate up through ws.emit
+      // ('message', ...) as an uncaught exception on the process — fatal to
+      // the whole container, not just this message. Mirrors the host-side
+      // fix in src/session-sync/transport.ts.
+      try {
+        handler(envelope.body);
+      } catch (err) {
+        console.error(`[session-sync] channel handler threw for channel "${envelope.channel}", terminating connection: ${String(err)}`);
+        ws.terminate();
+      }
     });
   });
 }

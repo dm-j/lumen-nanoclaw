@@ -71,3 +71,50 @@ describe('connectSyncClient — hostname verification is skipped, CA pinning is 
     wss.close();
   });
 });
+
+describe('connectSyncClient — a channel handler that throws does not crash the process', () => {
+  test('terminates the connection cleanly instead of propagating as an uncaught exception', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'session-sync-transport-throw-'));
+    const { cert, key } = makeCert(dir, '127.0.0.1');
+
+    const httpsServer = createHttpsServer({ cert, key });
+    const wss = new WebSocketServer({ server: httpsServer });
+    let serverWs: import('ws').WebSocket | undefined;
+    wss.on('connection', (ws) => {
+      serverWs = ws;
+    });
+    await new Promise<void>((resolve) => httpsServer.listen(0, resolve));
+    servers.push({ close: () => httpsServer.close() });
+    const port = (httpsServer.address() as { port: number }).port;
+
+    const handled: unknown[] = [];
+    const sync = await connectSyncClient(`wss://127.0.0.1:${port}`, 'any-token', cert, {
+      'test-channel': (body) => {
+        handled.push(body);
+        // Simulate a handler bug/malformed-payload crash (mirrors the real
+        // verifyChain/Hash.update TypeError on a malformed sync payload).
+        throw new TypeError('simulated handler crash');
+      },
+    });
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    serverWs?.send(JSON.stringify({ channel: 'test-channel', body: { kind: 'noop-burst', i: 1 } }));
+
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('connection was not terminated in time')), 2000);
+      sync.ws.on('close', () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+    });
+
+    expect(handled).toEqual([{ kind: 'noop-burst', i: 1 }]);
+
+    // The process (and this https server) must still be functional
+    // afterwards: a fresh connection works normally.
+    const second = await connectSyncClient(`wss://127.0.0.1:${port}`, 'any-token', cert, {});
+    expect(second.ws.readyState).toBe(second.ws.OPEN);
+    second.close();
+    wss.close();
+  });
+});
