@@ -1,6 +1,6 @@
 # Rebuilding Lumen on a wiped machine
 
-Two scripts do the work; this doc is the map. Written 2026-09-23 from an audit of the live Mac Mini.
+Two scripts do the work; this doc is the map. What you do around them is in [fresh-install-checklist.md](fresh-install-checklist.md). Written 2026-09-23 from an audit of the live Mac Mini.
 
 ```
 scripts/lumen-backup.sh [out-dir]      # BEFORE the wipe. Snapshots everything not in GitHub.
