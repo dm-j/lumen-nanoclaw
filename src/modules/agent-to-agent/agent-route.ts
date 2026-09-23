@@ -428,23 +428,64 @@ function pairMessageStreak(targetAgentGroupId: string, targetSessionId: string, 
 }
 
 /**
- * Notify the target session in place of a delivery the caller decided to
- * withhold. Deliberately does NOT wake the container: this fires from the
- * repeat-loop and pair-limit guards below, whose entire point is "stop and
- * escalate to a human" — waking the very agent that just got throttled
- * hands it a new turn to act on that instruction, and if the agent can't
- * actually act on it (e.g. every model call is failing), the only thing it
- * *can* do is try again, which re-trips the same guard, which writes and
- * wakes again — the guard perpetuating the exact loop it exists to stop.
- * The message is still written so it's visible whenever the container next
- * wakes for an unrelated reason (a real human message, a task, etc.).
+ * True if the most recent message from this source in the target's inbox is
+ * itself one of blockDelivery's own notices (sender stamped 'system' by
+ * withSenderName below). Used to decide whether a guard trip is the first
+ * one in this streak (worth waking the container for, in case the failure
+ * is transient and the agent can genuinely act on "stop and escalate") or a
+ * repeat of a streak that's already been announced (wake would just hand
+ * the agent another turn to fail the same way and re-trip the guard again —
+ * see blockDelivery's own comment for how that spiraled into a real outage
+ * on 2026-09-22).
  */
-function blockDelivery(
+function alreadyNotifiedThisStreak(
+  targetAgentGroupId: string,
+  targetSessionId: string,
+  sourceSessionId: string,
+): boolean {
+  const db = openInboundDb(targetAgentGroupId, targetSessionId);
+  try {
+    const row = db
+      .prepare(
+        `SELECT content FROM messages_in
+         WHERE kind = 'chat' AND channel_type = 'agent' AND source_session_id = ?
+         ORDER BY seq DESC LIMIT 1`,
+      )
+      .get(sourceSessionId) as { content: string } | undefined;
+    if (!row) return false;
+    try {
+      return (JSON.parse(row.content) as { sender?: string }).sender === 'system';
+    } catch {
+      return false;
+    }
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Notify the target session in place of a delivery the caller decided to
+ * withhold, from the repeat-loop and pair-limit guards below. Wakes the
+ * container only for the FIRST trip of an unbroken streak — in case the
+ * underlying failure is transient, the agent gets one real chance to see
+ * "stop and escalate" and act on it. Every trip after that, for the same
+ * still-unbroken streak, writes the notice but does NOT wake: if the agent
+ * couldn't act on the first warning (e.g. every model call is failing), the
+ * only thing waking it again accomplishes is handing it another turn to
+ * fail the same way and re-trip the guard — which is exactly how this
+ * spiraled into an hour-plus outage on 2026-09-22. The streak only breaks
+ * (silently re-arming the wake) once something else lands in the target's
+ * inbox for this source — ordinarily requiring the operator to actually fix
+ * the root cause first, not a timer. The notice is still written every
+ * time, so it's visible on whatever next wakes the container for real.
+ */
+async function blockDelivery(
   targetAgentGroupId: string,
   targetSession: Session,
   sourceSession: Session,
   reasonText: string,
-): void {
+): Promise<void> {
+  const wake = !alreadyNotifiedThisStreak(targetAgentGroupId, targetSession.id, sourceSession.id);
   writeSessionMessage(targetAgentGroupId, targetSession.id, {
     id: `a2a-block-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     kind: 'chat',
@@ -455,6 +496,10 @@ function blockDelivery(
     content: withSenderName(JSON.stringify({ text: reasonText }), 'system'),
     sourceSessionId: sourceSession.id,
   });
+  if (wake) {
+    const fresh = getSession(targetSession.id);
+    if (fresh) await wakeContainer(fresh);
+  }
 }
 
 /**
@@ -511,7 +556,7 @@ async function performAgentRoute(
       to: targetAgentGroupId,
       msgId: a2aMsgId,
     });
-    blockDelivery(
+    await blockDelivery(
       targetAgentGroupId,
       targetSession,
       session,
@@ -528,7 +573,7 @@ async function performAgentRoute(
       msgId: a2aMsgId,
       pairCount,
     });
-    blockDelivery(
+    await blockDelivery(
       targetAgentGroupId,
       targetSession,
       session,

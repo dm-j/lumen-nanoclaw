@@ -679,11 +679,14 @@ describe('routeAgentMessage return-path', () => {
     expect(fs.readFileSync(targetPath, 'utf-8')).toBe('legit-bytes');
   });
 
-  it('pair message limit: blockDelivery does not wake the throttled target (regression — this was the 2026-09-22 outage: the guard message re-triggered the very agent it told to stop)', async () => {
+  it('pair message limit: wakes on the FIRST trip (in case it is transient), then stays silent for further trips of the same unbroken streak', async () => {
     vi.mocked(wakeContainer).mockClear();
-    // Drive the same A.S1 -> B pair past MAX_PAIR_MESSAGES (30) with distinct
-    // content each time so the earlier repeat-loop guard doesn't fire first.
-    for (let i = 0; i < 31; i++) {
+    // Drive the same A.S1 -> B pair well past MAX_PAIR_MESSAGES (30) with
+    // distinct content each time so the repeat-loop guard doesn't fire first.
+    // 40 sends: 30 succeed normally, then 10 consecutive trips of the
+    // pair-limit guard — simulating the real 2026-09-22 outage shape (a
+    // broken container that can only ever fail, retrying continuously).
+    for (let i = 0; i < 40; i++) {
       await routeAgentMessage(
         {
           id: `msg-flood-${i}`,
@@ -696,19 +699,79 @@ describe('routeAgentMessage return-path', () => {
     }
 
     const bRows = readInbound(B, SB.id);
-    // The 31st send trips the limit: a block notice lands in B's inbound...
-    const blockRow = bRows.find((r) => JSON.parse(r.content).text?.includes('Message limit reached'));
-    expect(blockRow).toBeDefined();
+    const blockRows = bRows.filter((r) => JSON.parse(r.content).text?.includes('Message limit reached'));
+    // 10 trips of the guard (sends 30-39), all logged...
+    expect(blockRows).toHaveLength(10);
 
-    // ...and the 30 sends before it each legitimately woke B once — but the
-    // blocked 31st must NOT add a 31st wake. That's what turns a one-time
-    // notice into an unbounded loop when B can't act on "stop and escalate"
-    // (e.g. every model call is failing, so the only thing B's poll-loop can
-    // do is try again, re-tripping this exact guard).
-    expect(vi.mocked(wakeContainer)).toHaveBeenCalledTimes(30);
+    // ...but only the 30 legitimate sends plus the FIRST trip may wake B.
+    // The 9 trips after that must add zero further wakes — that's the
+    // regression: without the latch, every one of those 9 would re-wake B,
+    // which is exactly the mechanism that turned a broken model config into
+    // an hour-plus, heap-exhausting outage.
+    expect(vi.mocked(wakeContainer)).toHaveBeenCalledTimes(30 + 1);
   });
 
-  it('repeat-loop guard: blockDelivery does not wake the throttled target', async () => {
+  it('pair message limit: a real, unrelated message re-arms the wake for the next trip', async () => {
+    vi.mocked(wakeContainer).mockClear();
+    for (let i = 0; i < 31; i++) {
+      await routeAgentMessage(
+        {
+          id: `msg-flood2-${i}`,
+          platform_id: B,
+          content: JSON.stringify({ text: `distinct message #${i}` }),
+          in_reply_to: null,
+        },
+        S1,
+      );
+    }
+    // 30 real sends + 1st trip = 31 wakes so far.
+    expect(vi.mocked(wakeContainer)).toHaveBeenCalledTimes(31);
+
+    // pairMessageStreak/alreadyNotifiedThisStreak both scan for the most
+    // recent messages FROM THIS EXACT SOURCE — same-source traffic (even a
+    // "real" one) can never break the streak on its own, matching this
+    // file's own doc comment ("resets the moment anything else lands ...
+    // the human messaging in, a different agent, anything not this exact
+    // source session back-to-back"). Simulate that recovery precondition
+    // directly: a real human/channel message lands in B's inbox — not from
+    // S1, not tagged channel_type 'agent'.
+    writeSessionMessage(B, SB.id, {
+      id: 'human-message-lands',
+      kind: 'chat',
+      timestamp: now(),
+      content: JSON.stringify({ text: 'the operator actually fixed it' }),
+    });
+
+    // The next trip after recovery should wake again — the latch isn't
+    // permanent, it just requires the streak to actually break first.
+    await routeAgentMessage(
+      {
+        id: 'msg-flood2-again',
+        platform_id: B,
+        content: JSON.stringify({ text: 'distinct message #again' }),
+        in_reply_to: null,
+      },
+      S1,
+    );
+    for (let i = 0; i < 30; i++) {
+      await routeAgentMessage(
+        {
+          id: `msg-flood2-post-${i}`,
+          platform_id: B,
+          content: JSON.stringify({ text: `distinct message post #${i}` }),
+          in_reply_to: null,
+        },
+        S1,
+      );
+    }
+    // Second phase: msg-flood2-again + 29 of the 30 post-sends succeed
+    // normally (30 wakes), and the 30th post-send re-trips the pair limit —
+    // its first trip of this fresh streak, so it wakes too (31st wake of
+    // this phase). Total: 31 (first phase) + 31 (second phase).
+    expect(vi.mocked(wakeContainer)).toHaveBeenCalledTimes(31 + 31);
+  });
+
+  it('repeat-loop guard: wakes on the first trip only', async () => {
     vi.mocked(wakeContainer).mockClear();
     // Send the same content back-to-back to trip the repeat-loop guard
     // (REPEAT_LOOP_THRESHOLD) before the pair-limit guard would.
@@ -726,11 +789,11 @@ describe('routeAgentMessage return-path', () => {
 
     const bRows = readInbound(B, SB.id);
     const blockRows = bRows.filter((r) => JSON.parse(r.content).text?.includes('Loop detected'));
-    // Trips exactly once (at the 3rd identical send) — proving the guard
-    // doesn't cascade into repeatedly re-blocking itself.
+    // Trips exactly once (at the 3rd identical send) — the block notice's
+    // own distinct text breaks the "last N identical" scan for the very
+    // next send, so this guard self-resets without needing the latch, but
+    // the trip that DID happen must still have woken B (first trip).
     expect(blockRows).toHaveLength(1);
-    // 5 sends, 1 blocked: the other 4 each legitimately woke the container,
-    // but the blocked one must not add a 5th wake of its own.
-    expect(vi.mocked(wakeContainer)).toHaveBeenCalledTimes(4);
+    expect(vi.mocked(wakeContainer)).toHaveBeenCalledTimes(5);
   });
 });
