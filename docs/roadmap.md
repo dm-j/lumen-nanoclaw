@@ -13,6 +13,8 @@ Open items, roughly in priority order. Not a commitment or schedule — just wha
 9. [`--stateless` scheduled tasks](roadmap/stateless-scheduled-tasks.md) — `ncl tasks create/update --stateless` skips transcript resume entirely for a recurring task whose work is fully self-contained each fire; shipped 2026-09-16, Routine's 4 calendar-check series flipped on and verified live; still open (confirmed 2026-09-19): extend the instruction to other task-creating agent groups (only Routine's has it), surface the flag in `ncl tasks get/list` output (only `create`/`update` take it so far)
 10. [`routine` — daily-note awareness](roadmap/routine-daily-notes.md) — auto-injected access to today's Obsidian daily note via a new per-agent-group `wake_script` mechanism (covers both scheduled-task and a2a `assign_task` wakes) plus `daily_note_read`/`daily_note_append` MCP tools; built and verified live 2026-09-18; also holds two not-yet-scoped follow-on ideas (folding the note into Lumen's own briefing, letting `routine` edit existing note content)
 
+11. [Fresh-install gaps](roadmap/fresh-install-gaps.md) — backup/restore scripts + [docs/fresh-install.md](fresh-install.md) written 2026-09-23 (syntax-checked, not yet run); open: PrefixRouter and the vault have no git remote, `~/.local/bin` tool origins unrecorded, restore unverified end to end
+
 ## Closed 2026-09-22
 
 - **`routine` — detect and resolve Routine-added vs. authoritative calendar conflicts** —
