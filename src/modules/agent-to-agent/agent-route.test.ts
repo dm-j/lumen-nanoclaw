@@ -10,6 +10,7 @@ import { initTestDb, closeDb, runMigrations, createAgentGroup } from '../../db/i
 import { createSession, updateSession } from '../../db/sessions.js';
 import { initSessionFolder, inboundDbPath, sessionDir, writeSessionMessage } from '../../session-manager.js';
 import type { Session } from '../../types.js';
+import { wakeContainer } from '../../container-runner.js';
 
 vi.mock('../../container-runner.js', () => ({
   wakeContainer: vi.fn().mockResolvedValue(undefined),
@@ -676,5 +677,60 @@ describe('routeAgentMessage return-path', () => {
     const targetPath = path.join(sessionDir(B, SB.id), parsed.attachments[0].localPath);
     expect(fs.existsSync(targetPath)).toBe(true);
     expect(fs.readFileSync(targetPath, 'utf-8')).toBe('legit-bytes');
+  });
+
+  it('pair message limit: blockDelivery does not wake the throttled target (regression — this was the 2026-09-22 outage: the guard message re-triggered the very agent it told to stop)', async () => {
+    vi.mocked(wakeContainer).mockClear();
+    // Drive the same A.S1 -> B pair past MAX_PAIR_MESSAGES (30) with distinct
+    // content each time so the earlier repeat-loop guard doesn't fire first.
+    for (let i = 0; i < 31; i++) {
+      await routeAgentMessage(
+        {
+          id: `msg-flood-${i}`,
+          platform_id: B,
+          content: JSON.stringify({ text: `distinct message #${i}` }),
+          in_reply_to: null,
+        },
+        S1,
+      );
+    }
+
+    const bRows = readInbound(B, SB.id);
+    // The 31st send trips the limit: a block notice lands in B's inbound...
+    const blockRow = bRows.find((r) => JSON.parse(r.content).text?.includes('Message limit reached'));
+    expect(blockRow).toBeDefined();
+
+    // ...and the 30 sends before it each legitimately woke B once — but the
+    // blocked 31st must NOT add a 31st wake. That's what turns a one-time
+    // notice into an unbounded loop when B can't act on "stop and escalate"
+    // (e.g. every model call is failing, so the only thing B's poll-loop can
+    // do is try again, re-tripping this exact guard).
+    expect(vi.mocked(wakeContainer)).toHaveBeenCalledTimes(30);
+  });
+
+  it('repeat-loop guard: blockDelivery does not wake the throttled target', async () => {
+    vi.mocked(wakeContainer).mockClear();
+    // Send the same content back-to-back to trip the repeat-loop guard
+    // (REPEAT_LOOP_THRESHOLD) before the pair-limit guard would.
+    for (let i = 0; i < 5; i++) {
+      await routeAgentMessage(
+        {
+          id: `msg-repeat-${i}`,
+          platform_id: B,
+          content: JSON.stringify({ text: 'identical every time' }),
+          in_reply_to: null,
+        },
+        S1,
+      );
+    }
+
+    const bRows = readInbound(B, SB.id);
+    const blockRows = bRows.filter((r) => JSON.parse(r.content).text?.includes('Loop detected'));
+    // Trips exactly once (at the 3rd identical send) — proving the guard
+    // doesn't cascade into repeatedly re-blocking itself.
+    expect(blockRows).toHaveLength(1);
+    // 5 sends, 1 blocked: the other 4 each legitimately woke the container,
+    // but the blocked one must not add a 5th wake of its own.
+    expect(vi.mocked(wakeContainer)).toHaveBeenCalledTimes(4);
   });
 });

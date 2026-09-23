@@ -427,13 +427,24 @@ function pairMessageStreak(targetAgentGroupId: string, targetSessionId: string, 
   }
 }
 
-/** Notify the target session in place of a delivery the caller decided to withhold. */
-async function blockDelivery(
+/**
+ * Notify the target session in place of a delivery the caller decided to
+ * withhold. Deliberately does NOT wake the container: this fires from the
+ * repeat-loop and pair-limit guards below, whose entire point is "stop and
+ * escalate to a human" — waking the very agent that just got throttled
+ * hands it a new turn to act on that instruction, and if the agent can't
+ * actually act on it (e.g. every model call is failing), the only thing it
+ * *can* do is try again, which re-trips the same guard, which writes and
+ * wakes again — the guard perpetuating the exact loop it exists to stop.
+ * The message is still written so it's visible whenever the container next
+ * wakes for an unrelated reason (a real human message, a task, etc.).
+ */
+function blockDelivery(
   targetAgentGroupId: string,
   targetSession: Session,
   sourceSession: Session,
   reasonText: string,
-): Promise<void> {
+): void {
   writeSessionMessage(targetAgentGroupId, targetSession.id, {
     id: `a2a-block-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     kind: 'chat',
@@ -444,8 +455,6 @@ async function blockDelivery(
     content: withSenderName(JSON.stringify({ text: reasonText }), 'system'),
     sourceSessionId: sourceSession.id,
   });
-  const fresh = getSession(targetSession.id);
-  if (fresh) await wakeContainer(fresh);
 }
 
 /**
@@ -502,7 +511,7 @@ async function performAgentRoute(
       to: targetAgentGroupId,
       msgId: a2aMsgId,
     });
-    await blockDelivery(
+    blockDelivery(
       targetAgentGroupId,
       targetSession,
       session,
@@ -519,7 +528,7 @@ async function performAgentRoute(
       msgId: a2aMsgId,
       pairCount,
     });
-    await blockDelivery(
+    blockDelivery(
       targetAgentGroupId,
       targetSession,
       session,
