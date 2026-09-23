@@ -41,6 +41,18 @@ Picked up option (a)+(c) from the "Next" note above: same Docker Desktop (4.66.0
 
 **Recommended next step, if picked back up again**: now that both contaminating bugs are actually fixed, redo the real staged canary (§8.4) — a low-stakes group first (not the owner group blind), full observation window, checklist per §8.4 item 3. If that's clean, that's the first trustworthy live-traffic data point this investigation has actually had. Separately, and lower priority: a fourth isolated repro using native `ws.ping()`/`pong()` control frames specifically (not app-level messages) would close the one documented failure mode (§8.11 Bug C) never independently reproduced.
 
+### 0.2 Fifth canary attempt (2026-09-23) — the ~40s drop reproduced immediately, rolled back
+
+Redid the staged canary per the note above, on `_ping-test` (the sandbox group — lowest-stakes option, exactly what §8.4 asks for), not Lumen. Confirmed first that neither contaminating bug from §0.1 applied here (`groups/_ping-test/container.json`'s `ANTHROPIC_BASE_URL` correctly points at PrefixRouter, not raw Ollama).
+
+Flipped `transport: sync`, restarted, sent one real message over the CLI channel. Result: **no reply in 120s**, one of §8.5's literal abort criteria. Logs showed the connection cycling on a heartbeat timeout every ~40s — `session-sync: connection missed heartbeat, terminating` at `07:39:33`, `07:40:15`, `07:40:56` — the exact pattern from §8.11's original finding, reproducing on the first live attempt.
+
+This directly contradicts §0.1's three isolated repros (raw TCP, Node+WSS, Bun+WSS), all of which ran 150s clean with zero drops on the same Docker Desktop/macOS versions. The isolated repros used a synthetic periodic-ping-only client; this run was a real container spawn under the full agent-runner stack. Rolled back immediately (`transport: file`, restart) per policy — no live-traffic investigation attempted. Post-rollback sanity check (a fresh CLI message) got a normal reply, confirming the group itself is healthy and the issue is scoped to `'sync'` transport specifically.
+
+**What this narrows down**: the drop is real, current (not a stale August-only issue), and something about the real container→host path (as opposed to an isolated synthetic client) triggers it reliably within ~40-90s. §0.1's reading (b) — "it really was a transient environmental hiccup" — is now ruled out; reading (a) stands, and the isolated repros' failure to reproduce it means the isolation wasn't faithful enough (missing ingredient still unidentified — candidates per §8.11 remain the real client's periodic auth-token-refresh push, or native ping/pong control frames specifically, since app-level heartbeat is what's timing out here too).
+
+**Next, if picked back up**: don't retry another live canary blind — the drop reproduces reliably now, so there's no need to burn another live attempt to confirm it. Chase the missing ingredient in isolation instead: run the isolated Bun+WSS repro (§0.1 item 3) again but with a real container's full connection lifecycle attached (spawn timing, auth-token-refresh push at `tokenTtlMs / 2`, real heartbeat cadence) rather than a standalone ping loop — that's the one variable not yet isolated on its own.
+
 ---
 
 ## 1. The problem
