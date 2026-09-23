@@ -177,3 +177,37 @@ David, thinking out loud (not requesting either be built yet):
   an explicit boundary — e.g. scoped to a `## Notes` section only, never touching
   frontmatter or the dataview block — decided as part of the design, not assumed safe by
   default.
+
+## Addendum 2026-09-23 — ID'd `## Notes` block and `notes_*` tools (built)
+
+Answers the second future idea above. Decided with David:
+
+- **Where.** Every day's `_index.md` gets a `## Notes` heading plus an Obsidian quote block
+  whose block ID is `^daily-notes` (ID on its own line after a blank line). The template lives in
+  `mcp-shims/routine/daily_note/shared.ts` (`sync.js` never creates `_index.md`), so new days get it
+  from there and `notes_*` insert the block if it is missing. Only 32 `_index.md` files existed, so no
+  migration was written; old days self-heal on first `notes_*` call.
+- **One note = one list item with its own block ID:** `> - 09:14 routine: text ^n3f9k2`. Chosen over
+  literally nested quotes because Obsidian supports block IDs on list items natively and nested-quote
+  ID placement is ambiguous. Multi-line notes indent continuation lines; the ID ends the last line.
+- **Tools** (`mcp-shims/routine/notes/`): `notes_read`, `notes_add`, `notes_edit`, `notes_delete`,
+  all by ID, all with an optional `day`. The shim adds/strips the `> ` prefixes and prefixes each written note
+  with `HH:MM routine:` so agents only see plain text. No text-match or line-number addressing.
+- **Hand-typed notes** without an ID are listed as `[?]` and never edited or dropped; David adds an ID
+  himself (keyboard smash) if he wants one addressable. **Duplicate IDs** in one block (should never
+  happen): the alphabetically-last note by text gets a fresh ID, on any `notes_*` call.
+- **Safety.** Logic is confined to the block; nothing outside it is ever rewritten. Writes are
+  compare-and-write (re-read, refuse if the note changed under us). Verified live on scratch days
+  (2030-01-01/02, since deleted): add, multi-line, read, edit, delete, bad ID, text outside the block
+  preserved, template-created day. Pure logic has `notes-block.selftest.ts`.
+
+**Still open:**
+- **Hand-off to the vault project's Claude:** `scripts/calendar-sync/refile.js` (~line 120) deletes a
+  day folder that holds only `_index.md`, which would now destroy stored notes. It must keep the
+  folder if the notes block is non-empty.
+- **Switch Routine's `wake_script` to `notes_read`** (injects only the notes, not the whole note) —
+  not done; the existing wake-script still injects the whole stripped note, which now includes the raw
+  quote block with IDs.
+- **Lumen:** her own copy of the `notes` shims (`WHO = "lumen"`, her group's timezone) via a shared
+  code directory, plus injecting the notes into her briefing (`compile-briefing.ts`), capped at ~4k chars.
+- **Size cap** on the injected notes text is not implemented yet.

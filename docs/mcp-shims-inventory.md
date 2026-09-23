@@ -11,7 +11,7 @@ of truth, so re-list it (`find mcp-shims -name '*-host'`) if this drifts.
 | Group (folder) | Shims | Servers |
 |---|---|---|
 | lumen-dmj | 21 | `memory`, `task_management`, `vault`, `vector` |
-| routine | 5 | `calendar`, `daily_note` |
+| routine | 9 | `calendar`, `daily_note`, `notes` |
 | dispatcher | 1 | `gaps` |
 | departure | 2 (orphaned) | `travel`, `vault` |
 
@@ -73,10 +73,15 @@ Locomotion is bounded and gated by a hazard latch.
 | `calendar_note_append` | Appends free text to the body of any event note by path (routine-owned or not) — used to merge routine's notes onto the authoritative record before deleting routine's duplicate. Never touches frontmatter. |
 | `daily_note_read` | Read a day's note (`today` default, `yesterday`, `tomorrow`, weekday, date). |
 | `daily_note_append` | Append a note, reminder or log line to a day's note, including future days. |
+| `notes_read` | List a day's ID'd notes (`[id] text`); hand-typed notes without an ID show `[?]` and are unaddressable. |
+| `notes_add` | Add a note to a day's `## Notes` block; returns its ID. Time and `routine` are prefixed automatically. |
+| `notes_edit` | Rewrite one note by ID; other notes untouched. |
+| `notes_delete` | Delete one note by ID. |
 
 The `calendar` server has helper modules alongside the `-host` wrappers
 (`vault-events.ts`, `filter-calendar.ts`, `range-events.ts`, `format-event.ts`, `conflict-scan.ts`,
-`group-timezone.ts`). `daily_note` shares `shared.ts`. None of these are tools:
+`group-timezone.ts`). `daily_note` shares `shared.ts`; `notes` has `notes.ts` (I/O) and
+`notes-block.ts` (pure logic, checked by `notes-block.selftest.ts`). None of these are tools:
 only `*-host` files are registered.
 
 ## dispatcher
