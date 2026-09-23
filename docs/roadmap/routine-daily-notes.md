@@ -196,6 +196,11 @@ Answers the second future idea above. Decided with David:
 - **Hand-typed notes** without an ID are listed as `[?]` and never edited or dropped; David adds an ID
   himself (keyboard smash) if he wants one addressable. **Duplicate IDs** in one block (should never
   happen): the alphabetically-last note by text gets a fresh ID, on any `notes_*` call.
+- **Tolerant IDs (David, same day).** Input IDs are trimmed, stripped of surrounding `[brackets]`
+  (agents echo them from `notes_read`), and lowercased; matching is case-insensitive everywhere
+  (a hand-typed `^SMASH1` is addressable as `smash1`; duplicate detection and fresh-ID collision checks
+  are case-insensitive too). An ID that is not exactly 6 characters is rejected before any vault access.
+  Consequence: hand-typed IDs must be 6 characters to be addressable.
 - **Safety.** Logic is confined to the block; nothing outside it is ever rewritten. Writes are
   compare-and-write (re-read, refuse if the note changed under us). Verified live on scratch days
   (2030-01-01/02, since deleted): add, multi-line, read, edit, delete, bad ID, text outside the block
