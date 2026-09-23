@@ -18,6 +18,29 @@ Related: [db.md §4](db.md#4-cross-mount-visibility) (the problem this replaces)
 
 **Next, if picked back up**: either (a) investigate the Docker Desktop drop directly (start with release notes/known issues for the installed version), or (b) actually build the named-volume migration that was proposed but never done, or (c) just redo §8.4's staged canary for real and see if the drop still reproduces on the current Docker Desktop version — cheapest option, and would also answer whether the quiet stretch reflects an environment change worth trusting.
 
+### 0.1 Addendum 2026-09-22/23 — isolated-layer repros ran clean; real canary got contaminated by an unrelated outage
+
+Picked up option (a)+(c) from the "Next" note above: same Docker Desktop (4.66.0/222299) and macOS (26.5.1) as the original 2026-08-16 incident — confirmed no environment change to explain anything either way.
+
+**Three standalone repros, each a fresh minimal container→host connection over `host.docker.internal`, no NanoClaw code involved at all:**
+
+1. **Raw TCP** (plain `net` socket, ping every 5s): 150s, zero drops.
+2. **WSS/TLS with cert-pinning, from Node** (`ws`@8.21.3 + `https.Agent`, matching this doc's own §8.6.2/§8.11 workaround pattern): 150s, 29/29 round trips, zero drops.
+3. **Same WSS client, executed via `bun run`** (matching the real agent-runner's actual runtime exactly): 150s, 29/29 round trips, zero drops.
+
+**Conclusion**: none of raw TCP, Node+WSS, or Bun+WSS reproduce the historical ~40s drop in isolation with an app-level periodic-message heartbeat. This is a genuine negative result, not just "didn't get around to it" — even matching the runtime exactly didn't reproduce it. Two honest readings, not mutually exclusive: (a) the original drop was specific to something not replicated here — the real client's periodic auth-token-refresh push, its exact reconnect/backoff timing, or native WS ping/pong control frames specifically (§8.11 Bug C found *that* exact mechanism worked once per reconnect cycle then failed every cycle after — never re-isolated on its own); or (b) it really was a transient environmental hiccup that night, not a deterministic bug — three clean isolated runs is real evidence toward that, though it can't fully rule out (a).
+
+**Then a real staged-canary attempt, requested directly** — flip Lumen (the owner group, real traffic) to `'sync'`, monitor 3×/5min. This is where it gets contaminated, not clarifying:
+
+- The 3-check monitoring window itself came back clean (connections registered, no resync/chain-mismatch, a burst of real task-driven wake/reconnect cycles all handled correctly).
+- But shortly after, David reported a real Telegram message got no reply. Investigation found the **NanoClaw host process itself had been crash-looping on JS heap-OOM** since ~21:33 (right after the flip), circuit-breaker backing off up to 900s at a time — meaning the host was genuinely down for stretches, not just slow.
+- Root cause was **not sync transport**. It was two unrelated, pre-existing bugs colliding: (1) `groups/_ping-test/container.json` had a stale `ANTHROPIC_BASE_URL` pointing at raw Ollama instead of PrefixRouter (left over from before PrefixRouter existed — restarting a container refreshes `container_configs` but not the materialized `env` block, so no amount of restarting could fix it), which made every model call for that sandbox group fail forever; (2) the a2a "message limit reached" safety guard delivered its own warning back to the throttled agent as a new wake-triggering message, so a failing agent that couldn't act on "stop and escalate" just re-tripped the guard forever — ~90 minutes of runaway spawns exhausted the host's heap. Both fixed: the stale container.json corrected (`lumen-nanoclaw-instance@a4ae065e`), and the guard-delivery loop fixed at the code level (`lumen-nanoclaw@3de64708` — wakes once per trip, then latches until something else breaks the streak; see that commit's message for the full design and why a permanent silence was rejected in favor of this).
+- Lumen's transport was reverted to `'file'` during the incident response and **left there** — this was firefighting, not a considered decision to abandon `'sync'`.
+
+**Net effect on this doc's open question**: still genuinely unanswered. The isolated-layer evidence (three clean runs) is real and should carry forward. But the one live-traffic test attempt tonight doesn't count as a real data point either way — it was running the whole time inside an environment that was actively falling over for unrelated reasons, so a "looked clean" read from that window can't be trusted as confirmation, and the crash can't be blamed on sync transport either (host-level OOM from a completely separate a2a loop, not from the sync connection itself).
+
+**Recommended next step, if picked back up again**: now that both contaminating bugs are actually fixed, redo the real staged canary (§8.4) — a low-stakes group first (not the owner group blind), full observation window, checklist per §8.4 item 3. If that's clean, that's the first trustworthy live-traffic data point this investigation has actually had. Separately, and lower priority: a fourth isolated repro using native `ws.ping()`/`pong()` control frames specifically (not app-level messages) would close the one documented failure mode (§8.11 Bug C) never independently reproduced.
+
 ---
 
 ## 1. The problem
