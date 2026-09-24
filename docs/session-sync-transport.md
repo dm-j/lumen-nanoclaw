@@ -103,6 +103,18 @@ With sign-off, backed up every DB first (`~/Backups/lumen-nanoclaw-db-20260923`,
 
 **Fix direction (not built):** (1) a divergence breaker — when a resync doesn't advance the peer's position, stop replaying and either run a full reset handshake or fail loudly instead of looping (today it amplifies without bound and starves the event loop); (2) reset both sides' sync state on transport flips (`ncl groups config update --transport`), or version the state so stale state is detected at connect; (3) find out *how* the chains diverged at seq 490 (two writers on one chain, or an interrupted persist near the 07:47 host crash-restart, are the prime suspects). Then redo the round-trip canary from clean state.
 
+### 0.7 Design direction (2026-09-24, David's note) — simplify the protocol before building a divergence breaker
+
+**Not decided or built — a direction to evaluate first.** Raised as: "if the two databases are arguing over sequence numbers, consider even/odd, or split inbound/outbound tables, or use an existing sync library."
+
+**Premise check.** It wasn't a numbering clash. Each direction already has a single writer and its own counter (container writes outbound seqs, host writes inbound seqs — host even / container odd already applies to the `messages_in`/`messages_out` row seqs). The failure was the two sides holding *different chain hashes for the same seq (490)* — divergent history, not contended numbers. Even/odd or splitting tables would not have prevented it; the hash chain is what converts "one side is behind" into "permanently unrecoverable, replay loops forever."
+
+**Proposed simpler shape (to evaluate):** keep one writer per direction, but replace the hash chain as the *source of truth* with a plain append-only log per direction plus a **cumulative ack watermark**: receiver applies rows idempotently (keyed by `(direction, seq)`) and reports "last applied = N"; sender replays from N. A mismatch can no longer loop because there is nothing to mismatch. Add an **epoch id** per direction so a reset or state loss is explicit ("new epoch — start from zero") instead of silent divergence; bumping the epoch on transport flip / state reset gives §0.6's "reset on flip" for free. The chain hash could remain as an optional integrity check that *reports* corruption but never drives replay. Splitting every table into inbound/outbound copies isn't needed — the two directions are already separate streams.
+
+**Existing libraries (surveyed from memory, maintenance status NOT verified):** cr-sqlite (CRDT multi-writer merge), Litestream / LiteFS (one-way replication, S3/FUSE-oriented), rqlite (Raft cluster), Turso/libSQL embedded replicas, ElectricSQL / PowerSync (Postgres/cloud-centric). All either solve multi-writer merging we don't need or bring server infrastructure; for two peers, one writer per stream, tiny rows, a log + watermark is likely less code than adopting one. Worth a real check (current maintenance, licensing, whether any works over an arbitrary transport, and macOS/Bun compatibility) before dismissing.
+
+**Sequencing.** Decide this *before* building §0.6's divergence breaker — the simpler protocol may make the breaker unnecessary. Open: does anything else rely on the chain (host-sweep, replay tables `session_sync_log` / `session_sync_outbound_log`, the §8.10 CLI push path with its cross-process lock)? Those are the migration surface.
+
 ---
 
 ## 1. The problem
