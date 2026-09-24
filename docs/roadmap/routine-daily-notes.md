@@ -216,3 +216,21 @@ Answers the second future idea above. Decided with David:
 - **Lumen:** her own copy of the `notes` shims (`WHO = "lumen"`, her group's timezone) via a shared
   code directory, plus injecting the notes into her briefing (`compile-briefing.ts`), capped at ~4k chars.
 - **Size cap** on the injected notes text is not implemented yet.
+
+### Wake script switched to the notes block — 2026-09-23
+
+Routine's `wake_script` no longer injects the whole stripped daily note; it injects today's date plus just the `## Notes`
+block (`host-shim notes/read`, so each note shows as `[id] text`, or `(no notes)`), with a one-line pointer to
+`notes_edit`/`notes_delete`. The date line replaces the grounding the note's frontmatter (`date`, `day_of_week`) used to give.
+Set with `ncl groups config update --id ag-32059f15-f18a-4505-9d2e-e62b55131587 --wake-script ...`; the new script was
+tested on the host against a stand-in `host-shim`, then verified live with a diagnostic one-shot task (see below).
+**Rollback** (previous script, whole-note injection):
+
+```sh
+#!/bin/sh
+CONTENT="$(host-shim daily_note/read 2>&1)"
+WAKE_NOTE_CONTENT="$CONTENT" node -e "console.log(JSON.stringify({wakeAgent:true,data:process.env.WAKE_NOTE_CONTENT||\"\"}))"
+```
+
+Side effect worth knowing: `notes_read` on a day whose `_index.md` has no `## Notes` block inserts the empty block, so the
+first wake of a day adds it to that day's note (the same self-heal every `notes_*` call does).
