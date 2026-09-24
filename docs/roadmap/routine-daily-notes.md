@@ -255,11 +255,18 @@ first wake of a day adds it to that day's note (the same self-heal every `notes_
   `instructions.prepend.md` was rewritten to describe the calendar (personal + work, labelled; real synced events read-only,
   own events addable/editable) and the `notes_*` tools accurately. Verified: the week view returned 25 events, 13 personal and 12 work.
 
-### Weekday abbreviations — 2026-09-23
+### Day tokens match by unique prefix — 2026-09-23
 
-The shared `resolveDay` (`mcp-shims/routine/daily_note/shared.ts`, used by `daily_note_*` and every `notes_*` tool for both
-Routine and Lumen) also accepts common weekday abbreviations, case-insensitive with an optional trailing period: `sun`, `mon`,
-`tue`/`tues`, `wed`/`weds`, `thu`/`thur`/`thurs`, `fri`, `sat`. They mean exactly what the full name means: always the next
-occurrence, never today or a past day. Checked by `daily_note/day.selftest.ts` (compares each abbreviation to its full name,
-so it does not depend on the date) and through the real `daily_note_read` wrapper (`Fri` -> 2026-09-25, `thurs.` -> 2026-09-24).
-The tool `day` parameter descriptions still say "a weekday name"; abbreviations are accepted silently.
+Replaces the fixed abbreviation list from earlier the same day. The shared `resolveDay` (`mcp-shims/routine/daily_note/shared.ts`,
+used by `daily_note_*` and every `notes_*` tool, for both Routine and Lumen) now matches a `day` token against the ten-word
+vocabulary `today`, `tomorrow`, `yesterday`, `sunday` ... `saturday` **by unique prefix**, case-insensitive, trimming whitespace and a
+trailing period. So `w` is Wednesday, `y` is yesterday, `tom` is tomorrow, `thu`/`thurs` are Thursday; a prefix that fits more than one
+word is **refused, not guessed**, with an error naming the candidates (`"t" is ambiguous: it could be today, tomorrow, tuesday,
+thursday`; `s`, `to` likewise). `weds` is the one alias kept, since it is not a prefix of "wednesday". A weekday still means the next
+occurrence, never today or a past day. `YYYY-MM-DD` and unspecified (= today) behave as before.
+
+Implemented as a linear prefix filter over the ten words rather than a trie: identical behaviour, less code, and a trie only pays
+off at thousands of words. `daily_note/day.selftest.ts` generates every prefix of every word and asserts it resolves to that word
+when unique and is refused when not, plus the resolveDay cases. Checked through the real wrappers too: `notes_read` `t` and
+`notes_add` `s` fail with the ambiguity message before touching the vault; `daily_note_read` `w`/`y`/`tom` resolve correctly. The tool
+`day` descriptions still say "a weekday name"; prefixes are accepted silently.
