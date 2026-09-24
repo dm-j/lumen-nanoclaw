@@ -31,6 +31,18 @@ host-shims, exposed as typed tools).
 | `memory_remember` | Capture an ad-hoc fact as a new note filed into the vault inbox (`title`, `content`, `source`, confidence). |
 | `memory_recall` | Ask a question and get an answer sourced from the vault, optionally the web too (`query`, `ask_as`, length/format, `research`). |
 
+**`notes`** — the ID'd notes on a day's `## Notes` block. Same code as routine's `notes` server
+(`mcp-shims/routine/notes/notes.ts`); these wrappers only set which group's timezone applies and the name
+stamped on notes (`lumen`). Each tool takes an optional `day` (today by default, `yesterday`, `tomorrow`, a
+weekday, or `YYYY-MM-DD`).
+
+| Tool | Purpose |
+|---|---|
+| `notes_read` | List a day's ID'd notes (`[id] text`), or find a note's ID before changing it. Hand-typed notes without an ID show `[?]` and are unaddressable. |
+| `notes_add` | Jot down a note, reminder or log line; returns its ID. Time and `lumen` are prefixed automatically. |
+| `notes_edit` | Reword one note by ID; other notes untouched. |
+| `notes_delete` | Delete one note by ID. |
+
 **`task_management`** — todo.txt-style task list.
 
 | Tool | Purpose |
@@ -64,11 +76,6 @@ Locomotion is bounded and gated by a hazard latch.
 | `vector_photo` | One still from the forward camera (1280x720, base64). |
 | `vector_detect` | Capture a still and run YOLOv8n detection. First call downloads the model and is slow (60s timeout). |
 | `vector_continue_action` | "Nothing new, keep him visibly alive." Fires a random small screen flash or short sound. Its description is deliberately written as the default choice on a check-in, to compete with `move`/`say`. |
-
-**`notes`** — the ID'd notes on a day's `## Notes` block: `notes_read`, `notes_add`, `notes_edit`,
-`notes_delete`. Same code as routine's `notes` server (`mcp-shims/routine/notes/notes.ts`); the four wrappers
-here only set which group's timezone applies and the name stamped on notes she writes (`lumen`). Descriptions
-and behaviour: see the `notes_*` rows under `routine` below.
 
 ## routine
 
