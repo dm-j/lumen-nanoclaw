@@ -10,12 +10,18 @@ of truth, so re-list it (`find mcp-shims -name '*-host'`) if this drifts.
 
 | Group (folder) | Shims | Servers |
 |---|---|---|
-| lumen-dmj | 25 | `memory`, `notes`, `task_management`, `vault`, `vector` |
+| lumen-dmj | 26 | `journal`, `memory`, `notes`, `task_management`, `vault`, `vector` |
 | routine | 14 | `calendar`, `daily_note`, `notes` |
 | dispatcher | 1 | `gaps` |
 | departure | 2 (orphaned) | `travel`, `vault` |
 
 ## lumen-dmj
+
+**`journal`** — Lumen's own journal, one vault note per day at `07-Daily/Lumen-Journals/YYYY/MM/DD.md`.
+
+| Tool | Purpose |
+|---|---|
+| `journal_entry` | `mode` = `read` or `write`. Read shows a day (`value`: today by default, `yesterday`, a weekday = the most recent one before today, unique abbreviations OK, or `YYYY-MM-DD`; no `tomorrow`); a missing day returns "No journal entry for …". Write appends `value` under a `# YYYY-MM-DD HH:mm` header as a `> ` quote block ending in a `^hh-mm-ss` block id (seconds bumped on collision). Empty `value` is an error. |
 
 **`memory`** — vault-backed memory (the same backends as the `remember`/`recall`
 host-shims, exposed as typed tools).
