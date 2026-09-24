@@ -14,6 +14,7 @@ Open items, roughly in priority order. Not a commitment or schedule — just wha
 10. [`routine` — daily-note awareness](roadmap/routine-daily-notes.md) — auto-injected access to today's Obsidian daily note via a new per-agent-group `wake_script` mechanism (covers both scheduled-task and a2a `assign_task` wakes) plus `daily_note_read`/`daily_note_append` MCP tools; built and verified live 2026-09-18; also holds two not-yet-scoped follow-on ideas (folding the note into Lumen's own briefing, letting `routine` edit existing note content)
 
 11. [Fresh-install gaps](roadmap/fresh-install-gaps.md) — backup/restore scripts + [docs/fresh-install.md](fresh-install.md) written 2026-09-23 (syntax-checked, not yet run); open: PrefixRouter and the vault have no git remote, `~/.local/bin` tool origins unrecorded, restore unverified end to end
+12. [Calendar `day_index` links](roadmap/calendar-day-index-links.md) — event notes link to their day's `_index.md` (string, or list for multi-day); Routine writer done and verified 2026-09-23; open (vault project's Claude): `sync.js`/`lib.js` writer, `refile.js` list-aware patch, backfill of 150 notes
 
 ## Closed 2026-09-22
 
