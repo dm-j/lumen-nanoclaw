@@ -69,8 +69,10 @@ day_index:
   regexp (`^key: .*$`) cannot replace a multi-line list. Re-derive `day_index` whenever `date`/`end_date` change there, with a
   list-aware patch. Also make sure `refile.js` never rewrites the body (respect the ownership zones above).
 - **Existing 150 notes do not have `day_index` yet**: backfill after the writer change, idempotent, skipping `_index.md` and the
-  `_series/` masters, including cancelled and `DELETED-` notes. Days without an `_index.md` (created lazily) leave unresolved links;
-  decide whether sync should create the day's `_index.md` when it writes an event note.
+  `_series/` masters, including cancelled and `DELETED-` notes.
+- Every day folder that holds event notes already has an `_index.md` (`ensureIndex(startStr)`, ~line 71; verified 32 of 32 on
+  2026-09-23), so single-day links resolve. For a multi-day event, call the same ensure for **every covered day**, so each
+  `day_index` link resolves.
 
 ## A second, separate bug in `refile.js`
 

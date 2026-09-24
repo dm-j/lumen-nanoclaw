@@ -42,9 +42,9 @@ on a scratch day (created, edited, removed). There were 0 routine-owned notes to
    cancelled and `DELETED-` notes so the field is uniform. Idempotent script, run once **after** (1) and (2)
    land: if sync's upsert rebuilds a note's frontmatter from scratch, a backfill done first would be undone.
    Verify with a sample note and a grep that every event note has exactly one `day_index` key.
-4. Dangling links are expected: `_index.md` is created lazily (only 32 exist for 150 notes), so many links
-   point at days with no `_index.md` yet. Obsidian shows them as unresolved until the file exists. Decide
-   whether sync should create the day's `_index.md` when it writes an event note.
+4. Every day folder holding event notes already has an `_index.md` (`ensureIndex`, verified 32 of 32 on 2026-09-23), so
+   single-day links resolve. For multi-day events ensure an index for every covered day (an earlier version of this note wrongly
+   said many links would dangle).
 
 Routine's own `parseFrontmatter` (`calendar/vault-events.ts`) reads only flat `key: value` lines: a
 `day_index:` list is ignored by it (the item lines don't match), which is safe. Nothing in Routine reads the field.
