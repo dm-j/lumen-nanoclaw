@@ -70,6 +70,8 @@ Only these, if any, should tip it toward building the per-day block:
 - Per-turn injection needs a cheap, day-scoped read and `mtn list` (a process spawn per call, over all tasks) is too slow or too noisy.
 - A day-scoped checklist that lives *in the daily note* proves to be a different thing David wants than a tracked task with metadata.
 - The agents' ability to edit tasks safely (compare-and-write, addressable IDs) turns out to be poor against TaskNotes.
+- TaskNotes turns out unable to express the structure David needs (grouped, ordered, dependent tasks): see
+  [task-graph-dependencies.md](task-graph-dependencies.md), raised 2026-09-24, where that is still an open worry, not a finding.
 
 ## Open questions
 
