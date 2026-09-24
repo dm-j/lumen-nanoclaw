@@ -293,3 +293,20 @@ day. It is a scheduled task with a `--script` gate, not a change to her instruct
 - To recreate: `ncl tasks create --group ag-1785691207755-h9j29a --name nightly-notes-carryover --recurrence "2 0 * * *" --stateless
   --prompt ... --script ...`; the task's mirror file is in `groups/lumen-dmj/tasks/` in the instance repo.
 - Hand-typed notes without an ID show up in the gate output as `[?]` too; she can read them and re-add the relevant ones as new notes.
+
+### Soft delete, and "delete what is done" advice — 2026-09-23
+
+- **`notes_delete` no longer removes the note.** It strikes the note through, one `~~...~~` wrapper per line so multi-line notes render,
+  and appends `-deleted` to its ID: `> - ~~09:14 routine: finished thing~~ ^bwlof6-deleted`. The text stays in the file as a record.
+  **Only the ID decides** whether a note is hidden: `notes_read` and the per-turn injection skip every note whose ID ends in `-deleted`.
+  Strikethrough text on its own (for example typed by hand, with or without an ID) is *not* hidden, so `~~...~~` stays free to mean
+  something else later (David's call).
+- A deleted note cannot be addressed again: its ID is no longer a 6-character ID, so `notes_edit`/`notes_delete` of the short ID say "no
+  note with id", and the full `...-deleted` ID is rejected by the length check. A deleted note's ID is also never reused for a new note.
+- **Advice in the injected notes text** (both Routine's and Lumen's `wake_script`): "When a note is no longer useful, because it is
+  completed, cancelled, or no longer relevant, actively delete it with notes_delete. Change one with notes_edit."
+- Interaction with the nightly carry-over: the gate reads the previous day through `notes_read`, so deleted notes are not offered to
+  Lumen, and a day whose notes were all deleted counts as empty (the task is skipped).
+- Tested: `notes-block.selftest.ts` (soft-delete format, multi-line strike, hiding, non-addressability, ID reservation over 300
+  additions, hand-struck notes still visible) and live through the real wrapper on a scratch day. The two wake scripts were verified on
+  the host and applied with `ncl groups config update`.
