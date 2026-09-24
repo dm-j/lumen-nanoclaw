@@ -90,20 +90,30 @@ It deletes a day folder that holds only `_index.md` (~line 120). The daily notes
 - Done when: every event note has exactly one `^event-desc` line and one `day_index`; none contains `**When:**`, `Download Teams`
   or an 80-underscore rule; a re-sync of an unchanged event is still a no-op; a changed event round-trips as above.
 
-## Optional, added 2026-09-24: throttle and single-flight for `sync.js`
+## Optional, added 2026-09-24: hybrid throttle for `sync.js` (execute on first hit, then throttle)
 
 Not part of the layout change above; a separate improvement worth doing in the same pass. Today every call to Routine's calendar tools
 (`calendar_personal_today/tomorrow/week`) runs `sync.js --days=N` before reading: a network fetch plus file writes, on every call. The
 hourly cron runs it too, and nothing stops two runs overlapping. A future per-turn "Now and Next" injection for Lumen
 ([lumen-now-and-next.md](lumen-now-and-next.md)) will want to read the calendar notes without syncing at all.
 
-- **Throttle, not debounce** (a debounce delays reads). Add a flag such as `--if-older-than=<seconds>`: skip the fetch when a
-  successful sync finished more recently than that. A 2 to 5 minute default for interactive callers is plenty, since calendar feeds
-  often lag anyway; the hourly cron passes nothing and always runs.
-- **Coverage-aware:** record the last successful sync's time and the `--days` window it covered (for example a small state file under
-  the script's `logs/` or next to `current-tz.json`); a recent 7- or 30-day sync satisfies a later 1-day request.
-- **Single-flight:** a lock file so two runs (cron plus a tool call, or two tool calls) cannot overlap; the second waits briefly or skips
-  and reads the notes as they are. A stale-lock timeout, as `inbox-watch.sh` already does for its own lock.
+**Semantics (David: "a hybrid: execute on first hit, then throttle subsequent").** Leading-edge execution, concurrent callers
+coalesced onto the in-flight run, then a throttle window. A caller passes something like `--if-older-than=<seconds>`; then, in order:
+
+| Situation when a caller arrives | Behaviour |
+|---|---|
+| A sync is **running** (lock held) | **Wait** for it (bounded, e.g. 30 s) and share its result; do **not** start another. The caller gets fresh data, which skipping would not give it. |
+| No sync running, and the last **successful** sync is older than the window, or did not cover the requested `--days` | **Run now** (leading edge). |
+| No sync running, and a successful sync inside the window already **covers** the requested `--days` | **Skip**; read the notes as they are. |
+| The last attempt **failed** | Do not treat it as a success (the next hit retries), but keep a short failure cooldown (for example 30 s) so a feed that is down is not hammered by every call. |
+
+- **No trailing run is needed.** Staleness is bounded by the window, and the first hit after the window is itself a leading-edge run,
+  so nothing has to be scheduled in the background.
+- **Window:** a 2 to 5 minute default for interactive callers is plenty (calendar feeds often lag anyway). The hourly cron passes no
+  flag and always runs.
+- **Coverage-aware:** record the last successful sync's finish time and the `--days` window it covered (a small state file under the
+  script's `logs/` or next to `current-tz.json`); a recent 7- or 30-day sync satisfies a later 1-day request.
+- **Lock:** a lock file for the single-flight part, with a stale-lock timeout as `inbox-watch.sh` already does for its own lock.
 - **Callers** then pass the flag: Routine's `syncCalendar` in `mcp-shims/routine/calendar/vault-events.ts` (our repo) is the only current
-  one. If the flag is not available yet, a caller-side check (last-run timestamp file plus the same lock) in that one function is an
-  acceptable stopgap.
+  one. If the flag is not available yet, a caller-side version of the same table (timestamp file plus the same lock) in that one
+  function is an acceptable stopgap.

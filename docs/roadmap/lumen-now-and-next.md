@@ -40,7 +40,7 @@ context each turn". That is not what the system does; the briefer model inferred
   hourly cron already keeps them fresh.
 - **Sync throttle (a likely consequence).** Today every calendar tool call syncs first, and nothing prevents overlapping runs. Adding a
   min-age flag and a lock to `sync.js` (vault project) is worth doing alongside this; the spec is at the end of
-  [vault-sync-handoff-brief.md](vault-sync-handoff-brief.md) ("throttle and single-flight").
+  [vault-sync-handoff-brief.md](vault-sync-handoff-brief.md) ("hybrid throttle": run on the first hit, coalesce concurrent callers onto the in-flight run, throttle the rest).
 - **Cost:** one segment is about 0.75 s cold, in parallel with the others; the computation itself is trivial (the shims already
   produce `time_until_start` and `time_until_end` for each event).
 - **Edge cases:** all-day events (probably not "now"), overlapping events (show all current? the one ending soonest?), events that
