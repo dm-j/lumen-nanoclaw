@@ -5,6 +5,24 @@ Ownership: the note writer is `scripts/calendar-sync/sync.js` in the vault, main
 project's Claude (memory `vault-calendar-sync-ownership`), so this is a hand-off spec, nothing built here. Do it
 together with [calendar-day-index-links.md](calendar-day-index-links.md): same writer, same backfill pass.
 
+## Status 2026-09-23
+
+- **Backfill done** on David's instruction, by `scripts/calendar-note-body-backfill.mjs` (dry run by default,
+  `--apply` writes, idempotent, `--only <substring>` shows one note). Applied to all 150 event notes: `**When:**`
+  line removed, Teams signature screened to join link / Meeting ID / Passcode / Phone Conference ID (29 notes
+  used the main layout; the other layouts were spot-checked), description wrapped in a `> ` quote block ending
+  in a `^event-desc` line. Verified: a second run skips all 150, zero notes still have a `**When:**` line or Teams
+  boilerplate, Routine's calendar tools still read the notes. Backup of the whole Calendar folder before applying:
+  `~/lumen-calendar-backup-20260923.tgz`. `day_index` was **not** part of this pass.
+- **Routine's note writers** no longer emit `**When:**` (live-verified).
+- **NOT done, and it matters: `sync.js` still writes the old layout** (`**When:**` line, raw description, whole-body
+  overwrite). Until the vault project's Claude changes it, an upstream edit to an event (a Teams description or time
+  change) makes sync re-render that one note in the old format, dropping the block and anything typed below it.
+  Do not rely on typed notes below `^event-desc` until that lands. The four `sync.js` changes are listed below.
+- The dial-in number (`+1 615-924-8724,,ID#`) and `Video Conference ID` were dropped, as specified. One forwarded
+  email thread (`comptroller-trams-pre-assessment-info...`) contains a plain underscore line but no Teams
+  content, so only its quoting changed.
+
 ## Three requests, one mechanism
 
 1. **Screen the Teams signature.** Keep only the join link, Meeting ID, Passcode and Phone Conference ID.
