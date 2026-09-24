@@ -311,3 +311,21 @@ day. It is a scheduled task with a `--script` gate, not a change to her instruct
 - Tested: `notes-block.selftest.ts` (ID-only delete with no `~~` added, hiding, non-addressability, ID reservation over 300 additions,
   hand-struck notes still visible) and live through the real wrapper on a scratch day (raw block showed `^2z92by-deleted` with the text
   untouched). The two wake scripts were verified on the host and applied with `ncl groups config update`.
+
+### Agents double-signed notes — fixed 2026-09-24
+
+Symptom: every note Lumen wrote read `00:36 lumen: Lumen: Wish Heather a happy birthday!`. The tool stamps `HH:MM <who>:` in front of the
+text itself, but the tool description no longer said so (it was removed when the descriptions were cut down to "Use when..."
+triggers), so she signed her own name as well, having only ever seen the rendered `[id] HH:MM lumen: text` form.
+Two changes, following the "one simple documented form, parse generously" rule:
+
+- **Tell her the simple way:** the `text` parameter of `notes_add`/`notes_edit` now says "The note text, without your name or a time
+  (both are added for you)."
+- **Forgive it anyway:** `cleanNoteText` (`mcp-shims/routine/notes/notes-block.ts`) drops a redundant leading time and/or the caller's
+  **own** name, repeatedly (`Lumen: Lumen:`), before stamping. It never strips another agent's name ("Routine: please move the 3pm"
+  from Lumen is content), a name without a separator, a non-leading occurrence, or the whole text. Covered by `notes-block.selftest.ts`
+  and checked live on a scratch day through Lumen's wrapper.
+
+Lesson worth keeping for future descriptions: cutting implementation detail from a tool description is right, but a *behaviour the
+caller would otherwise duplicate* (here, automatic attribution) belongs in the parameter text. Existing notes with the doubled name were left as
+written.
