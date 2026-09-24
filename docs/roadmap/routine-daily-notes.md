@@ -270,3 +270,26 @@ off at thousands of words. `daily_note/day.selftest.ts` generates every prefix o
 when unique and is refused when not, plus the resolveDay cases. Checked through the real wrappers too: `notes_read` `t` and
 `notes_add` `s` fail with the ambiguity message before touching the vault; `daily_note_read` `w`/`y`/`tom` resolve correctly. The tool
 `day` descriptions still say "a weekday name"; prefixes are accepted silently.
+
+### Nightly notes carry-over for Lumen — 2026-09-23
+
+A daily task on Lumen's group (`nightly-notes-carryover`, series `nightly-notes-carryover-743c`, cron `2 0 * * *` in her timezone,
+`--stateless`) hands her the previous day's notes just after midnight so she can move the ones that still matter into the new
+day. It is a scheduled task with a `--script` gate, not a change to her instructions:
+
+- **Gate** (runs in her container, zero tokens when it skips): `host-shim notes/read` with `{"day":"yesterday"}`. Empty (`(no notes)`)
+  gives `{"wakeAgent": false}`; otherwise `{"wakeAgent": true, "data": "<the notes text>"}`, which the runner renders into her
+  prompt as the script output. A failed read exits 1, so the run is recorded as failed and backs off rather than silently skipping
+  a day.
+- **Prompt**, in short: decide which of yesterday's notes are still relevant today; for each, `notes_add` it to today (reworded if
+  it needs to stand alone); do it **deliberately, only because it will genuinely still matter, never just because it is there**;
+  carrying over none is a perfectly good outcome; do not change or delete the previous day's notes; do not message David
+  (housekeeping); finish with a one-line "N notes, M carried over" summary.
+- **Verified live** with a rehearsal (`ncl tasks run`) before the first real 00:02 run: two scratch notes on the previous day, one
+  plainly stale ("buy milk (done)") and one plainly still open ("call the dentist before Friday - not yet done"). She carried only
+  the dentist note (reworded, dropping "not yet done"), left the other, did not touch the previous day's notes, and sent no
+  message. Scratch notes and her copy were removed afterwards. The gate's three paths (empty, notes, failed read) were also tested
+  on the host against a stand-in `host-shim`.
+- To recreate: `ncl tasks create --group ag-1785691207755-h9j29a --name nightly-notes-carryover --recurrence "2 0 * * *" --stateless
+  --prompt ... --script ...`; the task's mirror file is in `groups/lumen-dmj/tasks/` in the instance repo.
+- Hand-typed notes without an ID show up in the gate output as `[?]` too; she can read them and re-add the relevant ones as new notes.
