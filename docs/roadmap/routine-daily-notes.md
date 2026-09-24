@@ -254,3 +254,12 @@ first wake of a day adds it to that day's note (the same self-heal every `notes_
   them keep working, but their output now includes work events. Their descriptions say so, and Routine's
   `instructions.prepend.md` was rewritten to describe the calendar (personal + work, labelled; real synced events read-only,
   own events addable/editable) and the `notes_*` tools accurately. Verified: the week view returned 25 events, 13 personal and 12 work.
+
+### Weekday abbreviations — 2026-09-23
+
+The shared `resolveDay` (`mcp-shims/routine/daily_note/shared.ts`, used by `daily_note_*` and every `notes_*` tool for both
+Routine and Lumen) also accepts common weekday abbreviations, case-insensitive with an optional trailing period: `sun`, `mon`,
+`tue`/`tues`, `wed`/`weds`, `thu`/`thur`/`thurs`, `fri`, `sat`. They mean exactly what the full name means: always the next
+occurrence, never today or a past day. Checked by `daily_note/day.selftest.ts` (compares each abbreviation to its full name,
+so it does not depend on the date) and through the real `daily_note_read` wrapper (`Fri` -> 2026-09-25, `thurs.` -> 2026-09-24).
+The tool `day` parameter descriptions still say "a weekday name"; abbreviations are accepted silently.
