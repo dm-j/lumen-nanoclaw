@@ -6,6 +6,8 @@ Related: [db.md §4](db.md#4-cross-mount-visibility) (the problem this replaces)
 
 ---
 
+> **Resume here (2026-09-23):** the status below is stale — read §0.5–0.6 first. Short version: the 40s "drop" was a chain-divergence resync storm, not Docker networking. To resume: (1) build a divergence breaker (bounded replay; on a non-advancing resync, reset or fail loudly); (2) reset both sides' sync state whenever a group's transport flips; (3) work out how the chains diverged at seq 490; (4) redo a real chat round-trip canary from clean state — with the container stopped and **never renaming/moving anything under a live bind mount**. Loose ends: the `_ping-test` session's host sync tables no longer match its container-side `.sync-local` (reset both again before any canary); `.sync-local.diverged-20260923` is still in that session dir; temporary instrumentation is an uncommitted diff in worktree `.claude/worktrees/sync-drop-instrument` (never merge); DB backup at `~/Backups/lumen-nanoclaw-db-20260923`.
+
 ## 0. Current status, as of 2026-09-19 (read this first)
 
 **Done**: Phases 0–2 (scaffolding, host WebSocket server, container sync client + spawn wiring), Bugs A/B/C from the 2026-08-16 canary, and outbound retry-across-reconnect (§8.12) are all built, merged to `main`, and unit-tested. The mechanism itself works.
