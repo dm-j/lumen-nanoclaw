@@ -5,10 +5,14 @@ Ownership: the note writer is `scripts/calendar-sync/sync.js` in the vault, main
 project's Claude (memory `vault-calendar-sync-ownership`), so this is a hand-off spec, nothing built here. Do it
 together with [calendar-day-index-links.md](calendar-day-index-links.md): same writer, same backfill pass.
 
-## Two requests, one mechanism
+## Three requests, one mechanism
 
 1. **Screen the Teams signature.** Keep only the join link, Meeting ID, Passcode and Phone Conference ID.
-2. **Put the meeting's own text in a single `> ` quote block with a block ID, and never touch anything outside it.**
+2. **Drop the `**When:**` line** from the template and the sync process (David, 2026-09-23): `local_start` and
+   `local_end` in the frontmatter already carry it, and nothing reads the line (checked: it only has writers,
+   `sync.js` ~lines 140-141 and Routine's two writers). **Routine's writers are done** (`vault-events.ts`,
+   verified live on a scratch note); `sync.js` and the backfill are the vault project's.
+3. **Put the meeting's own text in a single `> ` quote block with a block ID, and never touch anything outside it.**
    Everything David or an agent types below the block survives a re-sync.
 
 David's reasoning for (2): notes typed into an event note must not be overwritten when the upstream Teams
@@ -24,8 +28,6 @@ unchanged-hash skip is at ~line 92), so any typed note would be lost on the firs
 ---
 # A-Team Standup
 
-**When:** 2026-09-22 09:30 → 09:45, America/Chicago time (...)
-
 > [Join the meeting](https://teams.microsoft.com/l/meetup-join/...)
 > Meeting ID: 278 106 922 700
 > Passcode: xTPgFd
@@ -39,11 +41,11 @@ unchanged-hash skip is at ~line 92), so any typed note would be lost on the firs
 - The block ID goes on its own line after one blank line (an Obsidian quote-block ID), same convention as the
   `^daily-notes` block in the daily notes ([routine-daily-notes.md](routine-daily-notes.md), 2026-09-23 addendum).
 - **Ownership zones on every re-sync:** frontmatter keys sync owns are updated in place (keys others add, such
-  as `conflicts-with`, are kept); the title and `**When:**` line are regenerated; the block up to and including
+  as `conflicts-with`, are kept); the title is regenerated; the block up to and including
   the `^event-desc` line is regenerated; **everything after the `^event-desc` line is preserved byte-for-byte**.
   Nothing a person types may live inside the quote block, since sync owns it.
 - If the marker is missing on an existing note, keep the whole existing body and insert a new block after the
-  `**When:**` line rather than overwriting.
+  title rather than overwriting.
 - The whole upstream description goes in the block, not just Teams notes: an organizer's agenda text before
   or after the signature is kept. Blank lines inside become bare `>` lines. Convert `text<URL>` to
   `[text](URL)`.
@@ -74,17 +76,18 @@ digits.
   (unchanged hash means skipped). Add a format version to the hash inputs, or run a one-off migration; the
   migration is needed for the 150 existing notes anyway.
 - **Backfill** (once, after the writer change lands, idempotent, dry-run first on a copy): for each event note,
-  screen the description as above, wrap it in the `^event-desc` block, and keep any content that is not sync's
+  remove the `**When:**` line, screen the description as above, wrap it in the `^event-desc` block, and keep any content that is not sync's
   template output below the block instead of dropping it. Report notes it could not classify rather than guessing.
-  Verify: every event note has exactly one `^event-desc` line, and no note still contains `Download Teams` or an
-  80-underscore rule.
-- Check `refile.js` too: if it rewrites the `**When:**` line or the body on a timezone re-file, it must respect
-  the same ownership zones.
+  Verify: every event note has exactly one `^event-desc` line, and no note still contains `Download Teams`, an
+  80-underscore rule, or a `**When:**` line.
+- Check `refile.js` too: if it rewrites the body on a timezone re-file, it must respect the same ownership zones.
 
 ## Follow-on work in this repo, once the marker exists
 
 - `calendar_note_append` (Routine) appends at the end of the body. It must append **below** the `^event-desc`
   line, with a blank line first, so the text can never be absorbed into the quote block.
 - `personal_edit`'s `rewriteEventNote` overwrites the whole body of routine-owned notes, so it would destroy
-  typed notes the same way. It should rewrite only the frontmatter, title, `**When:**` line and the block, and
-  `personal_add` should put its description in the same block layout.
+  typed notes the same way. It should rewrite only the frontmatter, title and the block, and `personal_add`
+  should put its description in the same block layout. Related existing bug (seen 2026-09-23): `personal_edit`
+  takes `location`/`description` only from that call's arguments, so an edit that omits them silently drops both
+  from the note. Fixing the rewrite to preserve the body fixes this too.
