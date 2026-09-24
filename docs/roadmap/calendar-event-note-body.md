@@ -100,7 +100,16 @@ digits.
   80-underscore rule, or a `**When:**` line.
 - Check `refile.js` too: if it rewrites the body on a timezone re-file, it must respect the same ownership zones.
 
-## Follow-on work in this repo, once the marker exists
+## Follow-on work in this repo: done 2026-09-23
+
+Both items below are built and live-verified on a scratch note (add, typed text below the marker via
+`calendar_note_append`, a `conflicts-with` list, then `personal_edit` of the title only, then clearing the location):
+`calendar_note_append` already appends at the end of the file, i.e. below `^event-desc`, so it needed only a comment;
+`personal_edit`/`rewriteEventNote` now read the note first and keep an omitted `location`/`description`, every frontmatter key
+it does not generate (e.g. `conflicts-with`), and everything below the marker; `personal_add` writes the block layout.
+Pure logic is in `calendar/event-body.ts` with `event-body.selftest.ts`. The section below is the original spec.
+
+## Follow-on work in this repo, once the marker exists (original spec)
 
 - `calendar_note_append` (Routine) appends at the end of the body. It must append **below** the `^event-desc`
   line, with a blank line first, so the text can never be absorbed into the quote block.
