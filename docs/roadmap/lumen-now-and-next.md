@@ -38,6 +38,9 @@ context each turn". That is not what the system does; the briefer model inferred
   (`syncCalendar` in `range-events.ts`), a network fetch and file writes on every call. That is fine for a tool call, wrong for a
   per-turn segment (and against the read-only rule for segments). The segment should read the vault's calendar notes directly; the
   hourly cron already keeps them fresh.
+- **Sync throttle (a likely consequence).** Today every calendar tool call syncs first, and nothing prevents overlapping runs. Adding a
+  min-age flag and a lock to `sync.js` (vault project) is worth doing alongside this; the spec is at the end of
+  [vault-sync-handoff-brief.md](vault-sync-handoff-brief.md) ("throttle and single-flight").
 - **Cost:** one segment is about 0.75 s cold, in parallel with the others; the computation itself is trivial (the shims already
   produce `time_until_start` and `time_until_end` for each event).
 - **Edge cases:** all-day events (probably not "now"), overlapping events (show all current? the one ending soonest?), events that

@@ -89,3 +89,21 @@ It deletes a day folder that holds only `_index.md` (~line 120). The daily notes
   `^event-desc`, and keeps `conflicts-with`/other extra keys.
 - Done when: every event note has exactly one `^event-desc` line and one `day_index`; none contains `**When:**`, `Download Teams`
   or an 80-underscore rule; a re-sync of an unchanged event is still a no-op; a changed event round-trips as above.
+
+## Optional, added 2026-09-24: throttle and single-flight for `sync.js`
+
+Not part of the layout change above; a separate improvement worth doing in the same pass. Today every call to Routine's calendar tools
+(`calendar_personal_today/tomorrow/week`) runs `sync.js --days=N` before reading: a network fetch plus file writes, on every call. The
+hourly cron runs it too, and nothing stops two runs overlapping. A future per-turn "Now and Next" injection for Lumen
+([lumen-now-and-next.md](lumen-now-and-next.md)) will want to read the calendar notes without syncing at all.
+
+- **Throttle, not debounce** (a debounce delays reads). Add a flag such as `--if-older-than=<seconds>`: skip the fetch when a
+  successful sync finished more recently than that. A 2 to 5 minute default for interactive callers is plenty, since calendar feeds
+  often lag anyway; the hourly cron passes nothing and always runs.
+- **Coverage-aware:** record the last successful sync's time and the `--days` window it covered (for example a small state file under
+  the script's `logs/` or next to `current-tz.json`); a recent 7- or 30-day sync satisfies a later 1-day request.
+- **Single-flight:** a lock file so two runs (cron plus a tool call, or two tool calls) cannot overlap; the second waits briefly or skips
+  and reads the notes as they are. A stale-lock timeout, as `inbox-watch.sh` already does for its own lock.
+- **Callers** then pass the flag: Routine's `syncCalendar` in `mcp-shims/routine/calendar/vault-events.ts` (our repo) is the only current
+  one. If the flag is not available yet, a caller-side check (last-run timestamp file plus the same lock) in that one function is an
+  acceptable stopgap.
