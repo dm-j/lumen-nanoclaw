@@ -10,8 +10,8 @@ of truth, so re-list it (`find mcp-shims -name '*-host'`) if this drifts.
 
 | Group (folder) | Shims | Servers |
 |---|---|---|
-| lumen-dmj | 21 | `memory`, `task_management`, `vault`, `vector` |
-| routine | 9 | `calendar`, `daily_note`, `notes` |
+| lumen-dmj | 25 | `memory`, `notes`, `task_management`, `vault`, `vector` |
+| routine | 14 | `calendar`, `daily_note`, `notes` |
 | dispatcher | 1 | `gaps` |
 | departure | 2 (orphaned) | `travel`, `vault` |
 
@@ -58,6 +58,11 @@ Locomotion is bounded and gated by a hazard latch.
 | `vector_photo` | One still from the forward camera (1280x720, base64). |
 | `vector_detect` | Capture a still and run YOLOv8n detection. First call downloads the model and is slow (60s timeout). |
 | `vector_continue_action` | "Nothing new, keep him visibly alive." Fires a random small screen flash or short sound. Its description is deliberately written as the default choice on a check-in, to compete with `move`/`say`. |
+
+**`notes`** — the ID'd notes on a day's `## Notes` block: `notes_read`, `notes_add`, `notes_edit`,
+`notes_delete`. Same code as routine's `notes` server (`mcp-shims/routine/notes/notes.ts`); the four wrappers
+here only set which group's timezone applies and the name stamped on notes she writes (`lumen`). Descriptions
+and behaviour: see the `notes_*` rows under `routine` below.
 
 ## routine
 

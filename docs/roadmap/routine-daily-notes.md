@@ -234,3 +234,23 @@ WAKE_NOTE_CONTENT="$CONTENT" node -e "console.log(JSON.stringify({wakeAgent:true
 
 Side effect worth knowing: `notes_read` on a day whose `_index.md` has no `## Notes` block inserts the empty block, so the
 first wake of a day adds it to that day's note (the same self-heal every `notes_*` call does).
+
+### Lumen's notes tools, capped injection, calendar labels — 2026-09-23
+
+- **Lumen has `notes_read/add/edit/delete`** (`mcp-shims/lumen-dmj/notes/`), the same code as Routine's: the wrappers set
+  `NOTES_GROUP_ID` (her timezone) and `NOTES_WHO=lumen`, so her notes are stamped `HH:MM lumen:`. `notes.ts` now reads both
+  from the environment, defaulting to Routine's. Her persona (`groups/lumen-dmj/instructions.prepend.md`) has a short
+  "Daily Notes" section.
+- **Injection for Lumen uses the same `wake_script` as Routine**, not a briefing-compiler change: the wake script runs inside the
+  agent-runner poll loop once per batch of messages and is prepended to that turn's prompt, so the notes are fresh on every turn
+  ("her latest turn's briefing" in effect) with no host code. Both groups' scripts now **cap the injected notes at 4000
+  characters** (appending "[...truncated: use notes_read for the full list]"). The capped script was verified on the host against
+  stand-ins for `host-shim` (oversized list, empty list, and against Lumen's real wrapper); the mechanism itself was verified live
+  on Routine earlier the same day. Lumen was not woken to test it (no running container at the time, and a night-time
+  diagnostic could message David); her next message spawns a container with the new tools, script and instructions.
+  Cost note: each turn now runs one extra `host-shim notes/read` (an obsidian CLI read, well under a second).
+- **Calendar labels (Routine).** `calendar_personal_today/tomorrow/week` now label each event with its note's `kind`
+  (`personal`, `work` or `routine`) instead of always `personal`; the tool names are unchanged so scheduled tasks that call
+  them keep working, but their output now includes work events. Their descriptions say so, and Routine's
+  `instructions.prepend.md` was rewritten to describe the calendar (personal + work, labelled; real synced events read-only,
+  own events addable/editable) and the `notes_*` tools accurately. Verified: the week view returned 25 events, 13 personal and 12 work.
