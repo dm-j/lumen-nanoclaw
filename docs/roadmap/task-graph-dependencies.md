@@ -21,6 +21,57 @@ would tip that decision.
   each with a `tn_role`. The plugin's code references `blockedBy`, `blocking`, `dependencies`, `subtasks` and `projects`.
 - Lumen reaches it through `mcp-shims/lumen-dmj/task_management/` (`tasks_capture`, `tasks_list`, `tasks_finish`, over the `mtn` CLI).
 
+## The ideal: a collapsing task DAG (David's concept, thinking out loud, 2026-09-24)
+
+**Not a design, and not a statement about how TaskNotes works.** It is what David would want to *see and use*, recorded so the
+idea survives until there is energy for real design work.
+
+**The goal:** always be able to pick the next thing to do from one list of *available* tasks, across every project, without
+hand-tracking what is waiting on what.
+
+**Two relations over the same tasks**
+
+- **Decomposition:** a task can be broken into child tasks, and those into further children, to any depth. A task with no children
+  is a **leaf**.
+- **Dependency:** a task can be blocked by other tasks (leaf or parent), at any level.
+
+**Rules (the graph extends downwards and collapses upwards)**
+
+1. **Only leaves are checked by hand.** A parent has no state of its own.
+2. **A parent is complete exactly when all its children are complete.** Checking off the last child completes the parent, which can
+   in turn complete its own parent, and so on up the graph.
+3. **A completed task no longer blocks anything.** This holds for parents too: a task that depends on a parent is released when the
+   parent's last leaf is checked.
+4. **Blocking extends downwards.** A leaf is blocked if it, or any of its ancestors, has an incomplete blocker: a whole
+   sub-project can wait on something without marking each leaf.
+5. **Available** means an incomplete leaf that is not blocked.
+
+**The views this gives (the point of it)**
+
+- **Available:** the unblocked leaves, across all projects. This is the list David picks from.
+- **Blocked:** the blocked leaves, listed separately and **de-emphasized**, each showing what it is waiting on (the nearest
+  incomplete blocker), so it is clear what completing a task would unlock.
+- Optionally the whole graph as a canvas (option 1 below), for seeing the shape.
+
+**Why it suits this system:** both lists are a pure function of the graph, so they can be computed deterministically rather than
+worked out by a model: cheap enough for a per-turn injection segment for Lumen ("what can David do now") and for a tool that
+answers "what is available?" exactly. Derived state (parents' completion, blocked or not) is computed on read and never stored, so
+it cannot disagree with the leaves.
+
+**Questions this raises for when it is designed** (not decisions)
+
+- Cycles must be rejected (it has to stay a DAG); where is that enforced?
+- Can a child have more than one parent (a true DAG), or is decomposition a tree with dependencies as the only cross-links?
+- What does "dropped" or "cancelled" mean: does it count as complete for blocking and collapsing, or stay visible as unresolved?
+- Can a parent be checked by hand while children are incomplete (an override), or is that disallowed?
+- A parent with no children yet: a leaf until it is broken down?
+- How are available leaves ordered (priority, deadline, project, or an explicit order field)?
+
+**Relation to TaskNotes:** the two relations map onto properties TaskNotes already has (`projects` for containment, `blockedBy`
+for dependency), so this may be buildable as a *derived view and query layer over TaskNotes* rather than a new store: compute
+the states above from those properties plus each task's completion status, and render the available and blocked lists (and,
+optionally, a canvas). Whether that is enough is exactly what the three-level test below is for.
+
 ## Where the gap seems to be
 
 - **Not obviously the data model.** The schema has `projects` (a task belongs to one or more parents, which can themselves be
