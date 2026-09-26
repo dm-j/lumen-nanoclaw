@@ -13,6 +13,7 @@ import { ensureContainerConfig } from './db/container-configs.js';
 import { stageGroupPersona } from './group-persona.js';
 import { log } from './log.js';
 import { migrateClaudeMemorySettings } from './migrate-claude-memory-settings.js';
+import { pooledShimsFor } from './modules/host-shim/registry.js';
 import { providerProvidesAgentSurfaces } from './providers/provider-container-registry.js';
 import type { AgentGroup } from './types.js';
 
@@ -95,21 +96,25 @@ export function initGroupFilesystem(
   // (src/host-shim-templates/briefing-host), copied once and never
   // overwritten again — a group's own edits (e.g. its VAULT_PATH) must
   // survive every future spawn/restart.
-  const hostShimsDir = path.join(HOST_SHIMS_DIR, group.folder);
-  if (!fs.existsSync(hostShimsDir)) {
-    fs.mkdirSync(hostShimsDir, { recursive: true });
-    initialized.push('host-shims/');
-  }
-  // transcript-append-host, digest-daily-host: same seed-once-never-overwrite
-  // treatment, for the vault memory pipeline (live per-turn transcript
-  // export + scheduled daily digest generation via add-host-cron).
-  for (const shimName of ['briefing-host', 'transcript-append-host', 'digest-daily-host', 'digest-rollup-host']) {
-    const shimDst = path.join(hostShimsDir, shimName);
-    const shimSrc = path.join(HOST_SHIM_TEMPLATES_DIR, shimName);
-    if (!fs.existsSync(shimDst) && fs.existsSync(shimSrc)) {
-      fs.copyFileSync(shimSrc, shimDst);
-      fs.chmodSync(shimDst, 0o755);
-      initialized.push(`host-shims/${shimName}`);
+  // A group listed in host-shims/_registry.json draws from the shared pool instead (see
+  // modules/host-shim/registry.ts): no private directory, nothing seeded.
+  if (!pooledShimsFor(group.id, 'host')) {
+    const hostShimsDir = path.join(HOST_SHIMS_DIR, group.folder);
+    if (!fs.existsSync(hostShimsDir)) {
+      fs.mkdirSync(hostShimsDir, { recursive: true });
+      initialized.push('host-shims/');
+    }
+    // transcript-append-host, digest-daily-host: same seed-once-never-overwrite
+    // treatment, for the vault memory pipeline (live per-turn transcript
+    // export + scheduled daily digest generation via add-host-cron).
+    for (const shimName of ['briefing-host', 'transcript-append-host', 'digest-daily-host', 'digest-rollup-host']) {
+      const shimDst = path.join(hostShimsDir, shimName);
+      const shimSrc = path.join(HOST_SHIM_TEMPLATES_DIR, shimName);
+      if (!fs.existsSync(shimDst) && fs.existsSync(shimSrc)) {
+        fs.copyFileSync(shimSrc, shimDst);
+        fs.chmodSync(shimDst, 0o755);
+        initialized.push(`host-shims/${shimName}`);
+      }
     }
   }
 
@@ -119,7 +124,7 @@ export function initGroupFilesystem(
   // itself) but auto-exposed as an MCP tool per script instead of requiring
   // a Bash-tool call. Empty by default — no seeded scripts.
   const mcpShimsDir = path.join(MCP_SHIMS_DIR, group.folder);
-  if (!fs.existsSync(mcpShimsDir)) {
+  if (!pooledShimsFor(group.id, 'mcp') && !fs.existsSync(mcpShimsDir)) {
     fs.mkdirSync(mcpShimsDir, { recursive: true });
     initialized.push('mcp-shims/');
   }

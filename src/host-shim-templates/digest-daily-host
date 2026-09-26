@@ -38,7 +38,7 @@ esac
 set -eu
 
 # --- Per-group configuration — edit this for your vault ---
-VAULT_PATH="/CHANGE/ME/path/to/this/groups/obsidian/vault"
+VAULT_PATH="${VAULT_PATH:-/CHANGE/ME/path/to/this/groups/obsidian/vault}"
 VAULT_TIMEZONE="America/Chicago"
 # --- end configuration ---
 

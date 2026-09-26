@@ -29,10 +29,7 @@ import { getAgentGroup } from '../../db/agent-groups.js';
 import { getContainerConfig } from '../../db/container-configs.js';
 import { HOST_SHIMS_DIR, MCP_SHIMS_DIR } from '../../config.js';
 import { log } from '../../log.js';
-
-const NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
-// mcp-shims namespaced form: "<server>/<leaf>", each segment matching NAME_RE.
-const NAMESPACED_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}\/[a-z0-9][a-z0-9_-]{0,63}$/;
+import { NAME_RE, NAMESPACED_NAME_RE, pooledShimsFor } from './registry.js';
 const TIMEOUT_MS = 30_000;
 const MAX_BUFFER = 1024 * 1024; // 1MB cap on captured stdout/stderr
 
@@ -143,13 +140,25 @@ export function execHostShim(
 
   let shimsDir: string | null;
   let leaf: string;
+  let shimEnv: Record<string, string> | undefined;
+  let stateDir: string | undefined;
+  // Registry group (see registry.ts): scripts come from the shared pool, gated by the group's allowlist.
+  const pooled = pooledShimsFor(agentGroupId, namespaced ? 'mcp' : 'host');
+  if (pooled) {
+    shimEnv = pooled.shims[name];
+    stateDir = pooled.stateDir;
+    if (!shimEnv) {
+      log.warn("host-shim: not in this group's registry allowlist", { agentGroupId, name });
+      return Promise.resolve(refuse(`no whitelisted shim named "${name}"`));
+    }
+  }
   if (namespaced) {
     const [server, rest] = name.split('/');
-    shimsDir = resolveMcpShimsDir(agentGroupId);
+    shimsDir = pooled ? pooled.poolDir : resolveMcpShimsDir(agentGroupId);
     if (shimsDir) shimsDir = path.join(shimsDir, server);
     leaf = rest;
   } else {
-    shimsDir = resolveHostShimsDir(agentGroupId);
+    shimsDir = pooled ? pooled.poolDir : resolveHostShimsDir(agentGroupId);
     leaf = name;
   }
   if (!shimsDir) {
@@ -163,11 +172,27 @@ export function execHostShim(
     return Promise.resolve(refuse(`no whitelisted shim named "${name}"`));
   }
 
+  if (stateDir) fs.mkdirSync(stateDir, { recursive: true });
+
   return new Promise((resolve) => {
     execFile(
       shimPath,
       args,
-      { timeout: timeoutMs, maxBuffer: MAX_BUFFER, encoding: 'utf-8' },
+      {
+        timeout: timeoutMs,
+        maxBuffer: MAX_BUFFER,
+        encoding: 'utf-8',
+        ...(stateDir
+          ? {
+              env: {
+                ...process.env,
+                ...shimEnv,
+                NANOCLAW_AGENT_GROUP_ID: agentGroupId,
+                NANOCLAW_SHIM_STATE_DIR: stateDir,
+              },
+            }
+          : {}),
+      },
       (error, stdout, stderr) => {
         // execFile sets error.code to the numeric exit code on a nonzero
         // exit, or a string (e.g. 'ENOENT', 'ETIMEDOUT') if the process
