@@ -77,7 +77,7 @@ For ad-hoc queries from skills or scripts, use the in-tree wrapper rather than t
 | `src/command-gate.ts` | Router-side admin command gate — queries `user_roles` directly (no env var, no container-side check) |
 | `src/modules/approvals/onecli-approvals.ts` | OneCLI credentialed-action approval bridge |
 | `src/modules/permissions/user-dm.ts` | Cold-DM resolution + `user_dms` cache |
-| `src/modules/host-shim/exec.ts` + `mcp-manifest.ts`, `container/agent-runner/src/dynamic-shims.ts` | `host-shims/` (whitelisted host scripts callable via the Bash tool) and `mcp-shims/` (scripts auto-registered as real MCP tools) — see `/mcp-shims` skill for the latter's paradigm |
+| `src/modules/host-shim/exec.ts` + `registry.ts` + `mcp-manifest.ts`, `container/agent-runner/src/dynamic-shims.ts` | `host-shims/` (whitelisted host scripts callable via the Bash tool) and `mcp-shims/` (scripts auto-registered as real MCP tools) — each tree has a shared `_pool/` plus a per-group `_registry.json` allowlist (groups not listed keep a per-group directory); see `/mcp-shims` skill for the paradigm |
 | `src/group-init.ts` | Per-agent-group filesystem scaffold (CLAUDE.md, skills) — agent-runner source is a shared read-only mount, not copied per group |
 | `src/db/container-configs.ts` | CRUD for `container_configs` table (per-group container runtime config) |
 | `src/backfill-container-configs.ts` | Migrates legacy `container.json` files into the DB on startup |
@@ -366,8 +366,8 @@ An item doesn't only get resolved by someone finishing it directly — it can go
 | [docs/agent-runner-details.md](docs/agent-runner-details.md) | Agent-runner internals + MCP tool interface |
 | [docs/host-shims.md](docs/host-shims.md) | The vault-integration host-shim family (briefing/digest/recall/remember/etc.) — what each one is for, trunk-template status, shared conventions |
 | [docs/dispatcher-agent.md](docs/dispatcher-agent.md) | MBIF-style coordination-agent architecture: the `description`/"Available agents" routing signal, async reply routing, workflow-state file convention, config a coordinator needs, and Dispatcher's full prompt |
-| [docs/mcp-shims.md](docs/mcp-shims.md) | mcp-shims overview: concept, objective, where scripts live, how to write one (script → real MCP tool, no server) |
-| [docs/mcp-shims-inventory.md](docs/mcp-shims-inventory.md) | Which mcp-shims exist per agent group (lumen-dmj, routine, dispatcher, orphaned departure) |
+| [docs/mcp-shims.md](docs/mcp-shims.md) | mcp-shims overview: concept, objective, where scripts live (pool + per-group registry), how to write one (script → real MCP tool, no server) |
+| [docs/mcp-shims-inventory.md](docs/mcp-shims-inventory.md) | Which mcp-shims each agent group gets (lumen-dmj, routine, dispatcher, orphaned departure) |
 | [docs/isolation-model.md](docs/isolation-model.md) | Three-level channel isolation model |
 | [docs/setup-wiring.md](docs/setup-wiring.md) | What's wired, what's open in the setup flow |
 | [docs/architecture-diagram.md](docs/architecture-diagram.md) | Diagram version of the architecture |
@@ -383,7 +383,7 @@ An item doesn't only get resolved by someone finishing it directly — it can go
 | [docs/skill-engine-seam.md](docs/skill-engine-seam.md) | Skill-engine consumer contract (wizard / pipeline / agent-relay) + boundary-rule rationale |
 | [docs/templates.md](docs/templates.md) | Agent templates: what they are, stamping via `ncl groups create --template` + the setup wizard, the OneCLI/MCP-credential model, supported providers, and how to contribute one |
 | [docs/hardened-image.md](docs/hardened-image.md) | Opt-in: pull the agent image from a registry instead of building it |
-| [docs/instance-repo-split.md](docs/instance-repo-split.md) | Why `groups/`, `mcp-shims/`, `host-shims/` are symlinks into a separate private instance repo |
+| [docs/instance-repo-split.md](docs/instance-repo-split.md) | Why `groups/`, `mcp-shims/`, `host-shims/` are symlinks into a separate private instance repo, and how its shim pool/registry is laid out |
 
 ## Container Build Cache
 

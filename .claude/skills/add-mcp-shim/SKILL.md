@@ -6,7 +6,9 @@ description: Guided, step-by-step creation of one new mcp-shims tool — a scrip
 # Add an mcp-shim tool
 
 Walks through creating exactly one new mcp-shims tool: an executable script
-placed at `mcp-shims/<folder>/<server>/<name>-host` that the host
+placed at `mcp-shims/_pool/<server>/<name>-host` and listed for the group in
+`mcp-shims/_registry.json` (or, for a group not in the registry, at
+`mcp-shims/<folder>/<server>/<name>-host`) that the host
 discovers, self-describes, and registers as a real MCP tool the next time
 that agent group's container spawns. See the `mcp-shims` skill for the
 background paradigm (what this is, why it exists, host-shims vs mcp-shims,
@@ -14,8 +16,8 @@ facade/constrain/compose) — this skill is the interactive build, not the
 explainer.
 
 This is an operational skill: pure instructions, no code files of its own.
-Everything it produces lands in the target agent group's own
-`mcp-shims/` directory, never in core.
+Everything it produces lands under `mcp-shims/` (the pool and registry, or the
+group's own directory), never in core.
 
 **Important constraint to hold in mind throughout:** the script runs **on the
 host machine**, not inside the agent's container. It needs whatever the host
@@ -67,10 +69,12 @@ Resolve to the group's `folder` (needed for the filesystem path) and its
 
 ### 2. Server name — new or existing
 
-List what's already there:
+First find out which layout this group is on, then list what's already there:
 
 ```bash
-ls mcp-shims/<folder>/ 2>/dev/null
+grep -n '"<folder>"' mcp-shims/_registry.json   # a hit = registry group (scripts in the pool)
+ls mcp-shims/_pool/ 2>/dev/null                  # servers in the pool
+ls mcp-shims/<folder>/ 2>/dev/null               # the group's own directory (legacy layout)
 ```
 
 Ask: reuse an existing server namespace (this tool joins others already
@@ -87,7 +91,7 @@ Ask what the tool should be called (the leaf name — becomes the MCP tool
 existing server, check the name isn't already taken:
 
 ```bash
-ls mcp-shims/<folder>/<server>/ 2>/dev/null
+ls mcp-shims/_pool/<server>/ mcp-shims/<folder>/<server>/ 2>/dev/null
 ```
 
 ### 4. What kind of shim
@@ -227,18 +231,31 @@ if step 7 decided this tool needs longer than the 30s default.
 
 ### 9. Write the script
 
-Create the directory and the script:
+Create the directory and the script. A **registry group** (the normal case) puts
+the script in the pool and adds a line for it; a group **not in the registry** uses
+its own directory:
 
 ```bash
+# registry group: script path = mcp-shims/_pool/<server>/<name>-host
+mkdir -p mcp-shims/_pool/<server>
+#   then add  "<server>/<name>": {}  (plus any per-group env the script reads)
+#   under "<folder>" in mcp-shims/_registry.json
+
+# group not in the registry: script path = mcp-shims/<folder>/<server>/<name>-host
 mkdir -p mcp-shims/<folder>/<server>
 ```
+
+Below, `<script>` means whichever path you chose. If the same script should also go
+to another group, add its line to that group's registry entry instead of copying it.
+Code the script shares with other servers goes in `mcp-shims/lib/`; use
+`$NANOCLAW_SHIM_STATE_DIR` for anything it writes.
 
 `mcp-shims/` is gitignored in this repo and is a symlink into the private
 instance repo (see `docs/instance-repo-split.md`), where the script gets
 versioned. Never hardcode a credential/secret inline in the script; read it
 from `.env` or a local config file the way any host-shim would.
 
-Write `mcp-shims/<folder>/<server>/<name>-host` with:
+Write `<script>` with:
 - A `--help` branch printing the exact JSON from step 8 to stdout, exit 0.
 - If the script shells out to anything installed outside the base OS (a
   Homebrew/nvm/pyenv-managed tool, an npm global), set `PATH` explicitly
@@ -260,7 +277,7 @@ convention as `briefing-host` and the other host-shim templates in
 ### 10. Make it executable
 
 ```bash
-chmod +x mcp-shims/<folder>/<server>/<name>-host
+chmod +x <script>
 ```
 
 Scripts that aren't executable are invisible to discovery — `mcp-manifest.ts`
@@ -272,7 +289,7 @@ mid-edit shouldn't register a half-finished tool).
 Run it exactly as the host will:
 
 ```bash
-mcp-shims/<folder>/<server>/<name>-host --help
+<script> --help
 ```
 
 Confirm the JSON is well-formed and `inputSchema.type` is `"object"` — a
@@ -283,7 +300,7 @@ time). Then run it **exactly as the real transport will call it — a single
 JSON-string argv**, not bare values:
 
 ```bash
-mcp-shims/<folder>/<server>/<name>-host '{"fieldname": "value"}'
+<script> '{"fieldname": "value"}'
 ```
 
 Testing with `<script> value` instead of `<script> '{"fieldname":"value"}'`
@@ -297,7 +314,7 @@ a stripped-down `PATH` to catch the failure mode above *before* it reaches
 the user, rather than after:
 
 ```bash
-env -i PATH=/usr/bin:/bin mcp-shims/<folder>/<server>/<name>-host '{"fieldname": "value"}'
+env -i PATH=/usr/bin:/bin <script> '{"fieldname": "value"}'
 ```
 
 If that fails but running the script normally (your full shell `PATH`)
@@ -320,7 +337,10 @@ check yourself that it's listed. If it doesn't appear, see Troubleshooting.
 
 ## Troubleshooting
 
-**Tool doesn't appear after restart.** Check: script is executable
+**Tool doesn't appear after restart.** Check: for a registry group, the
+`"<server>/<name>"` line is under the right folder in `mcp-shims/_registry.json`
+(valid JSON, or every pooled shim is denied and the host logs an error) and the
+script exists in `_pool/`; script is executable
 (`ls -l` shows `x`), name matches `^[a-z0-9][a-z0-9_-]{0,63}$` for both the
 server and leaf segments, and the container actually restarted (a wake
 without a kill won't re-read the group's `mcp-shims/` directory — the
@@ -355,12 +375,14 @@ Reproduce with `env -i PATH=/usr/bin:/bin <script> <args>`; fix by setting
 inherited.
 
 **Tool call fails with a symlink/escape error.** The resolved script must
-live directly inside its `mcp-shims/<server>/` directory with no symlink
+live directly inside its `_pool/<server>/` (or `mcp-shims/<folder>/<server>/`) directory with no symlink
 pointing outside it — this is deliberate (the whitelist is the filesystem;
 nothing may resolve outside the whitelisted tree).
 
 ## Removing a shim
 
-Delete the script and, if empty, the server directory; restart the
-container. No manifest entry or DB row persists anywhere else — the
-directory listing at spawn time is the only source of truth.
+For a registry group, delete its `"<server>/<name>"` line; delete the script from
+the pool too if no other group uses it. For a group's own directory, delete the
+script and, if empty, the server directory. Restart the container. No manifest
+entry or DB row persists anywhere else — the registry and directory listing at
+spawn time are the only source of truth.
