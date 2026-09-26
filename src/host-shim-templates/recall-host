@@ -37,7 +37,7 @@ esac
 set -eu
 
 # --- Per-group configuration — edit this for your vault ---
-VAULT_PATH="/CHANGE/ME/path/to/this/groups/obsidian/vault"
+VAULT_PATH="${VAULT_PATH:-/CHANGE/ME/path/to/this/groups/obsidian/vault}"
 
 # Optional: route this recall call through a local model proxy (e.g.
 # PrefixRouter, Ollama) instead of hitting the real Anthropic API directly

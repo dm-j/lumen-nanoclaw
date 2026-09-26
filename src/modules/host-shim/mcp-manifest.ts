@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { resolveMcpShimsDir } from './exec.js';
+import { pooledShimsFor, type PooledShims } from './registry.js';
 import { log } from '../../log.js';
 
 const HELP_TIMEOUT_MS = 3_000;
@@ -116,8 +117,35 @@ function warnIfLikelyMissingJsonParse(scriptPath: string, shimId: string, inputS
   );
 }
 
+/** A registry group's manifest: its allowlisted `<server>/<leaf>` shims, resolved in the shared pool. */
+function discoverPooledShims(agentGroupId: string, pooled: PooledShims): McpShimManifestEntry[] {
+  const entries: McpShimManifestEntry[] = [];
+  const seenToolNames = new Set<string>();
+  for (const name of Object.keys(pooled.shims).sort()) {
+    const [server, leaf] = name.split('/');
+    const scriptPath = path.join(pooled.poolDir, server, `${leaf}${SUFFIX}`);
+    try {
+      fs.accessSync(scriptPath, fs.constants.X_OK);
+    } catch {
+      log.warn('mcp-shim: registry lists a shim missing from the pool or not executable', { agentGroupId, name });
+      continue;
+    }
+    const entry = describeShim(scriptPath, server, leaf);
+    if (seenToolNames.has(entry.toolName)) {
+      log.warn('mcp-shim: duplicate tool name, skipping', { agentGroupId, toolName: entry.toolName });
+      continue;
+    }
+    seenToolNames.add(entry.toolName);
+    entries.push(entry);
+  }
+  return entries;
+}
+
 /** Discover every mcp-shim script for a group, describing each via `--help`. */
 export function discoverMcpShims(agentGroupId: string): McpShimManifestEntry[] {
+  const pooled = pooledShimsFor(agentGroupId, 'mcp');
+  if (pooled) return discoverPooledShims(agentGroupId, pooled);
+
   const mcpShimsDir = resolveMcpShimsDir(agentGroupId);
   if (!mcpShimsDir || !fs.existsSync(mcpShimsDir)) return [];
 
