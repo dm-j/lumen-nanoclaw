@@ -41,18 +41,28 @@ Two different things people reach for this to build:
 
 ## Where scripts live
 
-`mcp-shims/<group-folder>/<server>/<name>-host` — an executable file, at
-project root, a **sibling of `groups/`, not inside it.** The directory
-structure is the whitelist: nothing registers a script anywhere else, and
-there's no DB table of tools to keep in sync.
+A group uses one of two layouts, at project root, as a **sibling of
+`groups/`, not inside it.** The filesystem is the whitelist: nothing registers
+a script anywhere else, and there's no DB table of tools to keep in sync.
+
+- **Pool + registry (preferred):** the executable lives once at
+  `mcp-shims/_pool/<server>/<name>-host`, and `mcp-shims/_registry.json` lists,
+  per group folder, the `"<server>/<name>"` shims that group gets, each with an
+  env object passed to the script (per-group settings without forking a copy).
+  A group in the registry gets exactly its list. The host also sets
+  `NANOCLAW_AGENT_GROUP_ID` and `NANOCLAW_SHIM_STATE_DIR` (per-group scratch space).
+  Code shared by several servers goes in `mcp-shims/lib/`. Details and failure
+  modes: `docs/mcp-shims.md`, "Where scripts live".
+- **Per-group directory (a group not in the registry):**
+  `mcp-shims/<group-folder>/<server>/<name>-host`.
 
 - `<server>` groups related tools under one namespace (e.g. several small
   scripts front different endpoints of the same API).
 - `<name>-host` becomes the MCP tool `<server>_<name>`.
 - Per-group override via `container_configs.mcp_shims_dir` (`ncl groups
   config update --mcp-shims-dir <path>`) — mirrors `host-shims/`'s
-  `host_shims_dir`. Rarely needed; the per-group default is already
-  segregated out of the box.
+  `host_shims_dir`, and wins over the registry. Rarely needed; the per-group
+  default is already segregated out of the box.
 
 **Deliberately outside `groups/<folder>/`, unlike everything else a group
 owns.** `groups/<folder>/` is bind-mounted read-write into that group's own
@@ -206,7 +216,8 @@ all and you're wrapping something else.
 
 | File | Purpose |
 |------|---------|
-| `src/modules/host-shim/mcp-manifest.ts` | Discovers scripts under a group's `mcp-shims/<server>/`, runs `--help` to self-describe (description, inputSchema, optional timeoutMs), builds the manifest, logs the JSON-parse-idiom warning |
+| `src/modules/host-shim/registry.ts` | `pooledShimsFor`: reads `mcp-shims/_registry.json` (and the host-shims twin), returns a group's allowlist, env and state dir, or null for the per-group directory |
+| `src/modules/host-shim/mcp-manifest.ts` | Discovers a group's scripts (its pooled allowlist, else its `mcp-shims/<server>/`), runs `--help` to self-describe (description, inputSchema, optional timeoutMs), builds the manifest, logs the JSON-parse-idiom warning |
 | `src/modules/host-shim/exec.ts` | `resolveMcpShimsDir`, namespaced (`server/leaf`) name resolution alongside the existing flat `host-shims/` resolution, `timeoutFor()`'s prefix-based default |
 | `src/modules/host-shim/index.ts` | Host-side `host_shim_exec` delivery-action handler — reads an optional per-call `timeoutMs` from the request and passes it to `execHostShim`, overriding `timeoutFor()` |
 | `container/agent-runner/src/mcp-tools/dynamic-shims.ts` | Container-side: reads the manifest, registers one generic MCP tool per entry, threads a declared `timeoutMs` to the `host-shim` CLI via an env var |

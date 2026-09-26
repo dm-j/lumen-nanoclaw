@@ -3,14 +3,16 @@
 Which mcp-shims exist for each agent group in this install. For what a shim is
 and how to write one, see [mcp-shims.md](mcp-shims.md).
 
-Scripts live in `mcp-shims/<group-folder>/<server>/<name>-host` (a symlink into
-the private `lumen-nanoclaw-instance` repo). The tool the agent sees is
-`<server>_<name>`. Snapshot taken 2026-09-21, updated 2026-09-26; the directory tree is the source
-of truth, so re-list it (`find mcp-shims -name '*-host'`) if this drifts.
+The scripts live once in `mcp-shims/_pool/<server>/<name>-host`, and `mcp-shims/_registry.json` says
+which group gets which (`mcp-shims/` is a symlink into the private `lumen-nanoclaw-instance` repo; see
+[mcp-shims.md](mcp-shims.md#where-scripts-live)). The tool the agent sees is `<server>_<name>`.
+`lumen-dmj`, `routine` and `dispatcher` are registry groups. Snapshot taken 2026-09-21, updated
+2026-09-26; the registry is the source of truth, so re-read it (`cat mcp-shims/_registry.json`) if this drifts.
 
-To disable a shim without deleting it, rename `<name>-host` to `<name>-host-disabled`: discovery only
-registers files ending in `-host`, so the tool drops out of the group's manifest at its next container spawn.
-Rename it back to re-enable. Disabled shims are documented below but not counted in the table.
+To take a shim away from a group, delete its registry line. To disable it everywhere without deleting it,
+rename `<name>-host` to `<name>-host-disabled`: discovery only registers files ending in `-host`, so the
+tool drops out of every manifest at the next container spawn. Rename it back to re-enable. Disabled shims
+are documented below but not counted in the table.
 
 | Group (folder) | Shims | Servers |
 |---|---|---|
@@ -35,15 +37,16 @@ host-shims, exposed as typed tools).
 | `memory_remember` | Capture an ad-hoc fact as a new note filed into the vault inbox (`title`, `content`, `source`, confidence). |
 | `memory_recall` | Ask a question and get an answer sourced from the vault, optionally the web too (`query`, `ask_as`, length/format, `research`). |
 
-**`notes`** — the ID'd notes on a day's `## Notes` block. Same code as routine's `notes` server
-(`mcp-shims/routine/notes/notes.ts`); these wrappers only set which group's timezone applies and the name
-stamped on notes (`lumen`). Each tool takes an optional `day` (today by default, `yesterday`, `tomorrow`, a
+**`notes`** — the ID'd notes on a day's `## Notes` block. The same pooled `notes` server as routine's
+(`mcp-shims/_pool/notes/`): the host's `NANOCLAW_AGENT_GROUP_ID` picks which group's timezone applies, and
+`NOTES_WHO` in the group's registry entry names the agent (`lumen`; routine's default is `routine`), so a
+leading `HH:MM <name>:` signature that the caller types itself is stripped from the note text. Each tool takes an optional `day` (today by default, `yesterday`, `tomorrow`, a
 weekday, or `YYYY-MM-DD`).
 
 | Tool | Purpose |
 |---|---|
 | `notes_read` | List a day's ID'd notes (`[id] text`), or find a note's ID before changing it. Hand-typed notes without an ID show `[?]` and are unaddressable. |
-| `notes_add` | Jot down a note, reminder or log line; returns its ID. Time and `lumen` are prefixed automatically. |
+| `notes_add` | Jot down a note, reminder or log line; returns its ID. Stored exactly as written; no time or name is added. |
 | `notes_edit` | Reword one note by ID; other notes untouched. |
 | `notes_delete` | Delete one note by ID. |
 
@@ -66,8 +69,10 @@ weekday, or `YYYY-MM-DD`).
 Locomotion is bounded and gated by a hazard latch.
 
 > **Disabled (2026-09-25) pending hardware repairs.** All 14 scripts are renamed `<name>-host-disabled`, so
-> none of these tools are offered to Lumen. Rename them back to `<name>-host` to re-enable once the robot is
-> repaired and the vector-robot bridge (`127.0.0.1:8788`) is running again.
+> none of these tools are offered to Lumen. They still sit in the legacy `mcp-shims/lumen-dmj/vector/`
+> directory, which a registry group ignores. To re-enable once the robot is repaired and the vector-robot
+> bridge (`127.0.0.1:8788`) is running again, move them into `mcp-shims/_pool/vector/`, rename them back to
+> `<name>-host`, and add `vector/<name>` to `lumen-dmj` in `_registry.json`.
 
 | Tool | Purpose |
 |---|---|
@@ -100,17 +105,18 @@ Locomotion is bounded and gated by a hazard latch.
 | `daily_note_read` | Read a day's note (`today` default, `yesterday`, `tomorrow`, weekday, date). |
 | `daily_note_append` | Append a note, reminder or log line to a day's note, including future days. |
 | `notes_read` | List a day's ID'd notes (`[id] text`); hand-typed notes without an ID show `[?]` and are unaddressable. |
-| `notes_add` | Add a note to a day's `## Notes` block; returns its ID. Time and `routine` are prefixed automatically. |
+| `notes_add` | Add a note to a day's `## Notes` block; returns its ID. Stored exactly as written; no time or name is added. |
 | `notes_edit` | Rewrite one note by ID; other notes untouched. |
 | `notes_delete` | Delete one note by ID. |
 
 **Event ids.** Every event note has a `lumen_file_id` (8 lowercase letters, unique across the calendar tree, also the filename suffix `<slug>-<id>.md`). The read tools return it as `id`; the append/edit/delete tools take `id` + `day` (the date in the event's `start_time`; `path` is still accepted but not advertised). See `scripts/calendar-sync/README.md` in the vault repo.
 
 The `calendar` server has helper modules alongside the `-host` wrappers
-(`vault-events.ts`, `event-ref.ts`, `filter-calendar.ts`, `range-events.ts`, `format-event.ts`, `conflict-scan.ts`,
-`group-timezone.ts`). `daily_note` shares `shared.ts`; `notes` has `notes.ts` (I/O) and
-`notes-block.ts` (pure logic, checked by `notes-block.selftest.ts`). None of these are tools:
-only `*-host` files are registered.
+(`vault-events.ts`, `event-ref.ts`, `filter-calendar.ts`, `range-events.ts`, `format-event.ts`, `conflict-scan.ts`).
+`notes` has `notes.ts` (I/O). Code imported by more than one server lives in `mcp-shims/lib/`:
+`group-timezone.ts`, `daily-note.ts` (day resolution and the daily-note file; self-test
+`daily-note.selftest.ts`) and `notes-block.ts` (pure logic, `notes-block.selftest.ts`). None of these are
+tools: only `*-host` files listed in the registry are registered.
 
 ## dispatcher
 
@@ -132,14 +138,15 @@ reference for the planned Travel agent
 
 ## Shared, not tied to a group
 
-`mcp-shims/lib/mapbox.ts` — Mapbox helpers for the future Travel agent. Not
+`mcp-shims/lib/` holds code shared across servers (see the `routine` section above) and
+`mapbox.ts`, Mapbox helpers for the future Travel agent. `mapbox.ts` is not
 wired to anything: there is no Mapbox connection in the OneCLI vault, and
 host-side scripts don't get gateway credential injection yet (see `CLAUDE.md`,
 "Host-side scripts don't get gateway injection for free").
 
 ## Groups with no shims
 
-`computation` and `_ping-test` (Terminal Agent) have no `mcp-shims/` directory.
+`computation` and `_ping-test` (Terminal Agent) are not in the registry and have no `mcp-shims/` directory.
 
 ## Maintenance
 
