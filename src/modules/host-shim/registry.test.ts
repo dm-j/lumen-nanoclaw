@@ -10,6 +10,8 @@ vi.mock('../../config.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../config.js')>()),
   HOST_SHIMS_DIR: '/tmp/nanoclaw-shim-registry-test/host-shims',
   MCP_SHIMS_DIR: '/tmp/nanoclaw-shim-registry-test/mcp-shims',
+  GROUPS_DIR: '/tmp/nanoclaw-shim-registry-test/groups',
+  DATA_DIR: '/tmp/nanoclaw-shim-registry-test/data',
 }));
 
 vi.mock('../../log.js', () => ({
@@ -18,6 +20,8 @@ vi.mock('../../log.js', () => ({
 
 import { closeDb, initTestDb, runMigrations } from '../../db/index.js';
 import { createAgentGroup } from '../../db/agent-groups.js';
+import { getAgentGroup } from '../../db/agent-groups.js';
+import { initGroupFilesystem } from '../../group-init.js';
 import { execHostShim } from './exec.js';
 import { discoverMcpShims } from './mcp-manifest.js';
 import { pooledShimsFor } from './registry.js';
@@ -142,5 +146,16 @@ describe('shim registry', () => {
   it('mcp: a listed shim missing from the pool is skipped, not fatal', () => {
     registry(MCP, { a: { 'notes/ghost': {} } });
     expect(discoverMcpShims('ag-a')).toEqual([]);
+  });
+
+  it('group-init seeds a legacy directory only for groups outside the registry', () => {
+    registry(HOST, { a: {} });
+    registry(MCP, { a: {} });
+    initGroupFilesystem(getAgentGroup('ag-a')!);
+    initGroupFilesystem(getAgentGroup('ag-b')!);
+    expect(fs.existsSync(`${HOST}/a`)).toBe(false);
+    expect(fs.existsSync(`${MCP}/a`)).toBe(false);
+    expect(fs.existsSync(`${HOST}/b/briefing-host`)).toBe(true);
+    expect(fs.existsSync(`${MCP}/b`)).toBe(true);
   });
 });
