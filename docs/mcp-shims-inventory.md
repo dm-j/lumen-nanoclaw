@@ -5,12 +5,16 @@ and how to write one, see [mcp-shims.md](mcp-shims.md).
 
 Scripts live in `mcp-shims/<group-folder>/<server>/<name>-host` (a symlink into
 the private `lumen-nanoclaw-instance` repo). The tool the agent sees is
-`<server>_<name>`. Snapshot taken 2026-09-21; the directory tree is the source
+`<server>_<name>`. Snapshot taken 2026-09-21, updated 2026-09-26; the directory tree is the source
 of truth, so re-list it (`find mcp-shims -name '*-host'`) if this drifts.
+
+To disable a shim without deleting it, rename `<name>-host` to `<name>-host-disabled`: discovery only
+registers files ending in `-host`, so the tool drops out of the group's manifest at its next container spawn.
+Rename it back to re-enable. Disabled shims are documented below but not counted in the table.
 
 | Group (folder) | Shims | Servers |
 |---|---|---|
-| lumen-dmj | 26 | `journal`, `memory`, `notes`, `task_management`, `vault`, `vector` |
+| lumen-dmj | 12 (+14 disabled) | `journal`, `memory`, `notes`, `task_management`, `vault`; `vector` is disabled |
 | routine | 14 | `calendar`, `daily_note`, `notes` |
 | dispatcher | 1 | `gaps` |
 | departure | 2 (orphaned) | `travel`, `vault` |
@@ -60,6 +64,10 @@ weekday, or `YYYY-MM-DD`).
 
 **`vector`** — drives the Vector robot via the `~/Projects/vector-robot` shim.
 Locomotion is bounded and gated by a hazard latch.
+
+> **Disabled (2026-09-25) pending hardware repairs.** All 14 scripts are renamed `<name>-host-disabled`, so
+> none of these tools are offered to Lumen. Rename them back to `<name>-host` to re-enable once the robot is
+> repaired and the vector-robot bridge (`127.0.0.1:8788`) is running again.
 
 | Tool | Purpose |
 |---|---|
