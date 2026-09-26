@@ -20,7 +20,23 @@ Open items, roughly in priority order. Not a commitment or schedule — just wha
 16. [Per-day todos + a single `todo` MCP tool](roadmap/per-day-todos.md) — **proposed and parked 2026-09-23**: a `^todos` checklist block in each day's note with one `action`-style tool; recorded preference is to build on the TaskNotes system Obsidian already has unless there is a serious reason not to; the single-tool shape may be worth applying to TaskNotes instead
 17. [Grouped, ordered, dependent tasks: a possible Markdown DAG + canvas renderer](roadmap/task-graph-dependencies.md) — **noted 2026-09-24, not a plan**: David builds large task *graphs* (multi-level decomposition with dependencies) and doesn't think TaskNotes handles that natively (it has `projects` and `blockedBy`, so the limit may be views/authoring, not the data model: to verify with a small three-level example); David's ideal, recorded as a concept: a "collapsing task DAG" (only leaves checked by hand, a parent completes when all its children do, completed tasks stop blocking, blocking extends downwards) giving one list of available unblocked leaves across all projects plus a separate de-emphasized blocked list; options in order: a generated Obsidian Canvas view, one added property, then a single-file Markdown DAG as the authoring surface
 18. [Lumen: "Now and Next" instead of the rendered day schedule](roadmap/lumen-now-and-next.md) — **a note for David to consider, 2026-09-24, not decided**: replace the daily calendar digests Routine sends Lumen with a per-turn `now-next` segment (time until the current event ends, time until the next starts) and push the full calendar back onto Routine; the injection read must not call the calendar sync
-19. [Calendar event notes: a generated `lumen_file_id`](roadmap/calendar-file-id.md) — **decided 2026-09-26, not built**: the filename suffix (`uid.slice(0, 8)`) is `04000000` for every Exchange/work event and two same-titled meetings on one day overwrite each other in `sync.js`; each note gets its own 8-letter `lumen_file_id` (frontmatter + `<slug>-<id>.md`), the calendar tools take `id`. Renaming alone would duplicate every event (sync finds notes by computed path, and our reads run sync inline), so `sync.js` must change first; brief for the vault project's Claude included
+
+## Closed 2026-09-26
+
+- **Calendar event notes: a generated `lumen_file_id`** — shipped and verified live. The filename suffix
+  `uid.slice(0, 8)` was `04000000` for every Exchange/work event (their UIDs all start `040000008200E000…`), so two
+  same-titled meetings on one day overwrote each other, and two same-titled recurring series shared one `_series` master.
+  Now each note has its own 8-lowercase-letter `lumen_file_id` (frontmatter + `<slug>-<id>.md`), and `sync.js` finds a
+  note by frontmatter identity (`kind` + `uid` + `recurrence_id`), never by recomputing a filename. Migration
+  (`scripts/calendar-sync/assign-file-ids.js`, vault repo commit `323334c`) ran on 2026-09-26: 155 notes, 124 links
+  rewritten, a following live `--days=30` sync created no duplicates (and correctly gave a second same-titled series its
+  own master). Two findings worth keeping: `obsidian-cli rename` does **not** rewrite wikilinks and `property:set`
+  re-serializes the frontmatter, so the migration uses plain file operations plus its own link rewrite; and 3 links inside
+  the read-only `07-Daily/Transcripts-readonly/2026/09/24.md` still point at old names on purpose. Routine side (instance
+  repo `ca72891b`): the read tools return the real id plus `location` and `other_information` (the reader never read them
+  before), and `calendar_note_append` / `_edit` / `_delete` take `id` + `day` (`path` still accepted, not advertised);
+  `calendar_personal_add` mints the same style of id and returns `{id, day, path}`. Pre-migration backups:
+  `~/Backups/lumen-calendar-pre-file-id-*.tgz`. Documented in `scripts/calendar-sync/README.md` (vault repo).
 
 ## Closed 2026-09-22
 
