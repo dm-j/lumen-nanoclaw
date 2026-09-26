@@ -15,7 +15,7 @@ Rename it back to re-enable. Disabled shims are documented below but not counted
 | Group (folder) | Shims | Servers |
 |---|---|---|
 | lumen-dmj | 12 (+14 disabled) | `journal`, `memory`, `notes`, `task_management`, `vault`; `vector` is disabled |
-| routine | 14 | `calendar`, `daily_note`, `notes` |
+| routine | 14 | `calendar`, `daily_note`, `get`, `notes` |
 | dispatcher | 1 | `gaps` |
 | departure | 2 (orphaned) | `travel`, `vault` |
 
@@ -89,7 +89,7 @@ Locomotion is bounded and gated by a hazard latch.
 
 | Tool | Purpose |
 |---|---|
-| `calendar_personal_today` | Today's personal calendar, what's next, time until a meeting. Reads the vault's local calendar-file mirror (not a live ICS fetch), syncing it inline first. |
+| `get_calendar` | Today's events (personal and work, each labelled), what's next, time until a meeting; events that have already ended are omitted. Reads the vault's local calendar-file mirror (not a live ICS fetch), syncing it inline first. Formerly `calendar_personal_today`; lives at `routine/get/calendar-host` (tool name is `<server>_<leaf>`), with its helper `personal_today.ts` still in `calendar/`. Its description is a relevance gate plus sample trigger phrases. |
 | `calendar_personal_tomorrow` | Tomorrow's events. Same vault-backed read. |
 | `calendar_personal_week` | This week / next few days. Same vault-backed read. |
 | `calendar_personal_add` | Add an event to routine's own local calendar copy only — never the real upstream calendar. |
