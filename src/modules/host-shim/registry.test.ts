@@ -72,6 +72,18 @@ describe('shim registry', () => {
     expect((await execHostShim('ag-b', 'where', [])).stdout.trim()).toBe('/vault/b');
   });
 
+  it('gives pooled shims a per-group state dir and their group id', async () => {
+    write(
+      `${HOST}/_pool/who-host`,
+      '#!/bin/sh\necho "$NANOCLAW_AGENT_GROUP_ID $NANOCLAW_SHIM_STATE_DIR"\ntouch "$NANOCLAW_SHIM_STATE_DIR/x"\n',
+    );
+    registry(HOST, { a: { who: {} }, b: { who: {} } });
+    expect((await execHostShim('ag-a', 'who', [])).stdout.trim()).toBe(`ag-a ${HOST}/_state/a`);
+    expect((await execHostShim('ag-b', 'who', [])).stdout.trim()).toBe(`ag-b ${HOST}/_state/b`);
+    expect(fs.existsSync(`${HOST}/_state/a/x`)).toBe(true);
+    expect(fs.existsSync(`${HOST}/_pool/x`)).toBe(false);
+  });
+
   it('refuses a pool script the group is not allowlisted for', async () => {
     write(`${HOST}/_pool/secret-host`, '#!/bin/sh\necho hi\n');
     write(`${HOST}/_pool/open-host`, '#!/bin/sh\necho hi\n');
@@ -100,7 +112,11 @@ describe('shim registry', () => {
     write(`${HOST}/a/echo-host`, '#!/bin/sh\necho legacy\n');
     write(`${HOST}/_pool/echo-host`, '#!/bin/sh\necho pooled\n');
     registry(HOST, '{ not json');
-    expect(pooledShimsFor('ag-a', 'host')).toEqual({ poolDir: `${HOST}/_pool`, shims: {} });
+    expect(pooledShimsFor('ag-a', 'host')).toEqual({
+      poolDir: `${HOST}/_pool`,
+      stateDir: `${HOST}/_state/a`,
+      shims: {},
+    });
     expect((await execHostShim('ag-a', 'echo', [])).ok).toBe(false);
   });
 

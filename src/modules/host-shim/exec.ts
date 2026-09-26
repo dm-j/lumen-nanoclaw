@@ -141,10 +141,12 @@ export function execHostShim(
   let shimsDir: string | null;
   let leaf: string;
   let shimEnv: Record<string, string> | undefined;
+  let stateDir: string | undefined;
   // Registry group (see registry.ts): scripts come from the shared pool, gated by the group's allowlist.
   const pooled = pooledShimsFor(agentGroupId, namespaced ? 'mcp' : 'host');
   if (pooled) {
     shimEnv = pooled.shims[name];
+    stateDir = pooled.stateDir;
     if (!shimEnv) {
       log.warn("host-shim: not in this group's registry allowlist", { agentGroupId, name });
       return Promise.resolve(refuse(`no whitelisted shim named "${name}"`));
@@ -170,6 +172,8 @@ export function execHostShim(
     return Promise.resolve(refuse(`no whitelisted shim named "${name}"`));
   }
 
+  if (stateDir) fs.mkdirSync(stateDir, { recursive: true });
+
   return new Promise((resolve) => {
     execFile(
       shimPath,
@@ -178,7 +182,16 @@ export function execHostShim(
         timeout: timeoutMs,
         maxBuffer: MAX_BUFFER,
         encoding: 'utf-8',
-        ...(shimEnv && Object.keys(shimEnv).length ? { env: { ...process.env, ...shimEnv } } : {}),
+        ...(stateDir
+          ? {
+              env: {
+                ...process.env,
+                ...shimEnv,
+                NANOCLAW_AGENT_GROUP_ID: agentGroupId,
+                NANOCLAW_SHIM_STATE_DIR: stateDir,
+              },
+            }
+          : {}),
       },
       (error, stdout, stderr) => {
         // execFile sets error.code to the numeric exit code on a nonzero

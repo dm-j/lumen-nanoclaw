@@ -29,6 +29,7 @@ export type ShimKind = 'host' | 'mcp';
 
 export const REGISTRY_FILE = '_registry.json';
 export const POOL_DIR = '_pool';
+export const STATE_DIR = '_state';
 
 export const NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 // mcp-shims namespaced form: "<server>/<leaf>", each segment matching NAME_RE.
@@ -37,6 +38,8 @@ export const NAMESPACED_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}\/[a-z0-9][a-z0-9_-]
 export interface PooledShims {
   /** Directory holding the shared scripts (`<root>/_pool`). */
   poolDir: string;
+  /** Per-group scratch directory (`<root>/_state/<folder>`) for logs and checkpoints a shim writes. */
+  stateDir: string;
   /** Allowed shim name → env to pass it. */
   shims: Record<string, Record<string, string>>;
 }
@@ -55,6 +58,7 @@ export function pooledShimsFor(agentGroupId: string, kind: ShimKind): PooledShim
 
   const root = kind === 'host' ? HOST_SHIMS_DIR : MCP_SHIMS_DIR;
   const poolDir = path.join(root, POOL_DIR);
+  const stateDir = path.join(root, STATE_DIR, group.folder);
   const registryPath = path.join(root, REGISTRY_FILE);
 
   let registry: unknown;
@@ -64,14 +68,14 @@ export function pooledShimsFor(agentGroupId: string, kind: ShimKind): PooledShim
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null; // no registry: legacy behaviour
     log.error('shim registry unreadable — denying every pooled shim until it is fixed', { registryPath, err });
-    return { poolDir, shims: {} };
+    return { poolDir, stateDir, shims: {} };
   }
 
   const entry = (registry as Record<string, unknown>)[group.folder];
   if (entry === undefined) return null;
   if (!isRecord(entry)) {
     log.error('shim registry entry is not an object — denying this group', { registryPath, folder: group.folder });
-    return { poolDir, shims: {} };
+    return { poolDir, stateDir, shims: {} };
   }
 
   const nameRe = kind === 'host' ? NAME_RE : NAMESPACED_NAME_RE;
@@ -85,5 +89,5 @@ export function pooledShimsFor(agentGroupId: string, kind: ShimKind): PooledShim
       Object.entries(isRecord(env) ? env : {}).filter((kv): kv is [string, string] => typeof kv[1] === 'string'),
     );
   }
-  return { poolDir, shims };
+  return { poolDir, stateDir, shims };
 }
