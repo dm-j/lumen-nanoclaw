@@ -329,3 +329,20 @@ Two changes, following the "one simple documented form, parse generously" rule:
 Lesson worth keeping for future descriptions: cutting implementation detail from a tool description is right, but a *behaviour the
 caller would otherwise duplicate* (here, automatic attribution) belongs in the parameter text. Existing notes with the doubled name were left as
 written.
+
+### Attribution stamp removed from notes — 2026-09-26
+
+`notes_add` and `notes_edit` no longer prefix notes with `HH:MM <who>: `. Notes are stored exactly as written:
+`> - Wish Heather a happy birthday! ✨ ^521ncq`. This supersedes the stamp described in earlier addenda on this page (the "Tools"
+section, the double-signing fix's "tell her the simple way" half) and the `HH:MM routine:`/`lumen:` examples above, which are kept as history.
+
+- **Why:** Lumen wrote in her own 3am journal entry that the `00:00 lumen: ` prefix "is redundant and adds noise to the scratchpad", and
+  David asked for it to go. (The stamp was an attribution convenience added when the tools were built; nothing depended on it. David's
+  request named the `journal_entry` shim, which never had a prefix: its entries are `# date time` plus the quoted text. The prefix he
+  meant is this one, on the daily notes.)
+- **What stayed:** `cleanNoteText` still drops a leading time and/or the caller's own name if a caller signs a note anyway (a caller
+  that saw the old stamped notes may keep doing it), and the `text` parameter text is back to plain "The note text." /
+  "The replacement text." Existing stamped notes are left as written; hand-typed and stamped notes read the same to the tools.
+- **Trade-off accepted:** in a block shared by David, Lumen and Routine, who wrote a note is no longer recorded. The IDs and the text
+  carry all the tools need; if attribution is missed, add it as a deliberate, agent-written convention rather than an automatic prefix.
+- Checked live through both agents' wrappers on a scratch day (no stamp on either; a redundant own-name signature still stripped).
