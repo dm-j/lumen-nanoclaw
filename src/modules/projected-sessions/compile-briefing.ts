@@ -131,12 +131,13 @@ function logPeculiar(
 // PrefixRouter/Ollama, whose round-trips run slower than Anthropic's.
 const COMPILE_TIMEOUT_MS = 300_000;
 
-// Compiler's own tail is tone/continuity only — small on purpose so it
-// doesn't crowd out what the compiler is supposed to be freshly looking up.
-// Also the cap on the briefing-history block shown to BOTH compiler and
-// responder — a briefing ages out of context at the same rate for both
-// sides (synthesize.ts imports this same constant for its own cap).
-export const COMPILER_TAIL_TURNS = 5;
+// Compiler's own tail is tone/continuity only. Matched to the responder's
+// RESPONDER_TAIL_TURNS by request (2026-09-28) — kept as its own constant
+// rather than importing the responder's, so the two can still diverge later
+// without a rename. Also the cap on the briefing-history block shown to BOTH
+// compiler and responder — a briefing ages out of context at the same rate
+// for both sides (synthesize.ts imports this same constant for its own cap).
+export const COMPILER_TAIL_TURNS = 15;
 
 function briefingFailureNote(errorDetail: string): string {
   return `Briefing generation failed with error: ${errorDetail}. Use your Recall tool to search your memory for specific topics in the conversation.`;
