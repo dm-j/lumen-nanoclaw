@@ -329,6 +329,7 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
     // Format messages: passthrough commands get raw text (only if the
     // provider natively handles slash commands), others get XML.
     const prompt = wakeContext + formatMessagesWithCommands(keep, config.provider.supportsNativeSlashCommands);
+    writeLastPrompt(prompt, 'wake');
 
     log(`Processing ${keep.length} message(s), kinds: ${[...new Set(keep.map((m) => m.kind))].join(',')}`);
 
@@ -403,6 +404,20 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
  * passthrough commands are sent raw (no XML wrapping) so the SDK can
  * dispatch them. Otherwise they fall through to standard XML formatting.
  */
+/**
+ * Operator debugging aid: the exact prompt string handed to the model, replaced on every
+ * turn (wake prompt or follow-up push). Written to the session dir (/workspace), which the
+ * host can read and which is never in the instance repo. The system prompt (composed
+ * CLAUDE.md) is separate and not included. First line is a marker, not part of the prompt.
+ */
+function writeLastPrompt(prompt: string, kind: 'wake' | 'follow-up'): void {
+  try {
+    fs.writeFileSync('/workspace/last-prompt.md', `<!-- ${new Date().toISOString()} ${kind} -->\n${prompt}\n`);
+  } catch {
+    /* non-fatal */
+  }
+}
+
 function formatMessagesWithCommands(messages: MessageInRow[], nativeSlashCommands: boolean): string {
   const parts: string[] = [];
   const normalBatch: MessageInRow[] = [];
@@ -555,6 +570,7 @@ export async function processQuery(
 
         const keptIds = keep.map((m) => m.id);
         const prompt = formatMessages(keep);
+        writeLastPrompt(prompt, 'follow-up');
         log(`Pushing ${keep.length} follow-up message(s) into active query`);
         unwrappedNudged = false;
         taskBlockNudged = false;
