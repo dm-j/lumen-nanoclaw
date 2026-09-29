@@ -42,6 +42,7 @@ function writeBriefingDebugLog(
   try {
     const dir = path.join(LOGS_DIR, 'briefing-debug');
     fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(path.join(LOGS_DIR, 'briefing-raw'), { recursive: true });
     const content = [
       `# Last briefing call — ${agentGroupId}`,
       `${new Date().toISOString()}`,
@@ -61,6 +62,12 @@ function writeBriefingDebugLog(
       ...(discardNote ? ['## Discarded — what Lumen actually saw instead', '', discardNote, ''] : []),
     ].join('\n');
     fs.writeFileSync(path.join(dir, `${agentGroupId}.md`), content);
+    // Append-only companion: just the raw briefer output, timestamped, for collecting a
+    // stretch of briefings to judge quality. Unbounded — delete when the collection ends.
+    fs.appendFileSync(
+      path.join(LOGS_DIR, 'briefing-raw', `${agentGroupId}.log`),
+      `\n===== ${new Date().toISOString()} =====\n${rawResponse || '(empty)'}\n`,
+    );
   } catch (err) {
     log.warn('writeBriefingDebugLog failed (non-fatal)', { agentGroupId, err });
   }
@@ -299,7 +306,7 @@ export async function compileBriefing(
       err,
     });
     const failureNote = briefingFailureNote(errorDetail);
-    writeBriefingDebugLog(agentGroupId, prevBriefing, batchWithTail, failureNote);
+    writeBriefingDebugLog(agentGroupId, prevBriefing, batchWithTail, '', failureNote);
     return failureNote;
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
