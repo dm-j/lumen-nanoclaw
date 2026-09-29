@@ -32,6 +32,11 @@ import { LOGS_DIR } from '../../config.js';
 // substituting the note for the actual response — otherwise the one place
 // meant for eyeballing real model output silently loses it on every
 // discarded call, which is exactly when eyeballing it matters most.
+/** Local-time YYYY-MM-DD (host timezone). */
+function localDay(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 function writeBriefingDebugLog(
   agentGroupId: string,
   prevBriefing: string,
@@ -42,7 +47,6 @@ function writeBriefingDebugLog(
   try {
     const dir = path.join(LOGS_DIR, 'briefing-debug');
     fs.mkdirSync(dir, { recursive: true });
-    fs.mkdirSync(path.join(LOGS_DIR, 'briefing-raw'), { recursive: true });
     const content = [
       `# Last briefing call — ${agentGroupId}`,
       `${new Date().toISOString()}`,
@@ -62,12 +66,20 @@ function writeBriefingDebugLog(
       ...(discardNote ? ['## Discarded — what Lumen actually saw instead', '', discardNote, ''] : []),
     ].join('\n');
     fs.writeFileSync(path.join(dir, `${agentGroupId}.md`), content);
-    // Append-only companion: just the raw briefer output, timestamped, for collecting a
-    // stretch of briefings to judge quality. Unbounded — delete when the collection ends.
+    // Append-only companion: just the raw briefer output, timestamped, one file per local day
+    // (logs/briefing-raw/<group>/YYYY-MM-DD.log). Keeps today plus the two previous days, so
+    // "yesterday and the day before" are always whole while today accumulates.
+    const now = new Date();
+    const rawDir = path.join(LOGS_DIR, 'briefing-raw', agentGroupId);
+    fs.mkdirSync(rawDir, { recursive: true });
     fs.appendFileSync(
-      path.join(LOGS_DIR, 'briefing-raw', `${agentGroupId}.log`),
-      `\n===== ${new Date().toISOString()} =====\n${rawResponse || '(empty)'}\n`,
+      path.join(rawDir, `${localDay(now)}.log`),
+      `\n===== ${now.toISOString()} =====\n${rawResponse || '(empty)'}\n`,
     );
+    const oldest = localDay(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 2));
+    for (const f of fs.readdirSync(rawDir)) {
+      if (/^\d{4}-\d{2}-\d{2}\.log$/.test(f) && f.slice(0, 10) < oldest) fs.rmSync(path.join(rawDir, f));
+    }
   } catch (err) {
     log.warn('writeBriefingDebugLog failed (non-fatal)', { agentGroupId, err });
   }
