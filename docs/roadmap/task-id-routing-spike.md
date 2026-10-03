@@ -157,6 +157,43 @@ then scope closure to the specific `task_id`'s session, never "the
 caller's session" as a whole — that's the exact conflation that caused
 this.
 
+## Addendum 2026-10-01: messages after `report_completion` (noted, not a plan)
+
+**What closure is for.** A "closed" a2a session is mainly a trick to shut down
+*acknowledgement loops*: two agents acknowledging each other's acknowledgements
+forever. `report_completion` (`noReply: true`, `closesSession: true`) ends the
+exchange so neither side has a reason to answer. It was never meant as a
+guarantee that the agent has *stopped working* or that its result is final, and
+any change here has to keep that loop-breaking purpose intact.
+
+**What was observed.** Research's closing message was followed by a second chat
+message to Dispatcher in both test runs (30 Sep and 1 Oct): `report_completion`
+(seq 5, `closesSession`), then a "work order complete" restatement (seq 7).
+Dispatcher's own log quotes *both*, so the later message is delivered. Across
+Research's sessions, 16 of 23 sent more than one chat message; Computation sends
+3 to 4 per session. So the closed flag stops the loop on the inbound side but
+does not stop the agent from continuing to emit.
+
+**Why it matters (found by David's model benchmark, 2026-09-30).** One model
+(Nemotron) sent its success notification immediately and then *carried on
+working*, delivering its real results last and slowest. To Dispatcher that is a
+premature "SUCCESS" followed by results it may no longer be waiting for. Dropping
+everything after the close would be the wrong cure: it would lock in the premature
+success and *discard the real result*. Closure cannot fix an agent that reports
+done before it is done.
+
+**Directions to weigh (none chosen).**
+- Deliver post-close messages, tagged (e.g. `late_after_completion`), so Dispatcher
+  can decide, instead of dropping them. Keep the no-reply rule so this cannot
+  restart an acknowledgement loop.
+- Record time from `report_completion` to the last outbound message per session.
+  It is cheap and doubles as a benchmark column: a model that reports early and
+  finishes late stands out immediately.
+- Treat model choice as the real remedy for early reporters, and use this metric
+  to catch them. Instructions cannot enforce the contract on a weaker model.
+- Any closure change stays scoped to the specific `task_id` session, per the
+  2026-09-16 addendum above, never "the caller's session" as a whole.
+
 ## Open questions for actual implementation (not resolved in this spike)
 
 - **Task lifecycle / closure**: what marks a task "done" so its session(s)
