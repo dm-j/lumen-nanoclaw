@@ -1,18 +1,20 @@
 import type { Migration } from './index.js';
 
 /**
- * An agent's own description of itself, written as one option in a list for a
- * "decision model" (Jev-style): a model that scores a request against a list of
- * short text options in a single pass and returns typed probabilities, instead
- * of generating text. The router builds the option list from these strings, one
- * per agent group, so each must stand alone and discriminate: what the agent
- * handles and, where it helps, what it does not.
+ * What a "decision model" (Jev-style) scores against a request: one short text
+ * option per agent group, answering a single question, "is this agent the best
+ * handler for the current request?" The model scores a request against a list of
+ * such options in one pass and returns typed probabilities; it does not read prose.
  *
- * Separate from `description` on purpose. `description` is a routing hint an LLM
- * coordinator (Dispatcher) reads in its "available agents" table; this is
- * scored, not read, and is tuned for a different consumer. NULL means the agent
- * has not described itself yet; a decision router should skip such a group
- * rather than invent an option for it.
+ * So the text is a criterion, not a profile. Say what makes this agent the best
+ * choice, and include what the agent does only to the extent it helps answer that
+ * question (a capability that never decides the choice is noise, and it dilutes the
+ * score). Contrast with the agents it is most easily confused with where that is
+ * what settles the call. Each string must stand alone, since it is scored without the others.
+ *
+ * Separate from `description`, which an LLM coordinator (Dispatcher) reads as a
+ * routing hint. NULL means the agent has not written one yet; a decision router
+ * should skip such a group rather than invent an option for it.
  */
 export const migration035: Migration = {
   version: 35,

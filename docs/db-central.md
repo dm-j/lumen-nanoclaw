@@ -19,12 +19,12 @@ CREATE TABLE agent_groups (
   folder           TEXT NOT NULL UNIQUE,
   agent_provider   TEXT,
   description      TEXT,          -- migration 032: one-line routing hint an LLM coordinator reads ("available agents")
-  decision_description TEXT,      -- migration 035: the agent's self-description as one option for a Jev-style decision model; NULL = not yet written
+  decision_description TEXT,      -- migration 035: one option for a Jev-style decision model answering "is this agent the best handler for the current request?"; NULL = not yet written
   created_at       TEXT NOT NULL
 );
 ```
 
-`description` and `decision_description` have different consumers on purpose: the first is read by an LLM, the second is *scored* by a decision model against a request, one option per agent group. Set either with `ncl groups update <id> --description ... | --decision-description ...`.
+`description` and `decision_description` have different consumers on purpose: the first is read by an LLM; the second is *scored* by a decision model against a request, one option per agent group. It is a criterion, not a profile: say what makes this agent the best choice, mention what the agent does only as far as that decides the choice, and contrast with the agents it is most easily confused with. It is scored without the other options, so it must stand alone. Set either with `ncl groups update <id> --description ... | --decision-description ...`.
 
 - **Readers:** `src/session-manager.ts`, `src/delivery.ts`, `src/router.ts`
 - **Writers:** `src/db/agent-groups.ts`

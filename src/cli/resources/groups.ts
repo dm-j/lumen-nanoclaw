@@ -124,10 +124,11 @@ registerResource({
       name: 'decision_description',
       type: 'string',
       description:
-        'The agent\'s own description of itself, written as one option in a list for a "decision model" ' +
-        '(Jev-style: scores a request against short text options in one pass and returns typed probabilities). ' +
-        'Must stand alone and discriminate: what this agent handles and, where useful, what it does not. ' +
-        'Separate from --description, which an LLM coordinator reads. Unset until the agent has described itself.',
+        'One option for a "decision model" (Jev-style: scores a request against a list of short texts in one pass). ' +
+        'It answers a single question: is this agent the best handler for the current request? Write a criterion, not a ' +
+        'capability summary: say what makes this agent the best choice, mention what it does only to the extent that ' +
+        'helps answer that, and contrast with the agents it is most easily confused with. Must stand alone. ' +
+        'Separate from --description, which an LLM coordinator reads. Unset until the agent has written one.',
       updatable: true,
     },
     { name: 'created_at', type: 'string', description: 'Auto-set.', generated: true },
