@@ -12,6 +12,11 @@ export interface AgentGroup {
    *  on construction so existing call sites building an AgentGroup literal
    *  don't all need updating for a column that's allowed to start empty. */
   description?: string | null;
+  /** The agent's own description of itself, written as one option in a list for a
+   *  "decision model" (Jev-style) that scores a request against short text options
+   *  in one pass. Separate from `description`, which an LLM coordinator reads.
+   *  NULL/undefined until the agent has described itself. */
+  decision_description?: string | null;
   created_at: string;
 }
 

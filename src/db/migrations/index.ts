@@ -31,6 +31,7 @@ import { migration031 } from './031-container-transport.js';
 import { migration032 } from './032-agent-group-description.js';
 import { migration033 } from './033-session-parent.js';
 import { migration034 } from './034-wake-script.js';
+import { migration035 } from './035-agent-group-decision-description.js';
 
 export interface Migration {
   version: number;
@@ -86,6 +87,7 @@ export const migrations: Migration[] = [
   migration032,
   migration033,
   migration034,
+  migration035,
 ];
 
 /**

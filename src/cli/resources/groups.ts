@@ -120,6 +120,16 @@ registerResource({
         "it's the signal another agent uses to decide whether to route work here.",
       updatable: true,
     },
+    {
+      name: 'decision_description',
+      type: 'string',
+      description:
+        'The agent\'s own description of itself, written as one option in a list for a "decision model" ' +
+        '(Jev-style: scores a request against short text options in one pass and returns typed probabilities). ' +
+        'Must stand alone and discriminate: what this agent handles and, where useful, what it does not. ' +
+        'Separate from --description, which an LLM coordinator reads. Unset until the agent has described itself.',
+      updatable: true,
+    },
     { name: 'created_at', type: 'string', description: 'Auto-set.', generated: true },
   ],
   // `create` and `delete` are custom (below): create needs a `--template`
@@ -158,6 +168,7 @@ registerResource({
           folder,
           agent_provider: null,
           description: null,
+          decision_description: null,
           created_at: new Date().toISOString(),
         };
         createAgentGroup(group);
