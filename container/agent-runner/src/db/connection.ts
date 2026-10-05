@@ -104,6 +104,44 @@ function ensureSyncLocalSchema(): void {
   }
 }
 
+/**
+ * Wrap a DB so any SQLite error is re-thrown with which file, operation and SQL
+ * it came from — the bare "database disk image is malformed" names none of them.
+ */
+function tagErrors(open: () => Database, label: string): Database {
+  const wrap = <T>(op: string, sql: string, fn: () => T): T => {
+    try {
+      return fn();
+    } catch (err) {
+      if (err instanceof Error) err.message += ` [${label} ${op}: ${sql.replace(/\s+/g, ' ').slice(0, 120)}]`;
+      throw err;
+    }
+  };
+  const db = wrap('open', '', open);
+  return new Proxy(db, {
+    get(target, prop) {
+      if (prop === 'exec') return (sql: string) => wrap('exec', sql, () => target.exec(sql));
+      if (prop === 'prepare') {
+        return (sql: string) => {
+          const stmt = wrap('prepare', sql, () => target.prepare(sql));
+          return new Proxy(stmt, {
+            get(st, m) {
+              const v = (st as any)[m];
+              if (typeof v !== 'function') return v;
+              if (m === 'run' || m === 'get' || m === 'all' || m === 'values') {
+                return (...args: unknown[]) => wrap(String(m), sql, () => v.apply(st, args));
+              }
+              return v.bind(st);
+            },
+          });
+        };
+      }
+      const v = (target as any)[prop];
+      return typeof v === 'function' ? v.bind(target) : v;
+    },
+  });
+}
+
 let _inbound: Database | null = null;
 let _outbound: Database | null = null;
 let _heartbeatPath: string = DEFAULT_HEARTBEAT_PATH;
@@ -135,7 +173,7 @@ export function openInboundDb(): Database {
     } as unknown as Database;
   }
   ensureSyncLocalSchema();
-  const db = new Database(inboundPath(), inboundOpenOptions());
+  const db = tagErrors(() => new Database(inboundPath(), inboundOpenOptions()), `inbound.db ${inboundPath()} (poll)`);
   db.exec('PRAGMA busy_timeout = 5000');
   db.exec('PRAGMA mmap_size = 0');
   return db;
@@ -150,7 +188,7 @@ export function openInboundDb(): Database {
 export function getInboundDb(): Database {
   if (!_inbound) {
     ensureSyncLocalSchema();
-    _inbound = new Database(inboundPath(), inboundOpenOptions());
+    _inbound = tagErrors(() => new Database(inboundPath(), inboundOpenOptions()), `inbound.db ${inboundPath()}`);
     _inbound.exec('PRAGMA busy_timeout = 5000');
     _inbound.exec('PRAGMA mmap_size = 0');
   }
@@ -161,7 +199,7 @@ export function getInboundDb(): Database {
 export function getOutboundDb(): Database {
   if (!_outbound) {
     ensureSyncLocalSchema();
-    _outbound = new Database(outboundPath());
+    _outbound = tagErrors(() => new Database(outboundPath()), `outbound.db ${outboundPath()}`);
     _outbound.exec('PRAGMA journal_mode = DELETE');
     _outbound.exec('PRAGMA busy_timeout = 5000');
     _outbound.exec('PRAGMA foreign_keys = ON');
