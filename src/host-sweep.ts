@@ -328,7 +328,8 @@ function enforceRunningContainerSla(
   if (decision.action === 'ok') return;
 
   if (decision.action === 'kill-ceiling') {
-    log.warn('Killing container past absolute ceiling', {
+    // Idle reap is routine (a warm container with nothing to do), not a fault.
+    log.info('Killing container past absolute ceiling', {
       sessionId: session.id,
       heartbeatAgeMs: decision.heartbeatAgeMs,
       ceilingMs: decision.ceilingMs,

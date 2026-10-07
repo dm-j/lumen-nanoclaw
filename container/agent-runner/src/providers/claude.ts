@@ -2,7 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-import { query as sdkQuery, type HookCallback, type PreCompactHookInput } from '@anthropic-ai/claude-agent-sdk';
+import { query as sdkQuery, type HookCallback, type PreCompactHookInput, type StopHookInput } from '@anthropic-ai/claude-agent-sdk';
 
 import { clearContainerToolInFlight, setContainerToolInFlight } from '../db/connection.js';
 import type { MemorySessionHookRegistration } from '../memory/session-hook.js';
@@ -346,6 +346,33 @@ function createPreCompactHook(assistantName?: string): HookCallback {
   };
 }
 
+// ── Last-context dump (Stop hook) ──
+
+/** Host-mounted dir (logs/last-context/<agent-group>); absent for runs without the mount. */
+const LAST_CONTEXT_DIR = '/workspace/last-context';
+
+/**
+ * On every Stop, replace the agent group's single `last-context.jsonl`: a header
+ * line (time, model, appended system prompt) then the SDK transcript verbatim.
+ * Temp file + rename = atomic swap, so a reader never sees a half-written file.
+ * ponytail: concurrent sessions of one group race, last Stop wins.
+ */
+function createStopHook(model: string | undefined, instructions: string | undefined): HookCallback {
+  return async (input) => {
+    try {
+      const { transcript_path, session_id } = input as StopHookInput;
+      if (!fs.existsSync(LAST_CONTEXT_DIR) || !fs.existsSync(transcript_path)) return {};
+      const header = JSON.stringify({ stoppedAt: new Date().toISOString(), sessionId: session_id, model, systemPromptAppend: instructions });
+      const tmp = path.join(LAST_CONTEXT_DIR, `.last-context.jsonl.${process.pid}.tmp`);
+      fs.writeFileSync(tmp, `${header}\n${fs.readFileSync(transcript_path, 'utf-8')}`);
+      fs.renameSync(tmp, path.join(LAST_CONTEXT_DIR, 'last-context.jsonl'));
+    } catch (err) {
+      log(`Failed to write last-context: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    return {};
+  };
+}
+
 // ── Continuation rotation (cold-resume guard) ──
 
 /**
@@ -578,6 +605,7 @@ export class ClaudeProvider implements AgentProvider {
           PostToolUse: [{ hooks: [postToolUseHook] }],
           PostToolUseFailure: [{ hooks: [postToolUseHook] }],
           PreCompact: [{ hooks: [createPreCompactHook(this.assistantName)] }],
+          Stop: [{ hooks: [createStopHook(this.model, instructions)] }],
         },
       },
     });

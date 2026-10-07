@@ -19,6 +19,7 @@ import {
   CONTAINER_PIDS_LIMIT,
   DATA_DIR,
   GROUPS_DIR,
+  LOGS_DIR,
   ONECLI_API_KEY,
   ONECLI_URL,
   TIMEZONE,
@@ -318,10 +319,12 @@ async function spawnContainer(session: Session): Promise<void> {
 
   container.on('close', (code) => {
     activeContainers.delete(session.id);
+    const idleReaped = idleReapedSessions.delete(session.id);
     markContainerStopped(session.id);
     stopTypingRefresh(session.id);
     // code null = killed by signal (normal shutdown path), not a boot failure.
-    if (code !== 0 && code !== null && stderrTail.length > 0) {
+    // An idle reap is expected (SIGTERM exit), not a boot failure — keep it out of the error log.
+    if (code !== 0 && code !== null && stderrTail.length > 0 && !idleReaped) {
       log.warn('Container exited non-zero', { sessionId: session.id, code, containerName, stderrTail });
     } else {
       log.info('Container exited', { sessionId: session.id, code, containerName });
@@ -336,6 +339,9 @@ async function spawnContainer(session: Session): Promise<void> {
   });
 }
 
+// Sessions the host sweep just reaped for an idle heartbeat; read by the 'close' handler above.
+const idleReapedSessions = new Set<string>();
+
 /** Kill a container for a session. */
 export function killContainer(sessionId: string, reason: string, onExit?: () => void): void {
   const entry = activeContainers.get(sessionId);
@@ -345,6 +351,7 @@ export function killContainer(sessionId: string, reason: string, onExit?: () => 
     entry.process.once('close', onExit);
   }
 
+  if (reason === 'absolute-ceiling') idleReapedSessions.add(sessionId);
   log.info('Killing container', { sessionId, reason, containerName: entry.containerName });
   try {
     stopContainer(entry.containerName);
@@ -441,6 +448,11 @@ export function buildMounts(
 
   // Session folder at /workspace (contains inbound.db, outbound.db, outbox/, .claude/)
   mounts.push({ hostPath: sessDir, containerPath: '/workspace', readonly: false });
+
+  // Per-agent "last full context" dump target (written by the Stop hook, container-side)
+  const lastContextDir = path.join(LOGS_DIR, 'last-context', agentGroup.id);
+  fs.mkdirSync(lastContextDir, { recursive: true });
+  mounts.push({ hostPath: lastContextDir, containerPath: '/workspace/last-context', readonly: false });
 
   // Agent group folder at /workspace/agent (RW for working files + shared memory)
   mounts.push({ hostPath: groupDir, containerPath: '/workspace/agent', readonly: false });
