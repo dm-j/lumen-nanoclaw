@@ -121,6 +121,11 @@ export const SDK_DISALLOWED_TOOLS = [
   'TaskStop',
   'TeamCreate',
   'TeamDelete',
+  // Claude Code's multi-agent orchestration. Workflow spawns same-session subagents (same policy as
+  // Task above) and its definition is ~21 KB, Monitor ~7.6 KB -- context weight on every request for
+  // tools no NanoClaw agent uses (Bash run_in_background covers the one-shot case Monitor mostly serves).
+  'Workflow',
+  'Monitor',
 ];
 
 // Tool allowlist for NanoClaw agent containers. MCP-tool entries are derived
