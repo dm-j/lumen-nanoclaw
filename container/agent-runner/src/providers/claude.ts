@@ -126,6 +126,12 @@ export const SDK_DISALLOWED_TOOLS = [
   // tools no NanoClaw agent uses (Bash run_in_background covers the one-shot case Monitor mostly serves).
   'Workflow',
   'Monitor',
+  // Claude Code's in-session todo list (the TodoWrite successor): ~8.7 KB of definitions, ephemeral to one
+  // run, and a lookalike of the real task manager (task_management_* shims) -- a task "created" here is lost.
+  'TaskCreate',
+  'TaskUpdate',
+  'TaskList',
+  'TaskGet',
 ];
 
 // Tool allowlist for NanoClaw agent containers. MCP-tool entries are derived

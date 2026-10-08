@@ -16,7 +16,7 @@ are documented below but not counted in the table.
 
 | Group (folder) | Shims | Servers |
 |---|---|---|
-| lumen-dmj | 12 (+14 disabled) | `journal`, `memory`, `notes`, `task_management`, `vault`; `vector` is disabled |
+| lumen-dmj | 9 (+17 disabled) | `journal`, `memory`, `notes`, `vault`; `task_management` and `vector` are disabled |
 | routine | 14 | `calendar`, `daily_note`, `get`, `notes` |
 | dispatcher | 1 | `gaps` |
 | departure | 2 (orphaned) | `travel`, `vault` |
@@ -51,6 +51,8 @@ weekday, or `YYYY-MM-DD`).
 | `notes_delete` | Delete one note by ID. |
 
 **`task_management`** — todo.txt-style task list.
+
+> **Disabled (2026-10-08).** David wasn't seeing Lumen use them, and they cost context on every request. The three scripts are renamed `<name>-host-disabled` in `mcp-shims/_pool/task_management/` and their `lumen-dmj` registry lines are removed. To re-enable: rename them back to `<name>-host` and re-add the three `task_management/tasks_*` lines to the `lumen-dmj` block of `_registry.json`.
 
 | Tool | Purpose |
 |---|---|
