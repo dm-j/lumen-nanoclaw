@@ -47,6 +47,13 @@ describe('context timezone header', () => {
     expect(result).not.toContain('current_time=');
   });
 
+  it('omits the header on a follow-up pushed into an open query (the first prompt already carried it)', () => {
+    insertMessage('m1', 'chat', { sender: 'Alice', text: 'hello' });
+    const result = formatMessages(getPendingMessages(), { followUp: true });
+    expect(result).not.toContain('<context');
+    expect(result).toContain('hello');
+  });
+
   it('includes the header even when the message list is empty', () => {
     const result = formatMessages([]);
     expect(result).toContain(`<context timezone="${TIMEZONE}"`);
