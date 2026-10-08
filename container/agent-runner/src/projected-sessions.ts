@@ -39,6 +39,9 @@ export interface SentContext {
   blocks: Set<string>;
 }
 
+// How literal-tail.ts renders an interleaved briefing entry (host side; can't be imported here).
+const BRIEFING_ENTRY = /^> \[[^\]]+\] Briefing subagent:/;
+
 const tailBlocks = (tail: string): string[] => tail.split(/\n{2,}/).map((b) => b.trim()).filter(Boolean);
 
 /**
@@ -52,7 +55,8 @@ export function contextDelta(prev: SentContext | null, cur: { briefing: string; 
   if (!prev) return { briefing: cur.briefing, tail: cur.tail };
   return {
     briefing: cur.briefing === prev.briefing ? '' : cur.briefing,
-    tail: tailBlocks(cur.tail).filter((b) => !prev.blocks.has(b)).join('\n\n'),
+    // Briefing entries are skipped: each one already reached this query as a <briefing> block.
+    tail: tailBlocks(cur.tail).filter((b) => !prev.blocks.has(b) && !BRIEFING_ENTRY.test(b)).join('\n\n'),
   };
 }
 

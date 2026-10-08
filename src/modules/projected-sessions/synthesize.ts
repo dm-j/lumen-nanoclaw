@@ -21,17 +21,16 @@ import { getSession } from '../../db/sessions.js';
 import { sessionDir } from '../../session-manager.js';
 import { log } from '../../log.js';
 import { getBriefingHistoryEntries, getSessionBriefing, isEnabled, readPendingBatchText } from './db.js';
-import { COMPILER_TAIL_TURNS, compileBriefing, sessionBriefingKey } from './compile-briefing.js';
+import { compileBriefing, sessionBriefingKey } from './compile-briefing.js';
 import { renderLiteralTail } from './literal-tail.js';
 
 // Responder's own tail is real working context, not just tone.
 const RESPONDER_TAIL_TURNS = 12;
 
-// Briefing history shown to the responder is capped at the same size as the
-// briefer's own (COMPILER_TAIL_TURNS) — a briefing ages out of context at
-// the same rate for both sides, so changing information doesn't linger
-// longer for Lumen than it does for the briefer that produced it.
-const RESPONDER_BRIEFING_CAP = COMPILER_TAIL_TURNS;
+// Past briefings interleaved into the responder's tail (the newest is also sent as <briefing>). Each is ~1k
+// size units, so 5 was ~5k of every cold prompt, and the latest briefing supersedes the older ones anyway.
+// Deliberately NOT COMPILER_TAIL_TURNS: the compiler keeps seeing its own last few briefings (5).
+const RESPONDER_BRIEFING_CAP = 2;
 
 /** Marker file inside the group's already-RW-mounted folder (`/workspace/agent`
  *  in the container) — the container-side hook reads this directly, no

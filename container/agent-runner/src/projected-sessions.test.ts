@@ -78,6 +78,10 @@ describe('contextDelta', () => {
   test('a SLID tail (oldest dropped, newest added -- not an extension of the old text) still sends only the new block', () => {
     expect(contextDelta(prev, { briefing: 'B1', tail: tail('> [t2] B:\n> two', '> [t3] C:\n> three') })).toEqual({ briefing: '', tail: '> [t3] C:\n> three' });
   });
+  test('interleaved briefing entries are not resent in a follow-up tail (they arrive as <briefing>)', () => {
+    const b = '> [t3] Briefing subagent:\n> new facts';
+    expect(contextDelta(prev, { briefing: 'B2', tail: tail('> [t2] B:\n> two', b, '> [t4] C:\n> hi') })).toEqual({ briefing: 'B2', tail: '> [t4] C:\n> hi' });
+  });
   test('an edited turn counts as new', () => {
     expect(contextDelta(prev, { briefing: 'B1', tail: tail('> [t1] A:\n> one (edited)', '> [t2] B:\n> two') }).tail).toBe('> [t1] A:\n> one (edited)');
   });
