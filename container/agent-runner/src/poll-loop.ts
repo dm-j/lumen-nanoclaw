@@ -3,7 +3,7 @@ import fs from 'node:fs';
 
 import { getConfig } from './config.js';
 import { findByName, getAllDestinations, type DestinationEntry } from './destinations.js';
-import { isProjectedSession } from './projected-sessions.js';
+import { isProjectedSession, projectedResetReason, queryCacheLive } from './projected-sessions.js';
 import { isStatelessTaskSession } from './stateless-session.js';
 import {
   getPendingMessages,
@@ -52,7 +52,7 @@ const CORRUPTION_STREAK_EXIT = 10;
  * indefinitely, silently growing it like a resumed transcript until it
  * eventually blows the prompt-size limit. Mirrors the N/2N anchor-growth and
  * TTL discipline `literal-tail.ts` already applies to what gets *written to
- * disk* (RESPONDER_TAIL_TURNS=15, DEFAULT_CACHE_TTL_MS=5min) — duplicated
+ * disk* (RESPONDER_TAIL_TURNS in synthesize.ts, DEFAULT_CACHE_TTL_MS=5min) — duplicated
  * here rather than imported because container/agent-runner is a separate
  * Bun package tree with no access to host-side src/.
  *
@@ -64,8 +64,13 @@ const CORRUPTION_STREAK_EXIT = 10;
  * have to reset by hand. Upgrade to in-process reset only if container
  * respawn latency becomes a measured problem.
  */
-const PROJECTED_FOLLOWUP_RESET_COUNT = 30; // 2 * RESPONDER_TAIL_TURNS
-const PROJECTED_QUERY_TTL_MS = 5 * 60 * 1000; // DEFAULT_CACHE_TTL_MS
+// = RESPONDER_TAIL_TURNS (synthesize.ts), duplicated: the on-disk tail restarts at N and grows to 2N, so a
+// warm query may add ~N turns on top of its starting tail. Turns are a rough proxy for size, but simple.
+// Keep in step with RESPONDER_TAIL_TURNS by hand — see docs/roadmap/warm-container-context-accumulation.md.
+const PROJECTED_FOLLOWUP_RESET_COUNT = 12;
+// Only when PrefixRouter can't say whether the provider cache is live: reset after this much idle time
+// (default 5 min = Anthropic's ephemeral cache TTL). Normally /cache-status decides, per-provider.
+const PROJECTED_QUERY_FALLBACK_TTL_MS = 5 * 60 * 1000;
 
 /**
  * True for SQLite errors that indicate a corrupt READ view — almost always a
@@ -483,11 +488,19 @@ export async function processQuery(
   let pollInFlight = false;
   let endedForCommand = false;
   let corruptionStreak = 0;
-  const queryOpenedAt = Date.now();
+  let lastActivityAt = Date.now();
   let followUpsPushed = 0;
-  const projectedResetDue = () =>
-    isProjectedSession() &&
-    (followUpsPushed >= PROJECTED_FOLLOWUP_RESET_COUNT || Date.now() - queryOpenedAt > PROJECTED_QUERY_TTL_MS);
+  const projectedResetNow = async () => {
+    if (!isProjectedSession()) return null;
+    const atCap = followUpsPushed >= PROJECTED_FOLLOWUP_RESET_COUNT;
+    return projectedResetReason({
+      followUpsPushed,
+      maxFollowUps: PROJECTED_FOLLOWUP_RESET_COUNT,
+      idleMs: Date.now() - lastActivityAt,
+      cacheLive: atCap ? null : await queryCacheLive(getConfig().model),
+      fallbackTtlMs: PROJECTED_QUERY_FALLBACK_TTL_MS,
+    });
+  };
   const pollHandle = setInterval(() => {
     if (done || pollInFlight || endedForCommand) return;
     pollInFlight = true;
@@ -557,11 +570,9 @@ export async function processQuery(
         // Leave these messages pending — same as hitting the 30-min absolute
         // ceiling mid-conversation — and exit so host-sweep respawns a fresh
         // container that compiles a small briefing/tail on its next poll.
-        if (projectedResetDue()) {
-          log(
-            `PROJECTED_QUERY_RESET: warm container hit ${followUpsPushed} pushed follow-ups ` +
-              `(or TTL) — exiting so host respawns with a fresh query`,
-          );
+        const resetReason = await projectedResetNow();
+        if (resetReason) {
+          log(`PROJECTED_QUERY_RESET: ${resetReason} (${followUpsPushed} follow-ups pushed) — exiting so host respawns with a fresh query`);
           done = true;
           clearInterval(pollHandle);
           setTimeout(() => process.exit(75), 100);
@@ -577,6 +588,7 @@ export async function processQuery(
         query.push(prompt);
         archivePrompts.push(prompt);
         followUpsPushed += 1;
+        lastActivityAt = Date.now();
         markCompleted(keptIds);
       } catch (err) {
         // Without this catch the rejection escapes the void IIFE and Node
@@ -625,6 +637,7 @@ export async function processQuery(
     for await (const event of query.events) {
       handleEvent(event, routing);
       touchHeartbeat();
+      lastActivityAt = Date.now();
 
       if (event.type === 'init') {
         queryContinuation = event.continuation;

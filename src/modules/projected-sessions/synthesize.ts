@@ -25,7 +25,7 @@ import { COMPILER_TAIL_TURNS, compileBriefing, sessionBriefingKey } from './comp
 import { renderLiteralTail } from './literal-tail.js';
 
 // Responder's own tail is real working context, not just tone.
-const RESPONDER_TAIL_TURNS = 15;
+const RESPONDER_TAIL_TURNS = 12;
 
 // Briefing history shown to the responder is capped at the same size as the
 // briefer's own (COMPILER_TAIL_TURNS) — a briefing ages out of context at
@@ -38,6 +38,20 @@ const RESPONDER_BRIEFING_CAP = COMPILER_TAIL_TURNS;
  *  `container.json`/`RunnerConfig` field needed. */
 function markerPath(folder: string): string {
   return path.join(GROUPS_DIR, folder, '.projected-sessions-enabled');
+}
+
+/**
+ * The key PrefixRouter's cache state (and `literal-tail`'s cache-liveness check) is filed under for a
+ * projected session — null when the group isn't projected. The container sends it as `x-session-id` on
+ * inference so the later `/cache-status` query finds the send; without it status always reads "expired".
+ */
+export function projectedSessionKeyFor(session: {
+  agent_group_id: string;
+  messaging_group_id: string | null;
+  thread_id: string | null;
+}): string | null {
+  if (!isEnabled(session.agent_group_id)) return null;
+  return sessionBriefingKey(session.agent_group_id, session.messaging_group_id, session.thread_id);
 }
 
 export async function maybeSynthesizeProjectedContext(agentGroupId: string, sessionId: string): Promise<void> {

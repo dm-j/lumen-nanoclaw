@@ -273,6 +273,10 @@ async function spawnContainer(session: Session): Promise<void> {
   // OneCLI agent identifier is always the agent group id — stable across
   // sessions and reversible via getAgentGroup() for approval routing.
   const agentIdentifier = agentGroup.id;
+  // Projected sessions: tag inference with the session key so PrefixRouter's /cache-status can find it.
+  const cacheSessionKey = hasTable(getDb(), 'projected_sessions_enabled')
+    ? (await import('./modules/projected-sessions/synthesize.js')).projectedSessionKeyFor(session)
+    : null;
   const args = await buildContainerArgs(
     mounts,
     containerName,
@@ -281,6 +285,7 @@ async function spawnContainer(session: Session): Promise<void> {
     provider,
     contribution,
     agentIdentifier,
+    cacheSessionKey,
   );
 
   log.info('Spawning container', { sessionId: session.id, agentGroup: agentGroup.name, containerName });
@@ -598,6 +603,7 @@ async function buildContainerArgs(
   _provider: string,
   providerContribution: ProviderContainerContribution,
   agentIdentifier?: string,
+  cacheSessionKey?: string | null,
 ): Promise<string[]> {
   const args: string[] = ['run', '--rm', '--name', containerName, '--label', CONTAINER_INSTALL_LABEL];
 
@@ -625,6 +631,9 @@ async function buildContainerArgs(
       args.push('-e', `${key}=${value}`);
     }
   }
+
+  // Sent on every inference call (Claude Code's ANTHROPIC_CUSTOM_HEADERS: "Name: Value" lines).
+  if (cacheSessionKey) args.push('-e', `ANTHROPIC_CUSTOM_HEADERS=x-session-id: ${cacheSessionKey}`);
 
   // Per-agent-group env overrides — applied last to win over provider values.
   if (containerConfig.env) {

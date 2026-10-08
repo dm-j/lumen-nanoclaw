@@ -42,10 +42,6 @@ import { getSession } from './db/sessions.js';
 import type { AgentGroup, MessagingGroup, MessagingGroupAgent } from './types.js';
 import type { InboundEvent } from './channels/adapter.js';
 
-// Responder's own tail is real working context, not just tone — wider than
-// the compiler's (COMPILER_TAIL_TURNS in compile-briefing.ts).
-const RESPONDER_TAIL_TURNS = 40;
-
 function generateId(): string {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
