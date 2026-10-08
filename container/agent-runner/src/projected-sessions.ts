@@ -35,20 +35,24 @@ function readIfExists(p: string): string {
 
 export interface SentContext {
   briefing: string;
-  tail: string;
+  /** Every tail turn-block already shown to this query (blocks are blank-line separated). */
+  blocks: Set<string>;
 }
 
+const tailBlocks = (tail: string): string[] => tail.split(/\n{2,}/).map((b) => b.trim()).filter(Boolean);
+
 /**
- * What a follow-up still needs of the briefing/tail, given what this query was already shown: the
- * briefing only if it changed, and the tail only past what was sent (the host's tail grows append-only
- * N -> 2N between resets; after a reset it no longer extends what we sent, so it goes out in full).
- * Without this every follow-up re-injects a whole copy of both, ~97% of each follow-up's growth.
+ * What a follow-up still needs of the briefing/tail, given what this query was already shown. The briefing
+ * is resent whole only if it changed (a new one supersedes the old). The tail is a log of turns, so only
+ * turn blocks not yet shown go out -- NOT "the part past the old text": the host's tail slides and resets
+ * (anchored N -> 2N), so a new tail often doesn't start with the old one, and a prefix diff then resends
+ * the whole thing every time (seen live: ~7.5k units per follow-up).
  */
-export function contextDelta(prev: SentContext | null, cur: SentContext): SentContext {
-  if (!prev) return cur;
+export function contextDelta(prev: SentContext | null, cur: { briefing: string; tail: string }): { briefing: string; tail: string } {
+  if (!prev) return { briefing: cur.briefing, tail: cur.tail };
   return {
     briefing: cur.briefing === prev.briefing ? '' : cur.briefing,
-    tail: cur.tail.startsWith(prev.tail) ? cur.tail.slice(prev.tail.length).trim() : cur.tail,
+    tail: tailBlocks(cur.tail).filter((b) => !prev.blocks.has(b)).join('\n\n'),
   };
 }
 
@@ -66,7 +70,15 @@ export function projectedContextHeader(followUp = false): string {
 
   const cur = { briefing: readIfExists(BRIEFING_PATH), tail: readIfExists(RECENT_TURNS_PATH) };
   const out = contextDelta(followUp ? sent : null, cur);
-  sent = cur;
+  const seen = followUp && sent ? sent.blocks : new Set<string>();
+  for (const b of tailBlocks(cur.tail)) seen.add(b);
+  sent = { briefing: cur.briefing, blocks: seen };
+  if (followUp) {
+    console.error(
+      `[projected] follow-up header: briefing ${out.briefing ? `resent (${out.briefing.length}B)` : 'unchanged'}, ` +
+        `tail ${tailBlocks(out.tail).length} new of ${tailBlocks(cur.tail).length} blocks (${out.tail.length}B of ${cur.tail.length}B)`,
+    );
+  }
 
   const parts: string[] = [];
   if (out.briefing) parts.push(`<briefing>\n${out.briefing}\n</briefing>`);

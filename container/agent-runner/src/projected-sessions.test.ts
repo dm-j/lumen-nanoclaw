@@ -59,17 +59,26 @@ describe('queryCacheLive', () => {
 });
 
 describe('contextDelta', () => {
-  const first = { briefing: 'B1', tail: 't1\nt2' };
+  const blocks = (...b: string[]) => new Set(b);
+  const prev = { briefing: 'B1', blocks: blocks('> [t1] A:\n> one', '> [t2] B:\n> two') };
+  const tail = (...b: string[]) => b.join('\n\n');
+
   test('first prompt of a query gets everything', () => {
-    expect(contextDelta(null, first)).toEqual(first);
+    expect(contextDelta(null, { briefing: 'B1', tail: tail('x', 'y') })).toEqual({ briefing: 'B1', tail: tail('x', 'y') });
   });
   test('follow-up with nothing new sends nothing', () => {
-    expect(contextDelta(first, first)).toEqual({ briefing: '', tail: '' });
+    expect(contextDelta(prev, { briefing: 'B1', tail: tail('> [t1] A:\n> one', '> [t2] B:\n> two') })).toEqual({ briefing: '', tail: '' });
   });
-  test('a grown tail sends only the new rows; a changed briefing is resent whole', () => {
-    expect(contextDelta(first, { briefing: 'B2', tail: 't1\nt2\nt3' })).toEqual({ briefing: 'B2', tail: 't3' });
+  test('a grown tail sends only the new turn blocks; a changed briefing is resent whole', () => {
+    expect(contextDelta(prev, { briefing: 'B2', tail: tail('> [t1] A:\n> one', '> [t2] B:\n> two', '> [t3] C:\n> three') })).toEqual({
+      briefing: 'B2',
+      tail: '> [t3] C:\n> three',
+    });
   });
-  test('a reset tail (no longer extends what was sent) goes out in full', () => {
-    expect(contextDelta(first, { briefing: 'B1', tail: 't2\nt3' })).toEqual({ briefing: '', tail: 't2\nt3' });
+  test('a SLID tail (oldest dropped, newest added -- not an extension of the old text) still sends only the new block', () => {
+    expect(contextDelta(prev, { briefing: 'B1', tail: tail('> [t2] B:\n> two', '> [t3] C:\n> three') })).toEqual({ briefing: '', tail: '> [t3] C:\n> three' });
+  });
+  test('an edited turn counts as new', () => {
+    expect(contextDelta(prev, { briefing: 'B1', tail: tail('> [t1] A:\n> one (edited)', '> [t2] B:\n> two') }).tail).toBe('> [t1] A:\n> one (edited)');
   });
 });
