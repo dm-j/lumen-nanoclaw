@@ -580,7 +580,7 @@ export async function processQuery(
         }
 
         const keptIds = keep.map((m) => m.id);
-        const prompt = formatMessages(keep);
+        const prompt = formatMessages(keep, { followUp: true });
         writeLastPrompt(prompt, 'follow-up');
         log(`Pushing ${keep.length} follow-up message(s) into active query`);
         unwrappedNudged = false;

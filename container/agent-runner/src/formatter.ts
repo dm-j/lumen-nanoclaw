@@ -132,8 +132,8 @@ export function extractRouting(messages: MessageInRow[]): RoutingContext {
  *
  * Strips routing fields — the agent never sees platform_id, channel_type, thread_id.
  */
-export function formatMessages(messages: MessageInRow[]): string {
-  const header = `${projectedContextHeader()}<context timezone="${escapeXml(TIMEZONE)}" />\n`;
+export function formatMessages(messages: MessageInRow[], opts: { followUp?: boolean } = {}): string {
+  const header = `${projectedContextHeader(opts.followUp)}<context timezone="${escapeXml(TIMEZONE)}" />\n`;
   if (messages.length === 0) return header;
 
   // Group by kind

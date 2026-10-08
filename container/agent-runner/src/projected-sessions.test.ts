@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 
-import { cacheSessionId, projectedResetReason, queryCacheLive } from './projected-sessions.js';
+import { cacheSessionId, contextDelta, projectedResetReason, queryCacheLive } from './projected-sessions.js';
 
 const base = { followUpsPushed: 0, maxFollowUps: 12, idleMs: 0, cacheLive: true, fallbackTtlMs: 300_000 };
 
@@ -55,5 +55,21 @@ describe('queryCacheLive', () => {
     expect(await queryCacheLive('m', 'http://x', 's')).toBeNull();
     expect(await queryCacheLive(undefined, 'http://x', 's')).toBeNull();
     expect(await queryCacheLive('m', 'http://x', null)).toBeNull();
+  });
+});
+
+describe('contextDelta', () => {
+  const first = { briefing: 'B1', tail: 't1\nt2' };
+  test('first prompt of a query gets everything', () => {
+    expect(contextDelta(null, first)).toEqual(first);
+  });
+  test('follow-up with nothing new sends nothing', () => {
+    expect(contextDelta(first, first)).toEqual({ briefing: '', tail: '' });
+  });
+  test('a grown tail sends only the new rows; a changed briefing is resent whole', () => {
+    expect(contextDelta(first, { briefing: 'B2', tail: 't1\nt2\nt3' })).toEqual({ briefing: 'B2', tail: 't3' });
+  });
+  test('a reset tail (no longer extends what was sent) goes out in full', () => {
+    expect(contextDelta(first, { briefing: 'B1', tail: 't2\nt3' })).toEqual({ briefing: '', tail: 't2\nt3' });
   });
 });

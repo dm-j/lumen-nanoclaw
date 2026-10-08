@@ -33,15 +33,44 @@ function readIfExists(p: string): string {
   }
 }
 
-/** `<briefing>`/`<recent-turns>` blocks to prepend ahead of the `<context>` header, or '' if not projected. */
-export function projectedContextHeader(): string {
+export interface SentContext {
+  briefing: string;
+  tail: string;
+}
+
+/**
+ * What a follow-up still needs of the briefing/tail, given what this query was already shown: the
+ * briefing only if it changed, and the tail only past what was sent (the host's tail grows append-only
+ * N -> 2N between resets; after a reset it no longer extends what we sent, so it goes out in full).
+ * Without this every follow-up re-injects a whole copy of both, ~97% of each follow-up's growth.
+ */
+export function contextDelta(prev: SentContext | null, cur: SentContext): SentContext {
+  if (!prev) return cur;
+  return {
+    briefing: cur.briefing === prev.briefing ? '' : cur.briefing,
+    tail: cur.tail.startsWith(prev.tail) ? cur.tail.slice(prev.tail.length).trim() : cur.tail,
+  };
+}
+
+// What the CURRENT query has been shown. Each query starts blank (continuation is never resumed for
+// projected sessions), so every initial prompt resets this and only follow-ups read it.
+let sent: SentContext | null = null;
+
+/**
+ * `<briefing>`/`<recent-turns>` blocks to prepend ahead of the `<context>` header, or '' if not projected.
+ * `followUp`: the prompt is pushed into an already-open query that has seen the earlier blocks, so only
+ * what's new is included.
+ */
+export function projectedContextHeader(followUp = false): string {
   if (!isProjectedSession()) return '';
 
+  const cur = { briefing: readIfExists(BRIEFING_PATH), tail: readIfExists(RECENT_TURNS_PATH) };
+  const out = contextDelta(followUp ? sent : null, cur);
+  sent = cur;
+
   const parts: string[] = [];
-  const briefing = readIfExists(BRIEFING_PATH);
-  if (briefing) parts.push(`<briefing>\n${briefing}\n</briefing>`);
-  const tail = readIfExists(RECENT_TURNS_PATH);
-  if (tail) parts.push(`<recent-turns>\n${tail}\n</recent-turns>`);
+  if (out.briefing) parts.push(`<briefing>\n${out.briefing}\n</briefing>`);
+  if (out.tail) parts.push(`<recent-turns>\n${out.tail}\n</recent-turns>`);
   return parts.length > 0 ? parts.join('\n') + '\n' : '';
 }
 
