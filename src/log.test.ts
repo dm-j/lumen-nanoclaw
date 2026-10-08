@@ -6,7 +6,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { log, onFatal } from './log.js';
+import { log, onFatal, ts } from './log.js';
 
 describe('onFatal', () => {
   afterEach(() => {
@@ -55,5 +55,11 @@ describe('onFatal', () => {
 
     expect(exitSpy).toHaveBeenCalledWith(1);
     expect(errorSpy).toHaveBeenCalledWith('Fatal hook threw', expect.anything());
+  });
+});
+
+describe('ts', () => {
+  it('is ISO-8601 UTC with date and millis', () => {
+    expect(ts(new Date('2026-10-08T17:46:05.123Z'))).toBe('2026-10-08T17:46:05.123Z');
   });
 });

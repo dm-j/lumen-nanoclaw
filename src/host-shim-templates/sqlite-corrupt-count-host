@@ -9,10 +9,9 @@
 # DB_RETRY_EXHAUSTED is emitted. Not vault-specific — this reads the host's
 # own error log, not anything under VAULT_PATH.
 #
-# Checkpoint-based, not timestamp-parsed: nanoclaw.error.log lines carry no
-# date, only a HH:MM:SS.mmm time-of-day, so windowing by wall-clock time
-# would need extra bookkeeping across midnight for no real benefit — the
-# calling task's own cadence already defines the window as "since last run."
+# Checkpoint-based, not timestamp-parsed: the calling task's own cadence
+# already defines the window as "since last run." (Log lines carry an ISO UTC
+# stamp since 2026-10-08; older lines are bare HH:MM:SS.mmm local time.)
 # Checkpoint is a byte offset into the log, stored next to this script
 # (host-shims/, never mounted into any container, same as the script
 # itself). Resets to 0 if the log file has shrunk (rotated/truncated).
