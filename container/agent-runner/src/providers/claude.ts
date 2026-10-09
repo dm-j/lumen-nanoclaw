@@ -132,6 +132,10 @@ export const SDK_DISALLOWED_TOOLS = [
   'TaskUpdate',
   'TaskList',
   'TaskGet',
+  // PushNotification targets a Claude Code terminal / Remote Control phone, neither of which exists in a
+  // container (users are reached via the channel send tools); NotebookEdit edits .ipynb cells, unused here.
+  'PushNotification',
+  'NotebookEdit',
 ];
 
 // Tool allowlist for NanoClaw agent containers. MCP-tool entries are derived
@@ -151,7 +155,6 @@ export const TOOL_ALLOWLIST = [
   'TodoWrite',
   'ToolSearch',
   'Skill',
-  'NotebookEdit',
 ];
 
 // MCP server names are sanitized by the SDK when forming tool prefixes:
