@@ -632,8 +632,12 @@ async function buildContainerArgs(
     }
   }
 
-  // Sent on every inference call (Claude Code's ANTHROPIC_CUSTOM_HEADERS: "Name: Value" lines).
-  if (cacheSessionKey) args.push('-e', `ANTHROPIC_CUSTOM_HEADERS=x-session-id: ${cacheSessionKey}`);
+  // Sent on every inference call (Claude Code's ANTHROPIC_CUSTOM_HEADERS: "Name: Value" lines). x-agent-group
+  // lets PrefixRouter tell agents apart (e.g. its per-agent last-body dump); x-session-id (projected sessions
+  // only) also keys its prompt-cache tracking.
+  const customHeaders = [`x-agent-group: ${agentGroup.folder}`];
+  if (cacheSessionKey) customHeaders.push(`x-session-id: ${cacheSessionKey}`);
+  args.push('-e', `ANTHROPIC_CUSTOM_HEADERS=${customHeaders.join('\n')}`);
 
   // Per-agent-group env overrides — applied last to win over provider values.
   if (containerConfig.env) {
