@@ -24,6 +24,8 @@ export interface RunnerConfig {
   transport?: 'file' | 'sync';
   /** Script run at the start of every wake — scheduled task fire or a2a assign_task session alike. */
   wakeScript?: string;
+  /** Opt-in: register the `set_followup` / `clear_followup` MCP tools. */
+  followup?: boolean;
 }
 
 const DEFAULT_MAX_MESSAGES = 10;
@@ -55,6 +57,7 @@ export function loadConfig(): RunnerConfig {
     effort: (raw.effort as string) || undefined,
     transport: raw.transport === 'sync' ? 'sync' : 'file',
     wakeScript: (raw.wakeScript as string) || undefined,
+    followup: raw.followup === true,
   };
 
   return _config;

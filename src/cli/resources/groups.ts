@@ -62,6 +62,7 @@ function presentConfig(row: ContainerConfigRow): Record<string, unknown> {
     mcp_shims_dir: row.mcp_shims_dir,
     transport: row.transport ?? 'file',
     wake_script: row.wake_script,
+    followup_enabled: row.followup_enabled === 1,
     updated_at: row.updated_at,
   };
 }
@@ -365,6 +366,7 @@ registerResource({
             | 'mcp_shims_dir'
             | 'transport'
             | 'wake_script'
+            | 'followup_enabled'
           >
         > = {};
         if (args.provider !== undefined) updates.provider = args.provider as string;
@@ -403,9 +405,15 @@ registerResource({
           updates.wake_script = (wakeScriptFlag as string) === '' ? null : (wakeScriptFlag as string);
         }
 
+        if (args.followup !== undefined) {
+          const v = String(args.followup);
+          if (!['true', 'false'].includes(v)) throw new Error('--followup must be true or false');
+          updates.followup_enabled = v === 'true' ? 1 : 0;
+        }
+
         if (Object.keys(updates).length === 0) {
           throw new Error(
-            'Nothing to update — provide at least one of: --provider, --model, --effort, --image-tag, --assistant-name, --max-messages-per-prompt, --cli-scope, --timezone, --host-shims-dir, --session-lifecycle',
+            'Nothing to update — provide at least one of: --provider, --model, --effort, --image-tag, --assistant-name, --max-messages-per-prompt, --cli-scope, --timezone, --host-shims-dir, --session-lifecycle, --followup',
           );
         }
 

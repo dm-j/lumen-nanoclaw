@@ -51,6 +51,7 @@ describe('execHostShim', () => {
       mcp_shims_dir: null,
       transport: null,
       wake_script: null,
+      followup_enabled: 0,
       updated_at: new Date().toISOString(),
     };
     createContainerConfig({ ...base, agent_group_id: 'ag-a', host_shims_dir: dirA });

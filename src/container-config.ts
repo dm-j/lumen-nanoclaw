@@ -170,6 +170,8 @@ export interface ContainerConfig {
    * `assign_task` session alike). See `container_configs.wake_script`.
    */
   wakeScript?: string;
+  /** Register the `set_followup` MCP tool. See `container_configs.followup_enabled`. */
+  followup?: boolean;
 }
 
 /**
@@ -211,6 +213,7 @@ export function configFromDb(row: ContainerConfigRow, group: AgentGroup): Contai
     mcpShims: [],
     transport: row.transport === 'sync' ? 'sync' : 'file',
     wakeScript: row.wake_script ?? undefined,
+    followup: row.followup_enabled === 1 ? true : undefined,
   };
 }
 

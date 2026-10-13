@@ -38,6 +38,7 @@ import { triggerCaptioning } from './modules/attachment-caption/notify.js';
 import { log } from './log.js';
 import { resolveSession, writeSessionMessage, writeOutboundDirect, releaseStagedMessage } from './session-manager.js';
 import { wakeContainer } from './container-runner.js';
+import { cancelFollowups } from './modules/followup/cancel.js';
 import { getSession } from './db/sessions.js';
 import type { AgentGroup, MessagingGroup, MessagingGroupAgent } from './types.js';
 import type { InboundEvent } from './channels/adapter.js';
@@ -536,6 +537,11 @@ async function deliverToAgent(
     // that await resolves, further down.
     stage: wake,
   });
+
+  // A real user message silences any pending self-set follow-up timer.
+  if (event.message.kind === 'chat' || event.message.kind === 'chat-sdk') {
+    cancelFollowups(session.agent_group_id, session.id);
+  }
 
   // Attachments were only stamped with a captionId above (no network call).
   // The actual model call happens now, off the delivery path — fire-and-forget,

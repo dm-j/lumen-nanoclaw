@@ -482,6 +482,7 @@ describe('container configs', () => {
       mcp_shims_dir: null,
       transport: null,
       wake_script: null,
+      followup_enabled: 0,
       updated_at: now(),
     });
     const row = getContainerConfig('ag-full');

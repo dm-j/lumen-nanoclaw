@@ -79,6 +79,7 @@ For ad-hoc queries from skills or scripts, use the in-tree wrapper rather than t
 | `src/modules/permissions/user-dm.ts` | Cold-DM resolution + `user_dms` cache |
 | `src/modules/host-shim/exec.ts` + `registry.ts` + `mcp-manifest.ts`, `container/agent-runner/src/dynamic-shims.ts` | `host-shims/` (whitelisted host scripts callable via the Bash tool) and `mcp-shims/` (scripts auto-registered as real MCP tools) — each tree has a shared `_pool/` plus a per-group `_registry.json` allowlist (groups not listed keep a per-group directory); see `/mcp-shims` skill for the paradigm |
 | `src/group-init.ts` | Per-agent-group filesystem scaffold (CLAUDE.md, skills) — agent-runner source is a shared read-only mount, not copied per group |
+| `src/modules/followup/` + `container/agent-runner/src/mcp-tools/followup.ts` | Opt-in (`ncl groups config update --followup true`) self-cancelling timer: `set_followup({minutes, note?})` queues a due message in the agent's own session; any real inbound chat message cancels it (`cancel.ts`, called from `router.ts`). One live timer per session |
 | `src/db/container-configs.ts` | CRUD for `container_configs` table (per-group container runtime config) |
 | `src/backfill-container-configs.ts` | Migrates legacy `container.json` files into the DB on startup |
 | `src/container-restart.ts` | Kill + on-wake respawn for agent group containers |

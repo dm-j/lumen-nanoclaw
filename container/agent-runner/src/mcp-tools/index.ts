@@ -9,6 +9,7 @@ import './core.js';
 import './interactive.js';
 import './agents.js';
 import './self-mod.js';
+import './followup.js';
 import './memory-fact.js';
 import './dynamic-shims.js';
 import { startMcpServer } from './server.js';

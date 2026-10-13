@@ -50,6 +50,8 @@ export interface ContainerConfigRow {
    * wake script. See docs/roadmap/routine-daily-notes.md.
    */
   wake_script: string | null;
+  /** 1 = agent gets the self-cancelling `set_followup` timer tool (src/modules/followup/). */
+  followup_enabled: number;
   updated_at: string;
 }
 
