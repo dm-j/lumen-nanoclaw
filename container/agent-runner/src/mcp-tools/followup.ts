@@ -31,14 +31,14 @@ const setFollowup: McpToolDefinition = {
   tool: {
     name: 'set_followup',
     description:
-      'Set a timer to wake yourself in this conversation if the user stays silent. A new user message cancels it automatically; setting another replaces it.',
+      'Sets an internal reminder to come back to this to give yourself the *option* to continue the conversation or act on your own initiative.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         minutes: {
           type: 'number',
           description:
-            'Minutes from now (1–1440).',
+            'Minutes from now (1–1440). Fires only if the user stays silent: a new user message cancels it automatically, and setting another replaces it.',
         },
         note: { type: 'string', description: 'Optional note to self, shown to you when the timer fires.' },
       },
