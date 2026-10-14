@@ -89,7 +89,7 @@ still exactly at the design/prep stage described above, nothing stale to fix.
 
 Two things worth knowing before picking this up:
 - **A working travel-time source already exists, independent of the blocked Mapbox
-  plan**: `mcp-shims/departure/travel/route_time-host` — a standalone Python shim
+  plan**: `mcp-shims/departure/travel/route_time-host` (deleted 2026-10-13; recover with `git show daabfeb6:mcp-shims/departure/travel/route_time-host` in lumen-nanoclaw-instance) — a standalone Python shim
   (Nominatim geocoding + OSRM routing, both free/keyless, no OneCLI credential gap to
   solve) with a "HOME" shortcut for David's address. Worth using this instead of
   waiting on the Mapbox/OneCLI proxy-injection gap above, unless Mapbox's specific

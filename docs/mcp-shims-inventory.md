@@ -16,10 +16,9 @@ are documented below but not counted in the table.
 
 | Group (folder) | Shims | Servers |
 |---|---|---|
-| lumen-dmj | 9 (+17 disabled) | `journal`, `memory`, `notes`, `vault`; `task_management` and `vector` are disabled |
+| lumen-dmj | 12 (+17 disabled) | `journal`, `memory`, `notes`, `obsidian`; `task_management` and `vector` are disabled |
 | routine | 14 | `calendar`, `daily_note`, `get`, `notes` |
 | dispatcher | 1 | `gaps` |
-| departure | 2 (orphaned) | `travel`, `vault` |
 
 ## lumen-dmj
 
@@ -50,6 +49,16 @@ weekday, or `YYYY-MM-DD`).
 | `notes_edit` | Reword one note by ID; other notes untouched. |
 | `notes_delete` | Delete one note by ID. |
 
+**`obsidian`** — structure/editing tools backed by the host's Obsidian CLI (the Obsidian app must be running; vault `lumen-data`). Added 2026-10-13, copied from the vault's own `mcp-shims/obsidian/`.
+
+| Tool | Purpose |
+|---|---|
+| `obsidian_search` | Text search; returns ranked notes with path and excerpt. (Was `vault_search` until 2026-10-13.) |
+| `obsidian_read_wikilink` | Open a wikilink leniently (brackets, `.md`, alias, `#Heading`, `^blockId` all optional). (Was `vault_read_wikilink`.) |
+| `obsidian_create` | New note at a vault path, optionally from a `Templates/` template. |
+| `obsidian_move` | Move/rename a note; incoming links are rewritten. |
+| `obsidian_outline` | Headings of a note — cheap peek before a full read. |
+
 **`task_management`** — todo.txt-style task list.
 
 > **Disabled (2026-10-08).** David wasn't seeing Lumen use them, and they cost context on every request. The three scripts are renamed `<name>-host-disabled` in `mcp-shims/_pool/task_management/` and their `lumen-dmj` registry lines are removed. To re-enable: rename them back to `<name>-host` and re-add the three `task_management/tasks_*` lines to the `lumen-dmj` block of `_registry.json`.
@@ -59,13 +68,6 @@ weekday, or `YYYY-MM-DD`).
 | `task_management_tasks_list` | List active tasks; each has a `path` to pass to `tasks_finish`. |
 | `task_management_tasks_capture` | Capture a task from plain text; `#tags`, `@contexts`, `+projects`, dates and priority are parsed. |
 | `task_management_tasks_finish` | Mark a task done, by `path` (preferred) or a uniquely matching title. Ambiguous matches are rejected, never guessed. |
-
-**`vault`** — read access to the notes vault.
-
-| Tool | Purpose |
-|---|---|
-| `vault_search` | Text search; returns ranked notes with path and excerpt. |
-| `vault_read_wikilink` | Open a wikilink leniently (brackets, `.md`, alias, `#Heading`, `^blockId` all optional). |
 
 **`vector`** — drives the Vector robot via the `~/Projects/vector-robot` shim.
 Locomotion is bounded and gated by a hazard latch.
@@ -125,18 +127,6 @@ tools: only `*-host` files listed in the registry are registered.
 | Tool | Purpose |
 |---|---|
 | `gaps_log` | Log a request (its own or a delegated one) that couldn't be completed because the capability doesn't exist yet, so gaps show up as signal for future development. |
-
-## departure (orphaned)
-
-The Departure agent group was removed on 2026-08-29, and no agent group has the
-`departure` folder any more, so these are **never registered**. They are kept as
-reference for the planned Travel agent
-([roadmap/travel-agent-leave-now.md](roadmap/travel-agent-leave-now.md)).
-
-| Script | Purpose |
-|---|---|
-| `travel/route_time-host` | Driving time and distance between two addresses (`HOME` allowed), via Nominatim + OSRM. |
-| `vault/lookup_location-host` | Look up a known address for a place name via read-only vault search. |
 
 ## Shared, not tied to a group
 
