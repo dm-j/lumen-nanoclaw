@@ -8,3 +8,7 @@ Found 2026-09-23 while writing [../fresh-install.md](../fresh-install.md). Nothi
 - **`lumen-restore.sh` untested end to end.** Best rehearsal: restore onto a second Mac or a fresh macOS user/VM with a different `$HOME`... which would break the identical-paths assumption, so realistically the wipe is the test. Keep the backup until Lumen replies.
 - **Stale launchd jobs** (`com.nanoclaw-v2-1328e183`, `com.nanoclaw.statusbar`) point at the abandoned `~/Projects/nanoclaw`; unload and delete them on the live machine.
 - **Hardened image needs a NanoClaw account**; the restore uses a local build instead. Revisit if the account path is wanted.
+
+## Addendum 2026-10-20
+
+The missing remotes for PrefixRouter and the vault, and 32 unpushed instance-repo commits, are now also tracked as a data-loss risk in [Scheduled, off-machine, encrypted backup](scheduled-offsite-backup.md), which has a built (not yet scheduled) nightly encrypted backup and the steps to switch it on. That item is the near-term mitigation; a real git remote for each remains the better fix.
