@@ -25,6 +25,10 @@ Open items, roughly in priority order. Not a commitment or schedule — just wha
 21. [Lumen: "Now and Next" instead of the rendered day schedule](roadmap/lumen-now-and-next.md) — **a note for David to consider, 2026-09-24, not decided**: replace the daily calendar digests Routine sends Lumen with a per-turn `now-next` segment (time until the current event ends, time until the next starts) and push the full calendar back onto Routine; the injection read must not call the calendar sync
 22. [Finer-grained MCP/tool control per agent](roadmap/per-agent-tool-control.md) — **noted 2026-09-30, not started**: tool list, registered tools and instruction fragments are global to every group (only `cli_scope` gates anything), so task agents can see interactive, agent-creation and self-mod tools they should never touch; wanted: per-group allow/deny so each agent is laser-focused and not tempted out of its lane. Interim: soft limits in each agent's `instructions.prepend.md`
 
+## Closed 2026-10-26
+
+- **[Dispatcher decision model](roadmap/dispatcher-decision-model.md)** — abandoned, not built: a one-shot destination picker is incompatible with task decomposition and orchestration, which is what Dispatcher is for. Kept as a record of why.
+
 ## Closed 2026-09-26
 
 - **Calendar event notes: a generated `lumen_file_id`** — shipped and verified live. The filename suffix
