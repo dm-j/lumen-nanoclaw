@@ -21,16 +21,11 @@ import { getSession } from '../../db/sessions.js';
 import { sessionDir } from '../../session-manager.js';
 import { log } from '../../log.js';
 import { getBriefingHistoryEntries, getSessionBriefing, isEnabled, readPendingBatchText } from './db.js';
-import { compileBriefing, sessionBriefingKey } from './compile-briefing.js';
+import { BRIEFING_HISTORY_CAP, compileBriefing, sessionBriefingKey } from './compile-briefing.js';
 import { renderLiteralTail } from './literal-tail.js';
 
 // Responder's own tail is real working context, not just tone.
-const RESPONDER_TAIL_TURNS = 12;
-
-// Past briefings interleaved into the responder's tail (the newest is also sent as <briefing>). Each is ~1k
-// size units, so 5 was ~5k of every cold prompt, and the latest briefing supersedes the older ones anyway.
-// Deliberately NOT COMPILER_TAIL_TURNS: the compiler keeps seeing its own last few briefings (5).
-const RESPONDER_BRIEFING_CAP = 2;
+const RESPONDER_TAIL_TURNS = 9;
 
 /** Marker file inside the group's already-RW-mounted folder (`/workspace/agent`
  *  in the container) — the container-side hook reads this directly, no
@@ -79,12 +74,12 @@ export async function maybeSynthesizeProjectedContext(agentGroupId: string, sess
     const briefing = batchText.trim()
       ? await compileBriefing(agentGroupId, sessionId, sessionKey, batchText)
       : getSessionBriefing(sessionKey);
-    // Up to RESPONDER_BRIEFING_CAP past briefings (oldest-first, includes
+    // Up to BRIEFING_HISTORY_CAP past briefings (oldest-first, includes
     // the one just compiled above), interleaved by timestamp with the raw
     // turns inside renderLiteralTail below — still written to briefing.md
     // too (just the latest), so anything reading that file directly is
     // unaffected.
-    const briefingHistory = getBriefingHistoryEntries(sessionKey, RESPONDER_BRIEFING_CAP);
+    const briefingHistory = getBriefingHistoryEntries(sessionKey, BRIEFING_HISTORY_CAP);
     // Real PrefixRouter cache-liveness check when we know the model the
     // container's own session will actually call (docs/prefixrouter-cache-status.md);
     // undefined falls back to the pure 2N-count reset inside renderLiteralTail.

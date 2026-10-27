@@ -152,10 +152,12 @@ const COMPILE_TIMEOUT_MS = 300_000;
 
 // Compiler's own tail is tone/continuity only — small on purpose so it
 // doesn't crowd out what the compiler is supposed to be freshly looking up.
-// Also the cap on the briefing-history block shown to BOTH compiler and
-// responder — a briefing ages out of context at the same rate for both
-// sides (synthesize.ts imports this same constant for its own cap).
 export const COMPILER_TAIL_TURNS = 5;
+
+// Past briefings shown to BOTH compiler and responder, and the retention cap of session_briefing_history.
+// One shared constant on purpose: the briefer drops anything "already visible" in its history, so if it
+// saw more briefings than the responder, facts only in the older ones would be invisible to the responder.
+export const BRIEFING_HISTORY_CAP = 2;
 
 function briefingFailureNote(errorDetail: string): string {
   return `Briefing generation failed with error: ${errorDetail}. Use your Recall tool to search your memory for specific topics in the conversation.`;
@@ -201,7 +203,7 @@ export async function compileBriefing(
 ): Promise<string> {
   const prevBriefing = getSessionBriefing(sessionKey);
 
-  // Up to COMPILER_TAIL_TURNS past briefings (oldest-first), interleaved by
+  // Up to BRIEFING_HISTORY_CAP past briefings (oldest-first), interleaved by
   // timestamp with the raw turns inside renderLiteralTail below — not one
   // leading block — so the briefer sees its own recent history in the same
   // timeline as the turns it summarized, instead of jumping around (the
@@ -210,7 +212,7 @@ export async function compileBriefing(
   // briefer see its own recent history framed as "already-known context",
   // so its own instructions can tell it not to restate what's already
   // visible here.
-  const briefingHistory = getBriefingHistoryEntries(sessionKey, COMPILER_TAIL_TURNS);
+  const briefingHistory = getBriefingHistoryEntries(sessionKey, BRIEFING_HISTORY_CAP);
   // Compiler lane shells out to a fresh `claude -p --agent briefer` process
   // per call — a real API call each time, so the ephemeral prompt-cache TTL
   // is a real constraint here (see literal-tail.ts's header for why the
@@ -306,7 +308,7 @@ export async function compileBriefing(
     if (!content.includes(NO_BRIEFING_SENTINEL)) {
       const forHistory = stripPrependedSections(content);
       setSessionBriefing(sessionKey, forHistory);
-      appendBriefingHistory(sessionKey, forHistory, COMPILER_TAIL_TURNS);
+      appendBriefingHistory(sessionKey, forHistory, BRIEFING_HISTORY_CAP);
     }
     writeBriefingDebugLog(agentGroupId, prevBriefing, batchWithTail, content);
     return content;

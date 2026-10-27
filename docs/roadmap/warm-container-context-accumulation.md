@@ -42,3 +42,9 @@ Verified: `pnpm exec tsc -p container/agent-runner/tsconfig.json --noEmit` clean
 - **Header wiring written 2026-10-08 (not yet deployed/verified):** `container-runner.ts` sets `ANTHROPIC_CUSTOM_HEADERS=x-session-id: <key>` for projected sessions, with the key from `projectedSessionKeyFor` (`synthesize.ts`), identical to the key `literal-tail` queries `/cache-status` with. Verify after deploy: send Lumen a message, then `POST /cache-status` with that key and Lumen's model — should read `live` (it read `expired` before).
 - **Built 2026-10-08:** the fixed query-age TTL is gone. On each follow-up the container asks PrefixRouter's `/cache-status` (session key parsed from `ANTHROPIC_CUSTOM_HEADERS`, model from `container.json`); `projectedResetReason` (`container/agent-runner/src/projected-sessions.ts`) resets on count (12), on `expired`, or — only when status is unknown/unreachable — on idle time since the last query activity > 5 min (`PROJECTED_QUERY_FALLBACK_TTL_MS`). Unit-tested in `projected-sessions.test.ts`.
 - Host side built + service restarted 2026-10-08 ~18:12Z. Container side is a shared read-only mount, so it applies from each group's next spawn. Header verification pending a natural Lumen wake.
+
+## Addendum 2026-10-15 — trimming experiment
+
+`RESPONDER_TAIL_TURNS` 12 → 9 and `PROJECTED_FOLLOWUP_RESET_COUNT` 12 → 9 (kept equal, per the criterion above). Purpose: find how far the tail can shrink before response quality drops. Open: judge quality at 9; if it holds, try lower. Running containers keep the old reset count until they respawn.
+
+Also 2026-10-15: briefer and responder now share one `BRIEFING_HISTORY_CAP = 2` (compile-briefing.ts; replaces COMPILER_TAIL_TURNS-as-history-cap and RESPONDER_BRIEFING_CAP). Reason: the briefer omits anything "already visible" in its history, so a wider briefer window than the responder left facts only the briefer could see.

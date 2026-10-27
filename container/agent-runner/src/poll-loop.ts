@@ -67,7 +67,7 @@ const CORRUPTION_STREAK_EXIT = 10;
 // = RESPONDER_TAIL_TURNS (synthesize.ts), duplicated: the on-disk tail restarts at N and grows to 2N, so a
 // warm query may add ~N turns on top of its starting tail. Turns are a rough proxy for size, but simple.
 // Keep in step with RESPONDER_TAIL_TURNS by hand — see docs/roadmap/warm-container-context-accumulation.md.
-const PROJECTED_FOLLOWUP_RESET_COUNT = 12;
+const PROJECTED_FOLLOWUP_RESET_COUNT = 9;
 // Only when PrefixRouter can't say whether the provider cache is live: reset after this much idle time
 // (default 5 min = Anthropic's ephemeral cache TTL). Normally /cache-status decides, per-provider.
 const PROJECTED_QUERY_FALLBACK_TTL_MS = 5 * 60 * 1000;
