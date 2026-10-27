@@ -17,7 +17,7 @@ are documented below but not counted in the table.
 | Group (folder) | Shims | Servers |
 |---|---|---|
 | lumen-dmj | 12 (+17 disabled) | `journal`, `memory`, `notes`, `obsidian`; `task_management` and `vector` are disabled |
-| routine | 14 | `calendar`, `daily_note`, `get`, `notes` |
+| routine | 21 | `calendar`, `daily_note`, `get`, `memory`, `notes`, `obsidian` |
 | dispatcher | 1 | `gaps` |
 
 ## lumen-dmj
@@ -95,6 +95,8 @@ Locomotion is bounded and gated by a hazard latch.
 | `vector_continue_action` | "Nothing new, keep him visibly alive." Fires a random small screen flash or short sound. Its description is deliberately written as the default choice on a check-in, to compete with `move`/`say`. |
 
 ## routine
+
+Since 2026-10-18 routine also has lumen-dmj's `memory` (`memory_remember`, `memory_recall`) and `obsidian` (5 tools) shims, documented under lumen-dmj above (not `journal`, which stays Lumen's own). `memory_*` uses lumen-dmj's shim state dir, hardcoded in the pooled scripts.
 
 | Tool | Purpose |
 |---|---|
