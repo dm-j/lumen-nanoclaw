@@ -524,6 +524,7 @@ written by the host) resolves the name to routing fields.
     text: string,    // message content (required)
     to?: string,     // destination name (e.g. "family", "worker-1").
                      // Optional when the agent has exactly one destination.
+    subject?: string // local: 2-5 word internal topic label (see below)
   }
 }
 ```
@@ -533,6 +534,17 @@ the session's own reply routing (`session_routing`); if the destination resolves
 channel the session is bound to, the session's `thread_id` is preserved so the reply lands
 in-thread, otherwise `thread_id` is null. The tool then writes a `messages_out` row with
 `kind: 'chat'` and content `{ text }`, and returns the new `seq` as the message id.
+
+**Local: message `subject`.** Agents are told (system-prompt addendum in `destinations.ts`) to
+add `subject="…"` to every reply, either as the `send_message` param or as an attribute on the
+`<message to="name" subject="…">` final-text block (`MESSAGE_RE` in `poll-loop.ts`). It rides in
+the outbound content as `{ text, subject }`; delivery never reads it, so the recipient never
+sees it. Its only consumer is the vault transcript: `appendDeliveredOutboundTurn` passes it as
+the 5th arg of `transcript-append-host`, which prints it after the header line
+(`> **Lumen → DMJ — <ts>** Dinner plans`) as a search aid for memory creation. Inbound turns
+carry none. The prompt tells agents it is not context for the recipient, so the message must
+stand alone. Related: an unknown name in a `<message to>` block replies to the batch's origin
+channel instead of being dropped (a fresh session can guess a person's name).
 
 #### send_file
 

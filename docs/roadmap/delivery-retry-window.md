@@ -1,5 +1,7 @@
 # Delivery retry window: stop short network outages from dropping replies
 
+> **Addendum 2026-11-03 — Telegram part shipped.** `src/delivery-retry.ts`: a transient Telegram failure (`NetworkError`, rate limit) retries forever, delay +5 s per failure capped at 60 s; later Telegram messages wait (no delay of their own) while an earlier one retries, and a released message that fails starts its own backoff at 5 s. Non-transient errors keep the 3-attempt cap. Trigger: a 36 s Telegram-only outage (netwatch, 21:26Z) dropped a reply after 3 tries in ~22 s. **Still open:** other channels (still 3 attempts); inbound `getFile` retry; telling the sender when a delivery is retrying long; retry state is in-memory (a host restart resets it, rather than the persisted `attempts` this item proposed).
+
 Proposed 2026-10-13, written up 2026-10-20. **Not built, not yet approved.**
 
 ## The problem
