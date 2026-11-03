@@ -30,217 +30,15 @@ prefix-cache-aware anchored scheme (`N → 2N → truncate`, not a naive
 sliding window) so repeated turns hit Anthropic's prompt cache on the
 literal-tail block instead of missing it every time.
 
-The feature ships as a self-contained module (`src/modules/projected-sessions/`)
-plus small, targeted touches to a handful of core files — each one an
-established extension point this codebase already uses for optional
-modules (a `hasTable`-gated hook, a barrel self-registration import, a
-migration registration). Source: `feat/projected-sessions-v2` on this
-fork's `origin` (`dm-j/lumen-nanoclaw`) — diff it directly if you'd rather
-apply the whole thing at once:
+Installed by **`/add-memory-stack`** (this skill no longer carries its own
+copy/patch steps — projected sessions, the vault transcript export and
+attachment captioning share edits in the same functions and are applied as one
+unit). It depends on `/add-host-scripts` (the `briefing-host` shim and its
+whitelist mechanism). This is a **fork-specific feature**, not something to
+upstream.
 
 ```bash
-git diff lumen-refresh origin/feat/projected-sessions-v2
-```
-
-This is a **fork-specific feature**, not something to upstream — it depends
-on `/add-host-scripts`'s per-group whitelist mechanism (already in this
-fork's trunk, not upstream NanoClaw).
-
-## Pre-flight
-
-### Verify `/add-host-scripts` is applied
-
-This skill's compiler step is a host-script call — `execHostShim(agentGroupId,
-'briefing', ...)`.
-
-```bash
-test -f src/modules/host-shim/exec.ts && test -f src/host-shim-templates/briefing-host && echo OK
-```
-
-If missing, run `/add-host-scripts` first — this skill depends on it.
-
-### Verify the registry branch is reachable
-
-```bash
-git fetch origin feat/projected-sessions-v2 && git log -1 --oneline origin/feat/projected-sessions-v2
-```
-
-### Check if already applied
-
-```bash
-test -d src/modules/projected-sessions && echo "ALREADY APPLIED — skip to Verify"
-```
-
-## Apply
-
-### 1. Copy the self-contained module in
-
-```bash
-mkdir -p src/modules/projected-sessions
-for f in \
-  src/db/migrations/025-projected-sessions.ts \
-  src/modules/projected-sessions/db.ts \
-  src/modules/projected-sessions/literal-tail.ts \
-  src/modules/projected-sessions/compile-briefing.ts \
-  src/modules/projected-sessions/synthesize.ts \
-  src/modules/projected-sessions/index.ts \
-  container/agent-runner/src/projected-sessions.ts \
-; do
-  git show origin/feat/projected-sessions-v2:"$f" > "$f"
-done
-```
-
-All new files — copying overwrites, so re-running this step is safe.
-
-### 2. Register the migration
-
-Edit `src/db/migrations/index.ts` — add the import after `021-host-shims-dir`:
-
-```typescript
-import { migration025 } from './025-projected-sessions.js';
-```
-
-...and the array entry after `migration021`:
-
-```typescript
-  migration021,
-  migration025,
-```
-
-### 3. Register the module
-
-Edit `src/modules/index.ts` — add, after the `host-shim` import:
-
-```typescript
-import './projected-sessions/index.js';
-```
-
-### 4. Wire the per-wake hook
-
-Edit `src/container-runner.ts`'s `spawnContainer`, right after the existing
-`agent_destinations` block:
-
-```typescript
-  if (hasTable(getDb(), 'agent_destinations')) {
-    const { writeDestinations } = await import('./modules/agent-to-agent/write-destinations.js');
-    writeDestinations(agentGroup.id, session.id);
-  }
-  writeSessionRouting(agentGroup.id, session.id);
-
-  // Compiled briefing + literal tail for projected-lifecycle sessions —
-  // module is optional, skip when its table is absent. Reads the pending
-  // batch straight from inbound.db (already written by writeSessionMessage
-  // before wakeContainer was called), so this needs nothing from the
-  // router-level event.
-  if (hasTable(getDb(), 'projected_sessions_enabled')) {
-    const { maybeSynthesizeProjectedContext } = await import('./modules/projected-sessions/synthesize.js');
-    await maybeSynthesizeProjectedContext(agentGroup.id, session.id);
-  }
-```
-
-### 5. Bump host-shim's timeout ceiling for long-running compiler calls
-
-Real briefing-compiler calls run 20-90s — the shared host-shim default
-(30s) is sized for cheap scripts. Edit `src/modules/host-shim/exec.ts`:
-
-```typescript
-export function execHostShim(
-  agentGroupId: string,
-  name: string,
-  args: string[],
-  timeoutMs = TIMEOUT_MS,
-): Promise<ShimResult> {
-  // ...unchanged body...
-  execFile(
-    shimPath,
-    args,
-    { timeout: timeoutMs, maxBuffer: MAX_BUFFER, encoding: 'utf-8' },
-    // ...
-```
-
-Every existing caller keeps the old 30s default; only `compile-briefing.ts`
-(copied in step 1) passes a longer one.
-
-### 6. Container side: gate resume, prepend the briefing
-
-Edit `container/agent-runner/src/poll-loop.ts`:
-- Add `import { isProjectedSession } from './projected-sessions.js';` at the top.
-- At the start of `runPollLoop`, add `const projected = isProjectedSession();`
-  and change the continuation-load line to
-  `let continuation: string | undefined = projected ? undefined : migrateLegacyContinuation(config.providerName);`
-- Gate the continuation-store call inside the try block:
-  `if (!projected && result.continuation && result.continuation !== continuation) { ... }`
-- Gate the other `setContinuation` call site (inside `processQuery`, on the
-  `'init'` event): `if (!isProjectedSession()) setContinuation(providerName, event.continuation);`
-  (a fresh check, not the `runPollLoop`-scoped `projected` — `processQuery`
-  is a separate function).
-
-Edit `container/agent-runner/src/formatter.ts`:
-- Add `import { projectedContextHeader } from './projected-sessions.js';`
-- Change `formatMessages`'s header line to:
-  ```typescript
-  const header = `${projectedContextHeader()}<context timezone="${escapeXml(TIMEZONE)}" />\n`;
-  ```
-
-### 7. Build and test
-
-```bash
-pnpm exec tsc --noEmit -p .
-pnpm test
-```
-
-Bun-side typecheck (`container/agent-runner/`) needs a `bun` binary — if
-none is installed where you're applying this, that step is unverified;
-run it manually before trusting `projected` mode:
-
-```bash
-cd container/agent-runner && bun run typecheck && bun test
-```
-
-### 8. Rebuild the container image
-
-```bash
-./container/build.sh
-```
-
-### 9. Record this in the fork's recipe
-
-This fork tracks its accumulated customizations as a recipe ledger
-(`.claude/skills/recipe/SKILL.md`, per `docs/skills-model.md`'s "a fork is
-a recipe of skills"). Create it if it doesn't exist yet, and append this
-skill's entry — skip if an entry for `add-projected-sessions` is already
-there (idempotent, safe to re-run):
-
-```bash
-mkdir -p .claude/skills/recipe
-if [ ! -f .claude/skills/recipe/SKILL.md ]; then
-  cat > .claude/skills/recipe/SKILL.md <<'RECIPE_EOF'
----
-name: recipe
-description: This fork's applied-customizations ledger — every skill applied to this install, in apply order, with its source and why. Read before /update-nanoclaw or handing this fork to someone else; append to it whenever another skill's Apply steps say to.
----
-
-# Recipe
-
-Per `docs/skills-model.md`: "A fork is a recipe of skills... one 'recipe'
-skill lists all your skills and how they fit together." This file is that
-list for this install. It's what lets this fork be rebuilt from clean
-upstream, or handed to someone else, without reconstructing "what did I
-change" from memory or commit archaeology.
-
-**This is a ledger, not a script.** Applying an entry means running that
-skill's own Apply steps (or diffing its source branch) — this file just
-records that it happened, in what order, and why.
-
-## Applied skills
-
-<!-- Each entry: - [skill-name](../skill-name/SKILL.md) — applied YYYY-MM-DD — one-line why -->
-RECIPE_EOF
-fi
-
-grep -q 'add-projected-sessions' .claude/skills/recipe/SKILL.md || \
-  echo "- [add-projected-sessions](../add-projected-sessions/SKILL.md) — applied $(date +%F) — opt-in briefing-compiler session lifecycle, per agent group" \
-  >> .claude/skills/recipe/SKILL.md
+test -f src/modules/projected-sessions/synthesize.ts && grep -q projected_sessions_enabled src/container-runner.ts && echo "installed"
 ```
 
 ## Wire a group
@@ -276,9 +74,10 @@ the default.
 | Compiler call timeout | `COMPILE_TIMEOUT_MS` in `src/modules/projected-sessions/compile-briefing.ts` (code constant, default 300s) | How long the host waits for a `briefing-host` call before falling back to the previously stored briefing. Real subagent-backed compilers run 20-90s (slower through PrefixRouter/Ollama); raise this if yours legitimately runs longer, lower it to fail over faster. |
 | Compiler's own literal-tail size | `COMPILER_TAIL_TURNS` in `compile-briefing.ts` (code constant, default 5) | How much recent conversation the compiler itself sees, on top of whatever it looks up fresh. Small on purpose — too much crowds out what it's supposed to be citing. Also the cap on the briefing history the compiler sees (the responder keeps its own, `RESPONDER_BRIEFING_CAP` in `synthesize.ts`, default 2). The tail grows anchored from N up to 2N turns before resetting (see `literal-tail.ts`). |
 | Responder's literal-tail size | `RESPONDER_TAIL_TURNS` in `src/modules/projected-sessions/synthesize.ts` (code constant, default 12) | How much recent conversation the responder sees verbatim, independent of the briefing. This is the responder's real working-context window in projected mode. Same N→2N anchored growth as the compiler's tail. |
+| Briefing history kept in context | `BRIEFING_HISTORY_CAP` in `compile-briefing.ts` (code constant, default 3; shared by compiler and responder) | How many past briefings the responder sees interleaved by timestamp with the raw turns. Raised 2→3 on 2026-11-03. |
 | Literal-tail safety cap | `SAFETY_CAP` in `src/modules/projected-sessions/literal-tail.ts` (default 500) | Hard ceiling on how much history a single anchor-growth cycle reads or holds, regardless of the N values above — protects a long-lived agent-shared session from an unbounded per-turn scan. |
 | Pending-batch read cap | `BATCH_READ_CAP` in `src/modules/projected-sessions/db.ts` (default 50) | Max number of pending inbound messages folded into what the compiler sees as "the new batch" for one wake. |
-| Warm-container follow-up reset | `PROJECTED_FOLLOWUP_RESET_COUNT` and `PROJECTED_QUERY_TTL_MS` in `container/agent-runner/src/poll-loop.ts` (code constants, defaults 30 and 5 min; independent of the tail sizes above) | A warm container pushes follow-ups into one open model query, which keeps growing. When either limit is hit the container exits (code 75, `PROJECTED_QUERY_RESET` in its stderr) and the host respawns it with a fresh, small briefing/tail. Duplicated in the container because `container/agent-runner` can't import host `src/`. See `docs/roadmap/warm-container-context-accumulation.md`. |
+| Warm-container follow-up reset | `PROJECTED_FOLLOWUP_RESET_COUNT` (12) and `PROJECTED_QUERY_FALLBACK_TTL_MS` (5 min) in `container/agent-runner/src/poll-loop.ts` (code constants; independent of the tail sizes above; the cache-TTL check asks PrefixRouter's `/cache-status` first and only falls back to the local TTL guess) | A warm container pushes follow-ups into one open model query, which keeps growing. When either limit is hit the container exits (code 75, `PROJECTED_QUERY_RESET` in its stderr) and the host respawns it with a fresh, small briefing/tail. Duplicated in the container because `container/agent-runner` can't import host `src/`. See `docs/roadmap/warm-container-context-accumulation.md`. |
 
 ## Troubleshooting
 
@@ -293,9 +92,9 @@ the default.
   logged `stderr`/`exitCode`. Also check
   `groups/<folder>/.projected-sessions-enabled` exists — if it's missing
   even after enabling + restarting, the `hasTable` hook in
-  `container-runner.ts` never ran (step 4 wasn't applied, or the migration
+  `container-runner.ts` never ran (`add-memory-stack`'s patch wasn't applied, or the migration
   wasn't registered).
-- **Compiler call times out.** Default ceiling is 120s
+- **Compiler call times out.** Default ceiling is 300s
   (`COMPILE_TIMEOUT_MS` in `compile-briefing.ts`) — a real `claude -p`
   subagent call runs 20-90s normally. Fails closed either way.
 - **`session_briefings` grows without bound.** Expected for now — this

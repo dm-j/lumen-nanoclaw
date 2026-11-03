@@ -1,0 +1,1453 @@
+diff --git a/container/agent-runner/src/formatter.test.ts b/container/agent-runner/src/formatter.test.ts
+index 8c71c88c..c681a8ea 100644
+--- a/container/agent-runner/src/formatter.test.ts
++++ b/container/agent-runner/src/formatter.test.ts
+@@ -47,6 +47,13 @@ describe('context timezone header', () => {
+     expect(result).not.toContain('current_time=');
+   });
+ 
++  it('omits the header on a follow-up pushed into an open query (the first prompt already carried it)', () => {
++    insertMessage('m1', 'chat', { sender: 'Alice', text: 'hello' });
++    const result = formatMessages(getPendingMessages(), { followUp: true });
++    expect(result).not.toContain('<context');
++    expect(result).toContain('hello');
++  });
++
+   it('includes the header even when the message list is empty', () => {
+     const result = formatMessages([]);
+     expect(result).toContain(`<context timezone="${TIMEZONE}"`);
+diff --git a/container/agent-runner/src/formatter.ts b/container/agent-runner/src/formatter.ts
+index 43feb812..640d9bd1 100644
+--- a/container/agent-runner/src/formatter.ts
++++ b/container/agent-runner/src/formatter.ts
+@@ -1,5 +1,6 @@
+ import { findByRouting } from './destinations.js';
+ import type { MessageInRow } from './db/messages-in.js';
++import { projectedContextHeader } from './projected-sessions.js';
+ import { TIMEZONE, formatLocalTime } from './timezone.js';
+ 
+ /**
+@@ -131,8 +132,9 @@ export function extractRouting(messages: MessageInRow[]): RoutingContext {
+  *
+  * Strips routing fields — the agent never sees platform_id, channel_type, thread_id.
+  */
+-export function formatMessages(messages: MessageInRow[]): string {
+-  const header = `<context timezone="${escapeXml(TIMEZONE)}" />\n`;
++export function formatMessages(messages: MessageInRow[], opts: { followUp?: boolean } = {}): string {
++  // A follow-up is pushed into a query that already saw the timezone (and the projected blocks) in its first prompt.
++  const header = `${projectedContextHeader(opts.followUp)}${opts.followUp ? '' : `<context timezone="${escapeXml(TIMEZONE)}" />\n`}`;
+   if (messages.length === 0) return header;
+ 
+   // Group by kind
+@@ -270,6 +272,12 @@ function formatReplyContext(replyTo: any): string {
+   return `\n  <quoted_message from="${escapeXml(sender)}">${escapeXml(text)}</quoted_message>\n`;
+ }
+ 
++// eslint-disable-next-line @typescript-eslint/no-explicit-any
++function isImageAttachment(a: any): boolean {
++  if (typeof a.mimeType === 'string' && a.mimeType.startsWith('image/')) return true;
++  return typeof a.type === 'string' && ['image', 'photo', 'sticker'].includes(a.type.toLowerCase());
++}
++
+ // eslint-disable-next-line @typescript-eslint/no-explicit-any
+ function formatAttachments(attachments: any[] | undefined): string {
+   if (!Array.isArray(attachments) || attachments.length === 0) return '';
+@@ -278,10 +286,28 @@ function formatAttachments(attachments: any[] | undefined): string {
+     const type = a.type || 'file';
+     const localPath = a.localPath ? `/workspace/${a.localPath}` : '';
+     const url = a.url || '';
+-    if (localPath) {
+-      return `[${type}: ${escapeXml(name)} — saved to ${escapeXml(localPath)}]`;
++    const bracket = localPath
++      ? `[${type}: ${escapeXml(name)} — saved to ${escapeXml(localPath)}]`
++      : url
++        ? `[${type}: ${escapeXml(name)} (${escapeXml(url)})]`
++        : `[${type}: ${escapeXml(name)}]`;
++    // Vision support isn't guaranteed for every configured provider/model —
++    // some routes (e.g. a local model behind an Anthropic-compat proxy) 400
++    // when a tool_result carries an image content block. The caption is
++    // already the full available description; reading the raw file adds
++    // nothing and risks crashing the turn, so always discourage it for
++    // image-class attachments, regardless of caption outcome.
++    const dontRead = isImageAttachment(a) && localPath ? ' Do not open this file directly.' : '';
++    if (typeof a.captionError === 'string' && a.captionError) {
++      return `${bracket}\n  (no description available yet — try again shortly)${dontRead}`;
++    }
++    if (typeof a.caption === 'string' && a.caption) {
++      return `${bracket}\n  ${escapeXml(a.caption)}${dontRead}`;
++    }
++    if (typeof a.captionId === 'string' && a.captionId) {
++      return `${bracket}\n  (id: ${escapeXml(a.captionId)} — description pending, you'll be notified when ready)${dontRead}`;
+     }
+-    return url ? `[${type}: ${escapeXml(name)} (${escapeXml(url)})]` : `[${type}: ${escapeXml(name)}]`;
++    return `${bracket}${dontRead}`;
+   });
+   return '\n' + parts.join('\n');
+ }
+diff --git a/container/agent-runner/src/mcp-tools/index.ts b/container/agent-runner/src/mcp-tools/index.ts
+index 973e8847..cfc6a46c 100644
+--- a/container/agent-runner/src/mcp-tools/index.ts
++++ b/container/agent-runner/src/mcp-tools/index.ts
+@@ -9,6 +9,7 @@ import './core.js';
+ import './interactive.js';
+ import './agents.js';
+ import './self-mod.js';
++import './memory-fact.js';
+ import './dynamic-shims.js';
+ import { startMcpServer } from './server.js';
+ 
+diff --git a/container/agent-runner/src/memory/hook.test.ts b/container/agent-runner/src/memory/hook.test.ts
+index b4445998..c0388d4f 100644
+--- a/container/agent-runner/src/memory/hook.test.ts
++++ b/container/agent-runner/src/memory/hook.test.ts
+@@ -40,4 +40,13 @@ describe('memory-hook script', () => {
+     expect(runHook('{}').stdout.toString()).toBe('');
+     expect(runHook('{not-json').stdout.toString()).toBe('');
+   });
++
++  it('skips injection on startup when the projected-sessions marker is present', () => {
++    fs.writeFileSync(path.join(BASE, '.projected-sessions-enabled'), '');
++
++    const proc = runHook(JSON.stringify({ source: 'startup' }));
++
++    expect(proc.exitCode).toBe(0);
++    expect(proc.stdout.toString()).toBe('');
++  });
+ });
+diff --git a/container/agent-runner/src/memory/hook.ts b/container/agent-runner/src/memory/hook.ts
+index 41d3f866..fd698422 100644
+--- a/container/agent-runner/src/memory/hook.ts
++++ b/container/agent-runner/src/memory/hook.ts
+@@ -17,6 +17,13 @@ function readSource(): MemorySessionStartSource | undefined {
+   return undefined;
+ }
+ 
++// Same marker convention as projected-sessions.ts's isProjectedSession()
++// (container/agent-runner/src/projected-sessions.ts), duplicated rather than
++// imported to keep this hook script standalone/dependency-free — see the
++// DECISION comment on memoryContextForSessionStart for why this matters.
++const baseDir = process.argv[2];
++const isProjected = fs.existsSync(`${baseDir ?? '/workspace/agent'}/.projected-sessions-enabled`);
++
+ const source = readSource();
+-const context = source ? memoryContextForSessionStart(source, process.argv[2]) : undefined;
++const context = source ? memoryContextForSessionStart(source, baseDir, isProjected) : undefined;
+ if (context) console.log(context);
+diff --git a/container/agent-runner/src/memory/session-hook.test.ts b/container/agent-runner/src/memory/session-hook.test.ts
+index 4d5cead3..7dd1ca81 100644
+--- a/container/agent-runner/src/memory/session-hook.test.ts
++++ b/container/agent-runner/src/memory/session-hook.test.ts
+@@ -30,4 +30,20 @@ describe('memory SessionStart contract', () => {
+       fs.rmSync(base, { recursive: true, force: true });
+     }
+   });
++
++  it('skips injection for projected sessions even on startup/clear/compact', () => {
++    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'nanoclaw-memory-hook-projected-'));
++    try {
++      fs.mkdirSync(path.join(base, 'memory', 'system'), { recursive: true });
++      fs.writeFileSync(path.join(base, 'memory', 'index.md'), '# Memory Index\n');
++      fs.writeFileSync(path.join(base, 'memory', 'system', 'definition.md'), '# Definition\n');
++      for (const source of ['startup', 'clear', 'compact'] as const) {
++        expect(memoryContextForSessionStart(source, base, true)).toBeUndefined();
++      }
++      // Non-projected callers are unaffected by the new parameter's default.
++      expect(memoryContextForSessionStart('startup', base)).toBeTruthy();
++    } finally {
++      fs.rmSync(base, { recursive: true, force: true });
++    }
++  });
+ });
+diff --git a/container/agent-runner/src/memory/session-hook.ts b/container/agent-runner/src/memory/session-hook.ts
+index 0860df03..5dd37767 100644
+--- a/container/agent-runner/src/memory/session-hook.ts
++++ b/container/agent-runner/src/memory/session-hook.ts
+@@ -17,7 +17,33 @@ export const MEMORY_SESSION_HOOK: MemorySessionHookRegistration = {
+   sources: MEMORY_CONTEXT_SOURCES,
+ };
+ 
+-/** Return memory only when a provider is establishing a new context window. */
+-export function memoryContextForSessionStart(source: MemorySessionStartSource, baseDir?: string): string | undefined {
+-  return source === 'resume' ? undefined : renderMemorySection(baseDir);
++/**
++ * Return memory only when a provider is establishing a new context window.
++ *
++ * DECISION (2026-08-14): projected-lifecycle sessions (src/modules/projected-sessions/
++ * on the host) never resume a provider transcript — poll-loop.ts clears
++ * `continuation` unconditionally for them, so every projected turn looks like
++ * a brand-new session to the SDK and this hook always fires with
++ * `source: 'startup'`, never `'resume'`. Before this fix that meant the OKF
++ * memory files were re-injected on every single wake, not just true context
++ * boundaries — stacking on top of the compiled `briefing.md` +
++ * `recent-turns.md` that projected sessions are meant to rely on instead.
++ * `isProjected` makes the skip explicit: projected sessions are treated like
++ * `'resume'` unconditionally, since the briefing/tail already carries
++ * continuity and interleaves briefing history itself (see
++ * projected-sessions/literal-tail.ts). Resumed (non-projected) sessions are
++ * completely unaffected — this only changes behavior when `isProjected` is
++ * true.
++ *
++ * TO REVERT: delete the `isProjected` parameter and the check below; restore
++ * `return source === 'resume' ? undefined : renderMemorySection(baseDir);`.
++ * Also revert the two call sites that compute/pass `isProjected`
++ * (container/agent-runner/src/memory/hook.ts).
++ */
++export function memoryContextForSessionStart(
++  source: MemorySessionStartSource,
++  baseDir?: string,
++  isProjected = false,
++): string | undefined {
++  return source === 'resume' || isProjected ? undefined : renderMemorySection(baseDir);
+ }
+diff --git a/container/agent-runner/src/poll-loop.ts b/container/agent-runner/src/poll-loop.ts
+index 5544899b..87a6350c 100644
+--- a/container/agent-runner/src/poll-loop.ts
++++ b/container/agent-runner/src/poll-loop.ts
+@@ -1,4 +1,9 @@
++import { execFile } from 'node:child_process';
++import fs from 'node:fs';
++
++import { getConfig } from './config.js';
+ import { findByName, getAllDestinations, type DestinationEntry } from './destinations.js';
++import { isProjectedSession, projectedResetReason, queryCacheLive } from './projected-sessions.js';
+ import {
+   getPendingMessages,
+   markProcessing,
+@@ -39,6 +44,33 @@ const ACTIVE_POLL_INTERVAL_MS = 500;
+  */
+ const CORRUPTION_STREAK_EXIT = 10;
+ 
++/**
++ * Projected-session warm-container context reset (docs/roadmap/warm-container-context-accumulation.md).
++ * Projected sessions promise every turn is a fresh, lightweight compile —
++ * but a warm container pushes follow-ups into the same open query
++ * indefinitely, silently growing it like a resumed transcript until it
++ * eventually blows the prompt-size limit. Mirrors the N/2N anchor-growth and
++ * TTL discipline `literal-tail.ts` already applies to what gets *written to
++ * disk* (RESPONDER_TAIL_TURNS in synthesize.ts, DEFAULT_CACHE_TTL_MS=5min) — duplicated
++ * here rather than imported because container/agent-runner is a separate
++ * Bun package tree with no access to host-side src/.
++ *
++ * ponytail: reset is "exit and let host-sweep respawn," not "abort the
++ * in-flight AgentQuery and open a fresh one in-process." The respawn path
++ * already exists (see the corruption-exit branch below) and for free resets
++ * every other per-query variable (archivePrompts, unwrappedNudged,
++ * taskBlockNudged, corruptionStreak) that in-process query surgery would
++ * have to reset by hand. Upgrade to in-process reset only if container
++ * respawn latency becomes a measured problem.
++ */
++// = RESPONDER_TAIL_TURNS (synthesize.ts), duplicated: the on-disk tail restarts at N and grows to 2N, so a
++// warm query may add ~N turns on top of its starting tail. Turns are a rough proxy for size, but simple.
++// Keep in step with RESPONDER_TAIL_TURNS by hand — see docs/roadmap/warm-container-context-accumulation.md.
++const PROJECTED_FOLLOWUP_RESET_COUNT = 12;
++// Only when PrefixRouter can't say whether the provider cache is live: reset after this much idle time
++// (default 5 min = Anthropic's ephemeral cache TTL). Normally /cache-status decides, per-provider.
++const PROJECTED_QUERY_FALLBACK_TTL_MS = 5 * 60 * 1000;
++
+ /**
+  * True for SQLite errors that indicate a corrupt READ view — almost always a
+  * cross-mount page-cache coherency issue on Docker Desktop macOS rather than
+@@ -54,6 +86,26 @@ export function isCorruptionError(msg: string): boolean {
+   );
+ }
+ 
++const NEEDS_BRIEFING_SYNC_PATH = '/workspace/.needs-briefing-sync';
++
++function needsBriefingSync(): boolean {
++  try {
++    return fs.existsSync(NEEDS_BRIEFING_SYNC_PATH);
++  } catch {
++    return false;
++  }
++}
++
++/** Runs `ncl sessions sync-briefing` (see sessions.ts on the host) and waits for it to finish. */
++async function syncBriefingNow(): Promise<void> {
++  await new Promise<void>((resolve) => {
++    execFile('ncl', ['sessions', 'sync-briefing'], { timeout: 60_000 }, (error, _stdout, stderr) => {
++      if (error) log(`sync-briefing failed: ${error.message}${stderr ? ` — ${stderr.slice(0, 300)}` : ''}`);
++      resolve();
++    });
++  });
++}
++
+ function log(msg: string): void {
+   console.error(`[poll-loop] ${msg}`);
+ }
+@@ -93,12 +145,19 @@ export interface PollLoopConfig {
+  * 6. Loop
+  */
+ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
++  // Projected-lifecycle sessions (src/modules/projected-sessions/ on the
++  // host) never resume a provider transcript — the host compiles a briefing
++  // + literal tail into /workspace/*.md instead (see formatMessages). The
++  // stored continuation key is simply never read or written in this mode.
++  const projected = isProjectedSession();
++  const noResume = projected;
++
+   // Resume the agent's prior session from a previous container run if one
+   // was persisted. The continuation is opaque to the poll-loop — the
+   // provider decides how to use it (Claude resumes a .jsonl transcript,
+   // other providers may reload a thread ID, etc.). Keyed per-provider so
+   // a Codex thread id never gets handed to Claude or vice versa.
+-  let continuation: string | undefined = migrateLegacyContinuation(config.providerName);
++  let continuation: string | undefined = noResume ? undefined : migrateLegacyContinuation(config.providerName);
+ 
+   // Before resuming, drop a session whose on-disk transcript has grown too
+   // large/old to cold-resume within the host's idle ceiling. Without this a
+@@ -230,9 +289,21 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
+       continue;
+     }
+ 
++    // A pre-task script just let a task through on what the host spawned as
++    // a "gated tasks only" cold wake — it deliberately skipped the pre-spawn
++    // briefing compile for that case (see container-runner.ts's wakeContainer),
++    // so briefing.md/recent-turns.md may be stale or missing. Pull a fresh
++    // one now, before this session's first real answer of the wake. Cheap
++    // no-op check on every other poll (no marker file → skip immediately);
++    // the marker itself is deleted by the sync-briefing handler once done.
++    if (projected && needsBriefingSync()) {
++      await syncBriefingNow();
++    }
++
+     // Format messages: passthrough commands get raw text (only if the
+     // provider natively handles slash commands), others get XML.
+     const prompt = formatMessagesWithCommands(keep, config.provider.supportsNativeSlashCommands);
++    writeLastPrompt(prompt, 'wake');
+ 
+     log(`Processing ${keep.length} message(s), kinds: ${[...new Set(keep.map((m) => m.kind))].join(',')}`);
+ 
+@@ -259,7 +330,7 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
+         prompt,
+         continuation,
+       );
+-      if (result.continuation && result.continuation !== continuation) {
++      if (!noResume && result.continuation && result.continuation !== continuation) {
+         continuation = result.continuation;
+         setContinuation(config.providerName, continuation);
+       }
+@@ -307,6 +378,20 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
+  * passthrough commands are sent raw (no XML wrapping) so the SDK can
+  * dispatch them. Otherwise they fall through to standard XML formatting.
+  */
++/**
++ * Operator debugging aid: the exact prompt string handed to the model, replaced on every
++ * turn (wake prompt or follow-up push). Written to the session dir (/workspace), which the
++ * host can read and which is never in the instance repo. The system prompt (composed
++ * CLAUDE.md) is separate and not included. First line is a marker, not part of the prompt.
++ */
++function writeLastPrompt(prompt: string, kind: 'wake' | 'follow-up'): void {
++  try {
++    fs.writeFileSync('/workspace/last-prompt.md', `<!-- ${new Date().toISOString()} ${kind} -->\n${prompt}\n`);
++  } catch {
++    /* non-fatal */
++  }
++}
++
+ function formatMessagesWithCommands(messages: MessageInRow[], nativeSlashCommands: boolean): string {
+   const parts: string[] = [];
+   const normalBatch: MessageInRow[] = [];
+@@ -372,6 +457,19 @@ export async function processQuery(
+   let pollInFlight = false;
+   let endedForCommand = false;
+   let corruptionStreak = 0;
++  let lastActivityAt = Date.now();
++  let followUpsPushed = 0;
++  const projectedResetNow = async () => {
++    if (!isProjectedSession()) return null;
++    const atCap = followUpsPushed >= PROJECTED_FOLLOWUP_RESET_COUNT;
++    return projectedResetReason({
++      followUpsPushed,
++      maxFollowUps: PROJECTED_FOLLOWUP_RESET_COUNT,
++      idleMs: Date.now() - lastActivityAt,
++      cacheLive: atCap ? null : await queryCacheLive(getConfig().model),
++      fallbackTtlMs: PROJECTED_QUERY_FALLBACK_TTL_MS,
++    });
++  };
+   const pollHandle = setInterval(() => {
+     if (done || pollInFlight || endedForCommand) return;
+     pollInFlight = true;
+@@ -436,13 +534,30 @@ export async function processQuery(
+         // claimed messages get released by the host's processing-claim sweep.
+         if (done) return;
+ 
++        // Projected sessions: don't let a warm container keep growing the
++        // same live query forever (docs/roadmap/warm-container-context-accumulation.md).
++        // Leave these messages pending — same as hitting the 30-min absolute
++        // ceiling mid-conversation — and exit so host-sweep respawns a fresh
++        // container that compiles a small briefing/tail on its next poll.
++        const resetReason = await projectedResetNow();
++        if (resetReason) {
++          log(`PROJECTED_QUERY_RESET: ${resetReason} (${followUpsPushed} follow-ups pushed) — exiting so host respawns with a fresh query`);
++          done = true;
++          clearInterval(pollHandle);
++          setTimeout(() => process.exit(75), 100);
++          return;
++        }
++
+         const keptIds = keep.map((m) => m.id);
+-        const prompt = formatMessages(keep);
++        const prompt = formatMessages(keep, { followUp: true });
++        writeLastPrompt(prompt, 'follow-up');
+         log(`Pushing ${keep.length} follow-up message(s) into active query`);
+         unwrappedNudged = false;
+         taskBlockNudged = false;
+         query.push(prompt);
+         archivePrompts.push(prompt);
++        followUpsPushed += 1;
++        lastActivityAt = Date.now();
+         markCompleted(keptIds);
+       } catch (err) {
+         // Without this catch the rejection escapes the void IIFE and Node
+@@ -461,8 +576,13 @@ export async function processQuery(
+         if (isCorruptionError(errMsg)) {
+           corruptionStreak += 1;
+           if (corruptionStreak >= CORRUPTION_STREAK_EXIT) {
++            // DB_RETRY_EXHAUSTED marks a persistent problem (retries
++            // exhausted, poll loop abandoned) — grepped by
++            // host-shims/lumen-dmj/sqlite-corrupt-count-host. The per-attempt
++            // `Follow-up poll error` log above fires on every transient hit
++            // and is intentionally not part of that grep target.
+             log(
+-              `Follow-up poll: ${corruptionStreak} consecutive '${errMsg}' errors — ` +
++              `DB_RETRY_EXHAUSTED: follow-up poll gave up after ${corruptionStreak} consecutive '${errMsg}' errors — ` +
+                 `inbound.db page cache is poisoned. Exiting so host respawns with a fresh mount.`,
+             );
+             // Stop touching the heartbeat so host-sweep stale detection fires
+@@ -486,6 +606,7 @@ export async function processQuery(
+     for await (const event of query.events) {
+       handleEvent(event, routing);
+       touchHeartbeat();
++      lastActivityAt = Date.now();
+ 
+       if (event.type === 'init') {
+         queryContinuation = event.continuation;
+@@ -495,7 +616,7 @@ export async function processQuery(
+         // container died between `init` and `result`, the SDK session was
+         // effectively orphaned and the next message started a blank
+         // Claude session with no prior context.
+-        setContinuation(providerName, event.continuation);
++        if (!isProjectedSession()) setContinuation(providerName, event.continuation);
+       } else if (event.type === 'result') {
+         // A result — with or without text — means the turn is done. Mark
+         // the initial batch completed now so the host sweep doesn't see
+diff --git a/src/cli/resources/sessions.ts b/src/cli/resources/sessions.ts
+index 33e2407f..e930b971 100644
+--- a/src/cli/resources/sessions.ts
++++ b/src/cli/resources/sessions.ts
+@@ -1,3 +1,6 @@
++import fs from 'fs';
++
++import { deferredBriefingMarkerPath } from '../../container-runner.js';
+ import { registerResource } from '../crud.js';
+ 
+ registerResource({
+@@ -43,4 +46,28 @@ registerResource({
+     { name: 'created_at', type: 'string', description: 'Auto-set.', generated: true },
+   ],
+   operations: { list: 'open', get: 'open' },
++  customOperations: {
++    'sync-briefing': {
++      access: 'open',
++      description:
++        "Force-recompile this session's projected-sessions briefing before continuing. Callable only from " +
++        'inside a container, scoped to the calling session — used by the poll loop after a pre-task script ' +
++        'gate lets a task through on a cold spawn where the host deferred the pre-spawn briefing compile ' +
++        '(see the .needs-briefing-sync marker in container-runner.ts). No-op if projected sessions is off ' +
++        'for this group.',
++      handler: async (_args, ctx) => {
++        if (ctx.caller !== 'agent') {
++          throw new Error('sessions sync-briefing is only callable from inside a container');
++        }
++        const { maybeSynthesizeProjectedContext } = await import('../../modules/projected-sessions/synthesize.js');
++        await maybeSynthesizeProjectedContext(ctx.agentGroupId, ctx.sessionId);
++        try {
++          fs.rmSync(deferredBriefingMarkerPath(ctx.agentGroupId, ctx.sessionId), { force: true });
++        } catch {
++          /* best-effort — a stale marker just means one extra sync next time */
++        }
++        return { synced: true };
++      },
++    },
++  },
+ });
+diff --git a/src/config.ts b/src/config.ts
+index 6cb1b889..b3fdae3e 100644
+--- a/src/config.ts
++++ b/src/config.ts
+@@ -57,6 +57,8 @@ export const SENDER_ALLOWLIST_PATH = path.join(HOME_DIR, '.config', 'nanoclaw',
+ export const STORE_DIR = path.resolve(PROJECT_ROOT, 'store');
+ export const GROUPS_DIR = path.resolve(PROJECT_ROOT, 'groups');
+ export const DATA_DIR = path.resolve(PROJECT_ROOT, 'data');
++// Never mounted into containers — operator-only, cat/tail from the host shell.
++export const LOGS_DIR = path.resolve(PROJECT_ROOT, 'logs');
+ // mcp-shims implementation scripts — deliberately a sibling of groups/, not
+ // inside it. groups/<folder>/ is bind-mounted RW into its container as
+ // /workspace/agent, so anything living inside a group's own folder is
+diff --git a/src/container-config.ts b/src/container-config.ts
+index 81eab26c..4622b684 100644
+--- a/src/container-config.ts
++++ b/src/container-config.ts
+@@ -153,6 +153,9 @@ export interface ContainerConfig {
+   model?: string;
+   effort?: string;
+   timezone?: string;
++  sessionLifecycle?: 'resumed' | 'projected';
++  env?: Record<string, string>;
++  blockedHosts?: string[];
+   mcpShims: McpShimManifestEntry[];
+ }
+ 
+@@ -167,6 +170,12 @@ export function resolveGroupTimezone(agentGroupId: string): string {
+   return tz && isValidTimezone(tz) ? tz : TIMEZONE;
+ }
+ 
++/** Effective display name for an agent group's responder: assistant_name override → group name. */
++export function resolveAssistantName(agentGroupId: string): string {
++  const group = getAgentGroup(agentGroupId);
++  return getContainerConfig(agentGroupId)?.assistant_name ?? group?.name ?? 'Assistant';
++}
++
+ /** Build a `ContainerConfig` from a DB row + agent group identity. */
+ export function configFromDb(row: ContainerConfigRow, group: AgentGroup): ContainerConfig {
+   return {
+@@ -208,6 +217,19 @@ export function materializeContainerJson(agentGroupId: string): ContainerConfig
+   const p = path.join(GROUPS_DIR, group.folder, 'container.json');
+   const dir = path.dirname(p);
+   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
++
++  // env/blockedHosts are not DB-backed (host-local overrides, e.g. local
++  // model routing) — preserve whatever is already on disk across regeneration.
++  if (fs.existsSync(p)) {
++    try {
++      const existing = JSON.parse(fs.readFileSync(p, 'utf8')) as ContainerConfig;
++      if (existing.env) config.env = existing.env;
++      if (existing.blockedHosts) config.blockedHosts = existing.blockedHosts;
++    } catch {
++      // ignore unreadable/corrupt file — regenerate clean
++    }
++  }
++
+   fs.writeFileSync(p, JSON.stringify(config, null, 2) + '\n');
+ 
+   return config;
+diff --git a/src/container-runner.test.ts b/src/container-runner.test.ts
+index 8328bbd1..5edd3f64 100644
+--- a/src/container-runner.test.ts
++++ b/src/container-runner.test.ts
+@@ -2,7 +2,7 @@ import fs from 'fs';
+ import path from 'path';
+ import { describe, expect, it } from 'vitest';
+ 
+-import { hardeningArgs, resolveProviderName } from './container-runner.js';
++import { hardeningArgs, parseProjectedReset, resolveProviderName } from './container-runner.js';
+ 
+ describe('resolveProviderName', () => {
+   it('prefers session over container config', () => {
+@@ -138,3 +138,21 @@ describe('hardeningArgs', () => {
+     expect(hardeningArgs('2048.7').join(' ')).toContain('--pids-limit 2048');
+   });
+ });
++
++describe('parseProjectedReset', () => {
++  it('extracts the reason from the agent-runner reset line', () => {
++    expect(
++      parseProjectedReset(
++        '[poll-loop] PROJECTED_QUERY_RESET: prompt cache expired (3 follow-ups pushed) — exiting so host respawns with a fresh query',
++      ),
++    ).toBe('prompt cache expired');
++    expect(parseProjectedReset('PROJECTED_QUERY_RESET: 12 follow-ups pushed (12 follow-ups pushed) — exiting')).toBe(
++      '12 follow-ups pushed',
++    );
++  });
++
++  it('ignores other lines, including the corruption exit that shares code 75', () => {
++    expect(parseProjectedReset('[poll-loop] DB_RETRY_EXHAUSTED: follow-up poll gave up')).toBeNull();
++    expect(parseProjectedReset('[poll-loop] Result: fine')).toBeNull();
++  });
++});
+diff --git a/src/container-runner.ts b/src/container-runner.ts
+index 306166db..7c40b5b3 100644
+--- a/src/container-runner.ts
++++ b/src/container-runner.ts
+@@ -48,11 +48,47 @@ import {
+   heartbeatPath,
+   markContainerRunning,
+   markContainerStopped,
++  openInboundDb,
+   sessionDir,
+   writeSessionRouting,
+ } from './session-manager.js';
++import { dueMessagesAreAllGatedTasks } from './db/session-db.js';
+ import type { AgentGroup, Session } from './types.js';
+ 
++// Exit code the agent-runner uses to ask for a respawn (poll-loop.ts). Also used for an exhausted SQLite
++// retry (DB_RETRY_EXHAUSTED), so the code alone doesn't say whether it was routine.
++const PROJECTED_RESET_EXIT_CODE = 75;
++
++/** The reason from the agent-runner's `PROJECTED_QUERY_RESET: <reason> (N follow-ups pushed) — ...` stderr line. */
++export function parseProjectedReset(line: string): string | null {
++  return line.match(/PROJECTED_QUERY_RESET: (.+?) \(\d+ follow-ups pushed\)/)?.[1] ?? null;
++}
++
++/**
++ * Marker (session dir, mounted at /workspace) telling the container it must
++ * pull a fresh briefing itself before answering — see the comment above the
++ * `dueMessagesAreAllGatedTasks` branch in `wakeContainer`. Read by
++ * `container/agent-runner/src/scheduling/task-script.ts` counterpart logic
++ * (`ncl sessions sync-briefing`), deleted once the sync completes.
++ */
++export function deferredBriefingMarkerPath(agentGroupId: string, sessionId: string): string {
++  return path.join(sessionDir(agentGroupId, sessionId), '.needs-briefing-sync');
++}
++
++/** Never throws — a check failure just falls back to "brief as normal", never to "skip the briefing". */
++function allDueMessagesAreGatedTasks(session: Session): boolean {
++  try {
++    const inDb = openInboundDb(session.agent_group_id, session.id);
++    try {
++      return dueMessagesAreAllGatedTasks(inDb);
++    } finally {
++      inDb.close();
++    }
++  } catch {
++    return false;
++  }
++}
++
+ const onecli = new OneCLI({ url: ONECLI_URL, apiKey: ONECLI_API_KEY });
+ 
+ /** Active containers tracked by session ID. */
+@@ -88,10 +124,54 @@ export function isContainerRunning(sessionId: string): boolean {
+  * its next tick. Callers that care (e.g. the router's typing indicator)
+  * can branch on the boolean.
+  */
+-export function wakeContainer(session: Session): Promise<boolean> {
++export async function wakeContainer(session: Session): Promise<boolean> {
++  // Live per-turn vault transcript export — must run on every wake, not just
++  // fresh spawns. An already-running container's poll loop picks up new
++  // inbound rows directly with no host-side hook otherwise, so a message
++  // arriving while the previous turn's container is still warm would
++  // silently never get appended. No table/flag; unconditional and cheap
++  // because execHostShim no-ops (a stat, not a spawn) when the group has no
++  // transcript-append-host script. See vault-transcript's own module header.
++  void (async () => {
++    const { appendPendingInboundTurns } = await import('./modules/vault-transcript/index.js');
++    await appendPendingInboundTurns(session.agent_group_id, session.id);
++  })();
++
++  // Compiled briefing + literal tail for projected-lifecycle sessions — same
++  // "must run on every wake" reasoning as the transcript export above, but
++  // AWAITED (not fire-and-forget): an already-warm container's poll loop
++  // reads briefing.md/recent-turns.md directly with no other synchronization
++  // point, so this has to finish writing fresh files before that container
++  // is allowed to pick the message up, same as the fresh-spawn path always
++  // has. Module is optional — skip when its table is absent.
++  //
++  // Exception: a COLD spawn (nothing already running/mid-spawn for this
++  // session) whose entire due batch is script-gated task rows. The whole
++  // point of a `--script` gate is "a skipped fire costs no agent tokens"
++  // (src/modules/scheduling/create.ts) — but the script itself only runs
++  // container-side (sandboxed; scripts are agent-authored bash, unsafe to
++  // run on the host), so by the time we'd know whether the gate actually
++  // lets anything through, this compile — a real LLM call — has already
++  // been paid for on every fire, gated or not. Skip it here and drop a
++  // marker the container checks itself: if its own pre-task script gate
++  // ends up letting the task through, it pulls a fresh briefing on demand
++  // via `ncl sessions sync-briefing` before answering (see poll-loop.ts);
++  // if the gate says no, the marker is simply never consumed and no LLM
++  // call happens for this fire, as designed.
++  const isWarmOrSpawning = activeContainers.has(session.id) || wakePromises.has(session.id);
++  if (hasTable(getDb(), 'projected_sessions_enabled')) {
++    const deferSynth = !isWarmOrSpawning && allDueMessagesAreGatedTasks(session);
++    if (deferSynth) {
++      fs.writeFileSync(deferredBriefingMarkerPath(session.agent_group_id, session.id), '');
++    } else {
++      const { maybeSynthesizeProjectedContext } = await import('./modules/projected-sessions/synthesize.js');
++      await maybeSynthesizeProjectedContext(session.agent_group_id, session.id);
++    }
++  }
++
+   if (activeContainers.has(session.id)) {
+     log.debug('Container already running', { sessionId: session.id });
+-    return Promise.resolve(true);
++    return true;
+   }
+   const existing = wakePromises.get(session.id);
+   if (existing) {
+@@ -149,6 +229,10 @@ async function spawnContainer(session: Session): Promise<void> {
+   // OneCLI agent identifier is always the agent group id — stable across
+   // sessions and reversible via getAgentGroup() for approval routing.
+   const agentIdentifier = agentGroup.id;
++  // Projected sessions: tag inference with the session key so PrefixRouter's /cache-status can find it.
++  const cacheSessionKey = hasTable(getDb(), 'projected_sessions_enabled')
++    ? (await import('./modules/projected-sessions/synthesize.js')).projectedSessionKeyFor(session)
++    : null;
+   const args = await buildContainerArgs(
+     mounts,
+     containerName,
+@@ -157,6 +241,7 @@ async function spawnContainer(session: Session): Promise<void> {
+     provider,
+     contribution,
+     agentIdentifier,
++    cacheSessionKey,
+   );
+ 
+   log.info('Spawning container', { sessionId: session.id, agentGroup: agentGroup.name, containerName });
+@@ -176,12 +261,14 @@ async function spawnContainer(session: Session): Promise<void> {
+   // binary, bad config) explains itself only here — and debug is below the
+   // default log level — so keep a tail to surface on a non-zero exit.
+   const stderrTail: string[] = [];
++  let projectedReset: string | null = null;
+   container.stderr?.on('data', (data) => {
+     for (const line of data.toString().trim().split('\n')) {
+       if (!line) continue;
+       log.debug(line, { container: agentGroup.folder });
+       stderrTail.push(line);
+       if (stderrTail.length > 10) stderrTail.shift();
++      projectedReset ??= parseProjectedReset(line);
+     }
+   });
+ 
+@@ -195,10 +282,18 @@ async function spawnContainer(session: Session): Promise<void> {
+ 
+   container.on('close', (code) => {
+     activeContainers.delete(session.id);
++    const idleReaped = idleReapedSessions.delete(session.id);
+     markContainerStopped(session.id);
+     stopTypingRefresh(session.id);
+     // code null = killed by signal (normal shutdown path), not a boot failure.
+-    if (code !== 0 && code !== null && stderrTail.length > 0) {
++    // An idle reap is expected (SIGTERM exit), not a boot failure — keep it out of the error log.
++    if (code === PROJECTED_RESET_EXIT_CODE && projectedReset) {
++      // The container chose to exit so the next one starts from a small freshly compiled briefing.
++      log.info(`${projectedReset[0].toUpperCase()}${projectedReset.slice(1)}, truncating projected context`, {
++        sessionId: session.id,
++        containerName,
++      });
++    } else if (code !== 0 && code !== null && stderrTail.length > 0 && !idleReaped) {
+       log.warn('Container exited non-zero', { sessionId: session.id, code, containerName, stderrTail });
+     } else {
+       log.info('Container exited', { sessionId: session.id, code, containerName });
+@@ -213,6 +308,9 @@ async function spawnContainer(session: Session): Promise<void> {
+   });
+ }
+ 
++// Sessions the host sweep just reaped for an idle heartbeat; read by the 'close' handler above.
++const idleReapedSessions = new Set<string>();
++
+ /** Kill a container for a session. */
+ export function killContainer(sessionId: string, reason: string, onExit?: () => void): void {
+   const entry = activeContainers.get(sessionId);
+@@ -222,6 +320,7 @@ export function killContainer(sessionId: string, reason: string, onExit?: () =>
+     entry.process.once('close', onExit);
+   }
+ 
++  if (reason === 'absolute-ceiling') idleReapedSessions.add(sessionId);
+   log.info('Killing container', { sessionId, reason, containerName: entry.containerName });
+   try {
+     stopContainer(entry.containerName);
+@@ -463,6 +562,7 @@ async function buildContainerArgs(
+   _provider: string,
+   providerContribution: ProviderContainerContribution,
+   agentIdentifier?: string,
++  cacheSessionKey?: string | null,
+ ): Promise<string[]> {
+   const args: string[] = ['run', '--rm', '--name', containerName, '--label', CONTAINER_INSTALL_LABEL];
+ 
+@@ -491,6 +591,27 @@ async function buildContainerArgs(
+     }
+   }
+ 
++  // Sent on every inference call (Claude Code's ANTHROPIC_CUSTOM_HEADERS: "Name: Value" lines). x-agent-group
++  // lets PrefixRouter tell agents apart (e.g. its per-agent last-body dump); x-session-id (projected sessions
++  // only) also keys its prompt-cache tracking.
++  const customHeaders = [`x-agent-group: ${agentGroup.folder}`];
++  if (cacheSessionKey) customHeaders.push(`x-session-id: ${cacheSessionKey}`);
++  args.push('-e', `ANTHROPIC_CUSTOM_HEADERS=${customHeaders.join('\n')}`);
++
++  // Per-agent-group env overrides — applied last to win over provider values.
++  if (containerConfig.env) {
++    for (const [key, value] of Object.entries(containerConfig.env)) {
++      args.push('-e', `${key}=${value}`);
++    }
++  }
++
++  // Blocked hosts: resolve to 0.0.0.0 so they are unreachable inside the container.
++  if (containerConfig.blockedHosts) {
++    for (const host of containerConfig.blockedHosts) {
++      args.push('--add-host', `${host}:0.0.0.0`);
++    }
++  }
++
+   // Egress lockdown when enabled — throws if it can't be established, aborting
+   // the spawn rather than running with open egress. Otherwise the host gateway.
+   if (ensureEgressNetwork()) {
+diff --git a/src/db/migrations/index.ts b/src/db/migrations/index.ts
+index 0eb2a812..ef46f153 100644
+--- a/src/db/migrations/index.ts
++++ b/src/db/migrations/index.ts
+@@ -21,8 +21,12 @@ import { migration019 } from './019-wiring-threads.js';
+ import { migration020 } from './020-container-config-timezone.js';
+ import { migration021 } from './021-host-shims-dir.js';
+ import { migration021 as migration021ApprovalQuestion } from './021-approval-question.js';
++import { migration025 } from './025-projected-sessions.js';
+ import { migration026 } from './026-host-cron.js';
++import { migration027 } from './027-briefing-history.js';
++import { migration028 } from './028-tail-anchor-last-call.js';
+ import { migration029 } from './029-mcp-shims-dir.js';
++import { migration030 } from './030-vault-transcript-enabled.js';
+ 
+ export interface Migration {
+   version: number;
+@@ -68,8 +72,12 @@ export const migrations: Migration[] = [
+   migration020,
+   migration021,
+   migration021ApprovalQuestion,
++  migration025,
+   migration026,
++  migration027,
++  migration028,
+   migration029,
++  migration030,
+ ];
+ 
+ /**
+diff --git a/src/db/session-db.test.ts b/src/db/session-db.test.ts
+index 043addb1..3decef20 100644
+--- a/src/db/session-db.test.ts
++++ b/src/db/session-db.test.ts
+@@ -10,7 +10,14 @@ import fs from 'fs';
+ import path from 'path';
+ import { describe, it, expect, afterEach } from 'vitest';
+ 
+-import { ensureSchema, getInboundSourceSessionId, migrateMessagesInTable, syncProcessingAcks } from './session-db.js';
++import {
++  dueMessagesAreAllGatedTasks,
++  ensureSchema,
++  getInboundSourceSessionId,
++  insertMessage,
++  migrateMessagesInTable,
++  syncProcessingAcks,
++} from './session-db.js';
+ 
+ const TEST_DIR = '/tmp/nanoclaw-session-db-test';
+ const DB_PATH = path.join(TEST_DIR, 'inbound.db');
+@@ -93,6 +100,100 @@ describe('migrateMessagesInTable', () => {
+   });
+ });
+ 
++describe('dueMessagesAreAllGatedTasks', () => {
++  function freshDb(): Database.Database {
++    if (fs.existsSync(TEST_DIR)) fs.rmSync(TEST_DIR, { recursive: true });
++    fs.mkdirSync(TEST_DIR, { recursive: true });
++    ensureSchema(DB_PATH, 'inbound');
++    return new Database(DB_PATH);
++  }
++
++  it('is false when there are no due messages', () => {
++    const db = freshDb();
++    expect(dueMessagesAreAllGatedTasks(db)).toBe(false);
++    db.close();
++  });
++
++  it('is true when every due message is a task row carrying a script', () => {
++    const db = freshDb();
++    insertMessage(db, {
++      id: 'task-1',
++      kind: 'task',
++      timestamp: new Date().toISOString(),
++      platformId: null,
++      channelType: null,
++      threadId: null,
++      content: JSON.stringify({ prompt: 'check something', script: 'echo \'{"wakeAgent": false}\'' }),
++      processAfter: null,
++      recurrence: null,
++    });
++    expect(dueMessagesAreAllGatedTasks(db)).toBe(true);
++    db.close();
++  });
++
++  it('is false when a due task row has no script', () => {
++    const db = freshDb();
++    insertMessage(db, {
++      id: 'task-1',
++      kind: 'task',
++      timestamp: new Date().toISOString(),
++      platformId: null,
++      channelType: null,
++      threadId: null,
++      content: JSON.stringify({ prompt: 'unconditional reminder' }),
++      processAfter: null,
++      recurrence: null,
++    });
++    expect(dueMessagesAreAllGatedTasks(db)).toBe(false);
++    db.close();
++  });
++
++  it('is false when the due batch mixes a gated task with a plain chat message', () => {
++    const db = freshDb();
++    insertMessage(db, {
++      id: 'task-1',
++      kind: 'task',
++      timestamp: new Date().toISOString(),
++      platformId: null,
++      channelType: null,
++      threadId: null,
++      content: JSON.stringify({ prompt: 'check something', script: 'echo \'{"wakeAgent": false}\'' }),
++      processAfter: null,
++      recurrence: null,
++    });
++    insertMessage(db, {
++      id: 'chat-1',
++      kind: 'chat',
++      timestamp: new Date().toISOString(),
++      platformId: 'p1',
++      channelType: 'telegram',
++      threadId: null,
++      content: JSON.stringify({ text: 'hi' }),
++      processAfter: null,
++      recurrence: null,
++    });
++    expect(dueMessagesAreAllGatedTasks(db)).toBe(false);
++    db.close();
++  });
++
++  it('is false when the gated task is not yet due', () => {
++    const db = freshDb();
++    insertMessage(db, {
++      id: 'task-1',
++      kind: 'task',
++      timestamp: new Date().toISOString(),
++      platformId: null,
++      channelType: null,
++      threadId: null,
++      content: JSON.stringify({ prompt: 'check something', script: 'echo \'{"wakeAgent": false}\'' }),
++      processAfter: new Date(Date.now() + 3_600_000).toISOString(),
++      recurrence: null,
++    });
++    expect(dueMessagesAreAllGatedTasks(db)).toBe(false);
++    db.close();
++  });
++});
++
+ describe('syncProcessingAcks — script-skip counter', () => {
+   function freshPair() {
+     if (fs.existsSync(TEST_DIR)) fs.rmSync(TEST_DIR, { recursive: true });
+diff --git a/src/db/session-db.ts b/src/db/session-db.ts
+index b5fbaf4b..4da52417 100644
+--- a/src/db/session-db.ts
++++ b/src/db/session-db.ts
+@@ -146,6 +146,36 @@ export function countDueMessages(db: Database.Database): number {
+   ).count;
+ }
+ 
++/**
++ * True only when every currently-due message is a script-gated task row
++ * (kind='task', content.script non-empty) — i.e. this wake exists solely to
++ * let a pre-task script decide whether the agent is actually needed. Used
++ * by wakeContainer to skip the pre-spawn projected-sessions briefing compile
++ * (a real LLM call) for the common case where the script says no and the
++ * agent never runs at all. False (including on zero due messages) means
++ * "brief as normal" — any real content in the batch still gets a briefing.
++ */
++export function dueMessagesAreAllGatedTasks(db: Database.Database): boolean {
++  const rows = db
++    .prepare(
++      `SELECT kind, content FROM messages_in
++       WHERE status = 'pending'
++         AND trigger = 1
++         AND (process_after IS NULL OR datetime(process_after) <= datetime('now'))`,
++    )
++    .all() as Array<{ kind: string; content: string }>;
++  if (rows.length === 0) return false;
++  return rows.every((row) => {
++    if (row.kind !== 'task') return false;
++    try {
++      const parsed = JSON.parse(row.content) as { script?: unknown };
++      return typeof parsed.script === 'string' && parsed.script.trim().length > 0;
++    } catch {
++      return false;
++    }
++  });
++}
++
+ export function markMessageFailed(db: Database.Database, messageId: string): void {
+   db.prepare("UPDATE messages_in SET status = 'failed' WHERE id = ?").run(messageId);
+ }
+@@ -249,6 +279,7 @@ export function getContainerState(outDb: Database.Database): ContainerState | nu
+ export interface OutboundMessage {
+   id: string;
+   kind: string;
++  timestamp: string;
+   platform_id: string | null;
+   channel_type: string | null;
+   thread_id: string | null;
+diff --git a/src/delivery.ts b/src/delivery.ts
+index 491aa48c..7fb1110a 100644
+--- a/src/delivery.ts
++++ b/src/delivery.ts
+@@ -205,6 +205,59 @@ async function drainSession(session: Session): Promise<void> {
+         markDelivered(inDb, msg.id, platformMsgId ?? null);
+         deliveryAttempts.delete(msg.id);
+ 
++        // Live per-turn vault transcript export — cheap no-op when the
++        // group has no transcript-append-host script. See
++        // modules/vault-transcript/index.ts's module header.
++        if (msg.kind === 'chat') {
++          const { appendDeliveredOutboundTurn } = await import('./modules/vault-transcript/index.js');
++          const { resolveAssistantName } = await import('./container-config.js');
++          // Disambiguate the transcript line with who this actually went
++          // to — it's no longer safe to assume every outbound turn was
++          // addressed to the same human (an agent group can be wired to
++          // more than one channel/person, on top of a2a traffic; see the
++          // sender tagging fix in agent-route.ts for the inbound-side
++          // equivalent). Channel deliveries resolve to the platform user's
++          // display name (`users.id` is already the namespaced
++          // `<channel_type>:<handle>` that `platform_id` carries for a
++          // channel row); a2a deliveries resolve to the target agent's name.
++          let recipientName: string | undefined;
++          let effectivePlatformId = msg.platform_id;
++          let effectiveChannelType = msg.channel_type;
++          if (!effectivePlatformId && session.messaging_group_id) {
++            // Default (non-tool-call) replies inherit routing from whichever
++            // message woke the container (extractRouting picks the wake
++            // batch's first row) — if that trigger carried no platform_id
++            // (e.g. a system/a2a-adjacent row), fall back to the session's
++            // own bound destination rather than showing no recipient at all.
++            const mg = getMessagingGroup(session.messaging_group_id);
++            if (mg) {
++              effectivePlatformId = mg.platform_id;
++              effectiveChannelType = mg.channel_type;
++              log.warn('transcript recipient fallback: msg had no platform_id, used session messaging group', {
++                sessionId: session.id,
++                msgId: msg.id,
++                msgChannelType: msg.channel_type,
++                messagingGroupId: mg.id,
++              });
++            }
++          }
++          if (effectivePlatformId) {
++            if (effectiveChannelType === 'agent') {
++              recipientName = getAgentGroup(effectivePlatformId)?.name ?? effectivePlatformId;
++            } else {
++              const { getUser } = await import('./modules/permissions/db/users.js');
++              recipientName = getUser(effectivePlatformId)?.display_name ?? effectivePlatformId;
++            }
++          }
++          void appendDeliveredOutboundTurn(
++            session.agent_group_id,
++            resolveAssistantName(session.agent_group_id),
++            msg.timestamp,
++            msg.content,
++            recipientName,
++          );
++        }
++
+         // Pause the typing indicator after a real user-facing message
+         // lands on the user's screen, so the client has time to visually
+         // clear the indicator before the next heartbeat tick brings it
+diff --git a/src/group-init.settings.test.ts b/src/group-init.settings.test.ts
+index 16e1be28..d4ea1278 100644
+--- a/src/group-init.settings.test.ts
++++ b/src/group-init.settings.test.ts
+@@ -8,6 +8,8 @@ vi.mock('./config.js', async (importOriginal) => ({
+   ...(await importOriginal<typeof import('./config.js')>()),
+   DATA_DIR: '/tmp/nanoclaw-group-init-settings-test/data',
+   GROUPS_DIR: '/tmp/nanoclaw-group-init-settings-test/groups',
++  HOST_SHIMS_DIR: '/tmp/nanoclaw-group-init-settings-test/host-shims',
++  MCP_SHIMS_DIR: '/tmp/nanoclaw-group-init-settings-test/mcp-shims',
+ }));
+ 
+ vi.mock('./log.js', () => ({
+@@ -66,3 +68,33 @@ describe('default settings.json for new groups', () => {
+     expect(after.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS).toBe('1');
+   });
+ });
++
++describe('default host-shims/briefing-host for new groups', () => {
++  it('is seeded, executable, and refuses to run with the placeholder VAULT_PATH', () => {
++    const ag = makeGroup('ag-briefing');
++    initGroupFilesystem(ag, {});
++
++    const file = path.join(TEST_ROOT, 'host-shims', ag.folder, 'briefing-host');
++    expect(fs.existsSync(file)).toBe(true);
++    expect(fs.statSync(file).mode & 0o111).toBeTruthy(); // executable bits set
++
++    const content = fs.readFileSync(file, 'utf-8');
++    expect(content).toContain('CHANGE/ME');
++    expect(content).toContain('--agent briefer');
++  });
++
++  it("never rewrites an existing briefing-host — a group's VAULT_PATH edit sticks", () => {
++    const ag = makeGroup('ag-briefing-edit');
++    initGroupFilesystem(ag, {});
++
++    const file = path.join(TEST_ROOT, 'host-shims', ag.folder, 'briefing-host');
++    const edited = fs
++      .readFileSync(file, 'utf-8')
++      .replace('/CHANGE/ME/path/to/this/groups/obsidian/vault', '/real/vault');
++    fs.writeFileSync(file, edited);
++
++    initGroupFilesystem(ag, {}); // next spawn
++
++    expect(fs.readFileSync(file, 'utf-8')).toContain('/real/vault');
++  });
++});
+diff --git a/src/host-sweep.test.ts b/src/host-sweep.test.ts
+index c385dc39..3f45bcf9 100644
+--- a/src/host-sweep.test.ts
++++ b/src/host-sweep.test.ts
+@@ -10,6 +10,7 @@ import { deleteOrphanProcessingClaims, getProcessingClaims } from './db/session-
+ import {
+   ABSOLUTE_CEILING_MS,
+   CLAIM_STUCK_MS,
++  _recoverStuckStagedRowsForTesting,
+   _resetStuckProcessingRowsForTesting,
+   decideStuckAction,
+   parseSqliteUtc,
+@@ -295,6 +296,37 @@ describe('resetStuckProcessingRows — orphan claim cleanup', () => {
+   });
+ });
+ 
++describe('recoverStuckStagedRows', () => {
++  it('flips a staged row abandoned past the ceiling back to pending', () => {
++    const { inDb } = makeSessionDbs();
++    const abandonedAt = new Date(Date.now() - ABSOLUTE_CEILING_MS - 60_000).toISOString();
++    inDb
++      .prepare(
++        "INSERT INTO messages_in (id, seq, kind, timestamp, status, content) VALUES ('m-staged', 1, 'chat', ?, 'staged', '{}')",
++      )
++      .run(abandonedAt);
++
++    _recoverStuckStagedRowsForTesting(inDb, fakeSession());
++
++    const row = inDb.prepare('SELECT status FROM messages_in WHERE id = ?').get('m-staged') as { status: string };
++    expect(row.status).toBe('pending');
++  });
++
++  it('leaves a recently-staged row alone — still legitimately mid-flight', () => {
++    const { inDb } = makeSessionDbs();
++    inDb
++      .prepare(
++        "INSERT INTO messages_in (id, seq, kind, timestamp, status, content) VALUES ('m-fresh', 1, 'chat', ?, 'staged', '{}')",
++      )
++      .run(new Date().toISOString());
++
++    _recoverStuckStagedRowsForTesting(inDb, fakeSession());
++
++    const row = inDb.prepare('SELECT status FROM messages_in WHERE id = ?').get('m-fresh') as { status: string };
++    expect(row.status).toBe('staged');
++  });
++});
++
+ describe('parseSqliteUtc', () => {
+   // Regression: SQLite TIMESTAMP strings have no zone marker, but Date.parse
+   // treats those as local time. On non-UTC hosts this made every claim look
+diff --git a/src/host-sweep.ts b/src/host-sweep.ts
+index 3b855936..15eb5676 100644
+--- a/src/host-sweep.ts
++++ b/src/host-sweep.ts
+@@ -68,6 +68,14 @@ export const ABSOLUTE_CEILING_MS = 30 * 60 * 1000;
+ // Stuck tolerance window applied per 'processing' claim — "did we see any
+ // signs of life since this message was claimed?"
+ export const CLAIM_STUCK_MS = 60 * 1000;
++// A 'staged' row (writeSessionMessage's pre-wake state, see session-manager.ts)
++// normally flips to 'pending' within seconds via releaseStagedMessage, right
++// after wakeContainer resolves in router.ts. If the host process dies in that
++// exact window (e.g. a restart mid-flight), the row is orphaned permanently —
++// nothing else ever revisits it. Reusing the container SLA's own ceiling: if
++// something so routine hasn't happened in 30 minutes, it never will on its
++// own.
++export const STUCK_STAGED_MS = ABSOLUTE_CEILING_MS;
+ const MAX_TRIES = 5;
+ const BACKOFF_BASE_MS = 5000;
+ 
+@@ -217,6 +225,15 @@ async function sweepSession(session: Session): Promise<void> {
+       syncProcessingAcks(inDb, outDb);
+     }
+ 
++    // 1.5. Recover any 'staged' row abandoned past STUCK_STAGED_MS — see its
++    // own doc comment. Flips back to 'pending' (not 'completed': we can't
++    // safely know from here whether it was already answered before the
++    // process died, and a message silently vanishing forever is worse than
++    // an occasional late/duplicate-ish reply to one that already was —
++    // matches this file's existing stuck-'processing' recovery, which makes
++    // the same call).
++    recoverStuckStagedRows(inDb, session);
++
+     // 2. Wake a container if work is due and nothing is running. Ordered
+     // before the crashed-container cleanup so a fresh container gets a chance
+     // to clean its own orphan processing_ack rows on startup (see
+@@ -311,7 +328,8 @@ function enforceRunningContainerSla(
+   if (decision.action === 'ok') return;
+ 
+   if (decision.action === 'kill-ceiling') {
+-    log.warn('Killing container past absolute ceiling', {
++    // Idle reap is routine (a warm container with nothing to do), not a fault.
++    log.info('Killing container past absolute ceiling', {
+       sessionId: session.id,
+       heartbeatAgeMs: decision.heartbeatAgeMs,
+       ceilingMs: decision.ceilingMs,
+@@ -331,6 +349,23 @@ function enforceRunningContainerSla(
+   resetStuckProcessingRows(inDb, outDb, session, 'claim-stuck');
+ }
+ 
++export function _recoverStuckStagedRowsForTesting(inDb: Database.Database, session: Session): void {
++  recoverStuckStagedRows(inDb, session);
++}
++
++function recoverStuckStagedRows(inDb: Database.Database, session: Session): void {
++  const now = Date.now();
++  const staged = inDb.prepare("SELECT id, timestamp FROM messages_in WHERE status = 'staged'").all() as Array<{
++    id: string;
++    timestamp: string;
++  }>;
++  for (const row of staged) {
++    if (now - parseSqliteUtc(row.timestamp) < STUCK_STAGED_MS) continue;
++    inDb.prepare("UPDATE messages_in SET status = 'pending' WHERE id = ? AND status = 'staged'").run(row.id);
++    log.warn('Recovered a message stuck in staged status', { messageId: row.id, sessionId: session.id });
++  }
++}
++
+ export function _resetStuckProcessingRowsForTesting(
+   inDb: Database.Database,
+   outDb: Database.Database,
+diff --git a/src/modules/index.ts b/src/modules/index.ts
+index 11da3050..bb6b0c9f 100644
+--- a/src/modules/index.ts
++++ b/src/modules/index.ts
+@@ -23,3 +23,5 @@ import './agent-to-agent/index.js';
+ import './self-mod/index.js';
+ import './host-shim/index.js';
+ import './host-cron/index.js';
++import './projected-sessions/index.js';
++import './vault-transcript/index.js';
+diff --git a/src/router.ts b/src/router.ts
+index 0f298fb1..2880ecb2 100644
+--- a/src/router.ts
++++ b/src/router.ts
+@@ -29,8 +29,10 @@ import {
+ } from './db/messaging-groups.js';
+ import { findSessionForAgent } from './db/sessions.js';
+ import { startTypingRefresh, stopTypingRefresh } from './modules/typing/index.js';
++import { stampCaptionIds } from './modules/attachment-caption/caption.js';
++import { triggerCaptioning } from './modules/attachment-caption/notify.js';
+ import { log } from './log.js';
+-import { resolveSession, writeSessionMessage, writeOutboundDirect } from './session-manager.js';
++import { resolveSession, writeSessionMessage, writeOutboundDirect, releaseStagedMessage } from './session-manager.js';
+ import { wakeContainer } from './container-runner.js';
+ import { getSession } from './db/sessions.js';
+ import type { AgentGroup, MessagingGroup, MessagingGroupAgent } from './types.js';
+@@ -298,6 +300,15 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
+   const parsed = safeParseContent(event.message.content);
+   const messageText = parsed.text ?? '';
+ 
++  // Stamp a captionId on every image attachment once here, before the
++  // fan-out loop below calls deliverToAgent per wired agent — mutating in
++  // place means every fanned-out session's placeholder references the same
++  // id. This is instant (no network call); the actual captioning model call
++  // happens later, off the delivery path, per session (see deliverToAgent).
++  if (event.message.kind === 'chat' || event.message.kind === 'chat-sdk') {
++    event.message.content = stampCaptionIds(event.message.content);
++  }
++
+   // Per-wiring thread policy inputs, resolved once per event. Each wiring's
+   // threads override (NULL = inherit) resolves against the channel's declared
+   // defaults, hard-bounded by the live adapter's raw capability. Undeclared
+@@ -504,8 +515,9 @@ async function deliverToAgent(
+     }
+   }
+ 
++  const deliveredMessageId = messageIdForAgent(event.message.id, agent.agent_group_id);
+   writeSessionMessage(session.agent_group_id, session.id, {
+-    id: messageIdForAgent(event.message.id, agent.agent_group_id),
++    id: deliveredMessageId,
+     kind: event.message.kind,
+     timestamp: event.message.timestamp,
+     platformId: deliveryAddr.platformId,
+@@ -513,8 +525,22 @@ async function deliverToAgent(
+     threadId: deliveryAddr.threadId,
+     content: event.message.content,
+     trigger: wake ? 1 : 0,
++    // Staged (not immediately 'pending') when this wakes the agent: an
++    // already-warm container polls inbound.db on its own schedule and would
++    // otherwise pick this row up before wakeContainer's synth/briefing step
++    // below has finished writing a fresh briefing.md — released right after
++    // that await resolves, further down.
++    stage: wake,
+   });
+ 
++  // Attachments were only stamped with a captionId above (no network call).
++  // The actual model call happens now, off the delivery path — fire-and-forget,
++  // never awaited, never blocks this session's wake. No-op if there are no
++  // un-captioned image attachments.
++  if (event.message.kind === 'chat' || event.message.kind === 'chat-sdk') {
++    triggerCaptioning(session.agent_group_id, session.id, deliveredMessageId);
++  }
++
+   log.info('Message routed', {
+     sessionId: session.id,
+     agentGroup: agent.agent_group_id,
+@@ -541,6 +567,11 @@ async function deliverToAgent(
+     const freshSession = getSession(session.id);
+     if (freshSession) {
+       const woke = await wakeContainer(freshSession);
++      // Only now — after the synth/briefing step inside wakeContainer has
++      // actually finished — can the container's poll loop be allowed to see
++      // this message. No-op if writeSessionMessage above didn't stage it
++      // (trigger=0 accumulate rows are written 'pending' from the start).
++      releaseStagedMessage(session.agent_group_id, session.id, deliveredMessageId);
+       // wakeContainer never throws — it returns false on transient spawn
+       // failure (host-sweep retries). Stop the typing indicator we just
+       // started so it doesn't leak; the inbound row stays pending.
+diff --git a/src/session-manager.ts b/src/session-manager.ts
+index 7f624db1..8f4114b3 100644
+--- a/src/session-manager.ts
++++ b/src/session-manager.ts
+@@ -17,8 +17,10 @@ import path from 'path';
+ import { deriveAttachmentName } from './attachment-naming.js';
+ import { isSafeAttachmentName } from './attachment-safety.js';
+ import type { OutboundFile } from './channels/adapter.js';
+-import { DATA_DIR } from './config.js';
++import { DATA_DIR, GROUPS_DIR } from './config.js';
+ import { ensureContainedInboxDir, isPathInside } from './inbox-safety.js';
++import { isImageAttachment } from './modules/attachment-caption/caption.js';
++import { getAgentGroup } from './db/agent-groups.js';
+ import { getMessagingGroup } from './db/messaging-groups.js';
+ import {
+   createSession,
+@@ -238,6 +240,15 @@ export function writeSessionMessage(
+      * Dying containers (past first poll) skip these rows.
+      */
+     onWake?: 0 | 1;
++    /**
++     * Write as 'staged' instead of 'pending' — invisible to the container's
++     * poll loop (which only reads status='pending') until releaseStagedMessage
++     * flips it. Used for wake-triggering messages so an already-warm
++     * container can't race the host's own synth/briefing step, which still
++     * needs the row present (readPendingBatchText also accepts 'staged') to
++     * build its batch text from it.
++     */
++    stage?: boolean;
+   },
+ ): void {
+   // Documented reset: operators `rm -rf` a session folder to clear a stuck
+@@ -269,6 +280,9 @@ export function writeSessionMessage(
+       sourceSessionId: message.sourceSessionId ?? null,
+       onWake: message.onWake ?? 0,
+     });
++    if (message.stage) {
++      db.prepare("UPDATE messages_in SET status = 'staged' WHERE id = ?").run(message.id);
++    }
+   } finally {
+     db.close();
+   }
+@@ -276,6 +290,18 @@ export function writeSessionMessage(
+   updateSession(sessionId, { last_active: new Date().toISOString() });
+ }
+ 
++/** Flips a 'staged' row (see writeSessionMessage's `stage` option) back to
++ *  'pending' so the container's poll loop can finally see it. No-op if the
++ *  row was never staged (already 'pending') or doesn't exist. */
++export function releaseStagedMessage(agentGroupId: string, sessionId: string, messageId: string): void {
++  const db = openInboundDb(agentGroupId, sessionId);
++  try {
++    db.prepare("UPDATE messages_in SET status = 'pending' WHERE id = ? AND status = 'staged'").run(messageId);
++  } finally {
++    db.close();
++  }
++}
++
+ /**
+  * If message content has attachments with base64 `data`, save them to
+  * the session's inbox directory and replace with `localPath`.
+@@ -345,11 +371,12 @@ function extractAttachmentFiles(
+     if (!inboxDir) break;
+ 
+     const filePath = path.join(inboxDir, filename);
++    const bytes = Buffer.from(att.data as string, 'base64');
+     try {
+       // wx = exclusive create. Refuses to follow a pre existing symlink or
+       // overwrite any existing file. The host expects to be the sole writer
+       // of these attachments.
+-      fs.writeFileSync(filePath, Buffer.from(att.data as string, 'base64'), { flag: 'wx' });
++      fs.writeFileSync(filePath, bytes, { flag: 'wx' });
+     } catch (err: unknown) {
+       const e = err as NodeJS.ErrnoException;
+       if (e.code === 'EEXIST') {
+@@ -367,6 +394,27 @@ function extractAttachmentFiles(
+     delete att.data;
+     changed = true;
+     log.debug('Saved attachment to inbox', { messageId, filename, size: att.size });
++
++    // Session inbox is per-thread and may not outlive the session. Images
++    // also get resized to 512px for captioning/vault-export — mirror the
++    // full-resolution original into the agent group's persistent workspace
++    // (survives session lifecycle) in case the resize crunches too much
++    // detail. Not the Obsidian vault — that only ever gets the resized copy.
++    // Best-effort: a failure here must not block message delivery.
++    // ponytail: local-disk only for now; an offsite store (Dropbox etc.) can
++    // replace this path later without touching the inbox-write above.
++    if (isImageAttachment(att)) {
++      try {
++        const folder = getAgentGroup(agentGroupId)?.folder;
++        if (folder) {
++          const archiveDir = path.join(path.resolve(GROUPS_DIR, folder), 'attachments', messageId);
++          fs.mkdirSync(archiveDir, { recursive: true });
++          fs.writeFileSync(path.join(archiveDir, filename), bytes, { flag: 'wx' });
++        }
++      } catch (err) {
++        log.warn('Failed to archive original attachment to group workspace', { messageId, filename, err });
++      }
++    }
+   }
+ 
+   return changed ? JSON.stringify(parsed) : contentStr;
+diff --git a/src/timezone.ts b/src/timezone.ts
+index a2809c08..35a861ce 100644
+--- a/src/timezone.ts
++++ b/src/timezone.ts
+@@ -52,6 +52,42 @@ export function formatLocalStamp(date: Date, timezone: string): string {
+   });
+ }
+ 
++/**
++ * Convert a UTC ISO timestamp to a local ISO-8601 string with an explicit
++ * numeric offset (e.g. "2026-08-01T03:03:03-05:00") — unambiguous wall-clock
++ * time (what the reader should think "now" is), still trivially sortable and
++ * convertible back to UTC. Prefer this over formatLocalTime/formatLocalStamp
++ * wherever the string is fed back to a model as *context* rather than shown
++ * to a human in prose — a bare "Aug 1, 3:03 AM" reads fine to a person but
++ * gives a model no offset to reason about relative-time or convert to UTC.
++ */
++export function formatLocalIsoOffset(utcIso: string, timezone: string): string {
++  const date = new Date(utcIso);
++  const zone = resolveTimezone(timezone);
++  const parts = Object.fromEntries(
++    new Intl.DateTimeFormat('en-US', {
++      timeZone: zone,
++      year: 'numeric',
++      month: '2-digit',
++      day: '2-digit',
++      hour: '2-digit',
++      minute: '2-digit',
++      second: '2-digit',
++      hour12: false,
++      timeZoneName: 'shortOffset',
++    })
++      .formatToParts(date)
++      .map((p) => [p.type, p.value]),
++  ) as Record<string, string>;
++  const hour = parts.hour === '24' ? '00' : parts.hour;
++  // "GMT+5:30" (India etc., non-hour-aligned) as well as "GMT-5" — parse both
++  // hour and minute rather than assuming ":00".
++  const match = /^([+-])(\d{1,2})(?::(\d{2}))?$/.exec(parts.timeZoneName.replace('GMT', '') || '+0');
++  const [, sign, offH, offM] = match ?? ['', '+', '0', '00'];
++  const offsetStr = `${sign}${offH.padStart(2, '0')}:${(offM ?? '00').padStart(2, '0')}`;
++  return `${parts.year}-${parts.month}-${parts.day}T${hour}:${parts.minute}:${parts.second}${offsetStr}`;
++}
++
+ /**
+  * Interpret a naive ISO-like timestamp (no trailing `Z`, no offset) as wall-clock
+  * time in `tz` and return the corresponding UTC Date. Strings that already carry

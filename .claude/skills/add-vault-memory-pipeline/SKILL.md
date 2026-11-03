@@ -73,143 +73,22 @@ else a vault's crontab might be doing.
    prompts) around on disk even after removal — they're not deleted by
    this cutover, just no longer scheduled, in case of rollback.
 
-## Pre-flight
+## Install
 
-### Verify dependencies are applied
-
-```bash
-test -f src/modules/host-shim/exec.ts && echo "add-host-scripts OK"
-test -d src/modules/host-cron && echo "add-host-cron OK"
-```
-
-`add-host-cron` is only needed for scheduling `digest-daily-host` — the
-transcript-append half has no scheduling dependency at all (it's called
-from the existing message-delivery path, not a cron).
-
-### Check if already applied
+The code (live transcript export, attachment captioning, the transcript and digest
+shim templates, the `ncl vault-transcripts` resource) is installed by
+**`/add-memory-stack`**, together with `/add-host-scripts` and (for the digest
+schedule) `/add-host-cron`. Run those first; this skill no longer carries its own
+copy/patch steps. What stays here is configuring, scheduling and operating the
+pipeline.
 
 ```bash
-test -f src/host-shim-templates/transcript-append-host && test -f src/host-shim-templates/digest-daily-host && test -f src/host-shim-templates/digest-rollup-host && echo "ALREADY APPLIED"
+test -f src/modules/vault-transcript/index.ts && test -f src/host-shim-templates/digest-daily-host && echo "installed"
+test -d src/modules/host-cron && echo "add-host-cron OK (needed only for the digest schedule)"
 ```
 
-## Apply
-
-### 1. Copy the module and templates in
-
-```bash
-mkdir -p src/modules/vault-transcript
-for f in \
-  src/modules/vault-transcript/index.ts \
-  src/host-shim-templates/transcript-append-host \
-  src/host-shim-templates/digest-daily-host \
-  src/host-shim-templates/digest-rollup-host \
-; do
-  git show origin/vault-memory-pipeline:"$f" > "$f"
-done
-chmod +x src/host-shim-templates/transcript-append-host src/host-shim-templates/digest-daily-host src/host-shim-templates/digest-rollup-host
-```
-
-### 2. Add `resolveAssistantName` (needed for outbound turn attribution)
-
-Edit `src/container-config.ts` — add, after `resolveGroupTimezone`:
-
-```typescript
-/** Effective display name for an agent group's responder: assistant_name override → group name. */
-export function resolveAssistantName(agentGroupId: string): string {
-  const group = getAgentGroup(agentGroupId);
-  return getContainerConfig(agentGroupId)?.assistant_name ?? group?.name ?? 'Assistant';
-}
-```
-
-### 3. Add `timestamp` to `OutboundMessage`
-
-Edit `src/db/session-db.ts` — the `SELECT *` already returns it, this
-just types it:
-
-```typescript
-export interface OutboundMessage {
-  id: string;
-  kind: string;
-  timestamp: string;
-  // ...unchanged...
-```
-
-### 4. Wire the two per-turn call sites
-
-Edit `src/container-runner.ts`'s `spawnContainer`, right after the
-existing `agent_destinations` block:
-
-```typescript
-  // Live per-turn vault transcript export — no table/flag; unconditional
-  // and cheap because execHostShim no-ops (a stat, not a spawn) when the
-  // group has no transcript-append-host script.
-  {
-    const { appendPendingInboundTurns } = await import('./modules/vault-transcript/index.js');
-    await appendPendingInboundTurns(agentGroup.id, session.id);
-  }
-```
-
-Edit `src/delivery.ts`'s `drainSession`, right after `markDelivered(...)`
-inside the per-message loop:
-
-```typescript
-        // Live per-turn vault transcript export — cheap no-op when the
-        // group has no transcript-append-host script.
-        if (msg.kind === 'chat') {
-          const { appendDeliveredOutboundTurn } = await import('./modules/vault-transcript/index.js');
-          const { resolveAssistantName } = await import('./container-config.js');
-          void appendDeliveredOutboundTurn(
-            session.agent_group_id,
-            resolveAssistantName(session.agent_group_id),
-            msg.timestamp,
-            msg.content,
-          );
-        }
-```
-
-### 5. Seed all three scripts into every new group
-
-Edit `src/group-init.ts` — extend the existing host-shim seeding loop
-(originally just `briefing-host`) to also cover all three:
-
-```typescript
-  for (const shimName of ['briefing-host', 'transcript-append-host', 'digest-daily-host', 'digest-rollup-host']) {
-```
-
-Seeding the script is not the same as enabling export — see step 5b.
-
-### 5b. Gate live export behind an explicit per-group enable flag
-
-**Fork-local addition (2026-08-06), not yet in origin/vault-memory-pipeline
-— reapply this step by hand if re-pulling the branch source.** The
-original design fired `transcript-append-host` unconditionally for every
-group that had the script seeded (every group, per step 5), relying on an
-unset `VAULT_PATH` to fail quietly. In practice this meant every new
-group — including `create_agent` subagents, which inherit no config from
-their parent — logged `transcript-append failed: VAULT_PATH not
-configured` on every turn until someone noticed.
-
-Fix: own migration + own table + own CLI resource, same shape as
-`add-projected-sessions`'s `projected_sessions_enabled`:
-
-- Migration `src/db/migrations/030-vault-transcript-enabled.ts` — table
-  `vault_transcript_enabled (agent_group_id PK, enabled_at)`.
-- `src/modules/vault-transcript/db.ts` — `isEnabled` / `setEnabled` /
-  `listEnabled`.
-- `src/modules/vault-transcript/index.ts` — barrel entry point
-  (registered in `src/modules/index.ts`), registers `ncl vault-transcripts
-  enable|disable|list|status` and re-exports the runtime functions the
-  call sites in `container-runner.ts`/`delivery.ts` import.
-- The module's actual per-turn logic (old `index.ts`) moved to
-  `src/modules/vault-transcript/transcript.ts`; its shared
-  `appendTranscriptTurn` now returns immediately, before ever calling
-  `execHostShim`, unless `isEnabled(agentGroupId)` is true.
-
-**A group with no row in `vault_transcript_enabled` gets no export at
-all, even if `transcript-append-host` is seeded and configured.** The
-script still gets seeded into every new group per step 5 (so enabling
-later needs no restart-and-reseed step) — it's just inert until the flag
-is set:
+Live export is **opt-in per group** and does nothing until enabled (no row in
+`vault_transcript_enabled`, no export, even with the script present):
 
 ```bash
 ncl vault-transcripts enable --id <group-id>
@@ -217,19 +96,11 @@ ncl vault-transcripts status --id <group-id>
 ncl vault-transcripts list          # every currently-enabled group
 ```
 
-No container restart needed — `isEnabled` is checked live on every turn,
-same as `projected_sessions_enabled`.
+No container restart needed — it is checked live on every turn.
 
-### 6. Build and test
+## Apply
 
-```bash
-pnpm exec tsc --noEmit -p .
-pnpm test
-```
-
-No container rebuild needed — nothing in `container/agent-runner/` changed.
-
-### 7. Configure, ask what time the digest should run, and schedule per group
+### Configure, ask what time the digest should run, and schedule per group
 
 ```sh
 # groups/<folder>/host-shims/transcript-append-host — edit:
