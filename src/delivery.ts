@@ -36,6 +36,7 @@ import { notifyDeliveredWrite } from './session-sync/inbound-push.js';
 import { pauseTypingRefreshAfterDelivery, setTypingAdapter } from './modules/typing/index.js';
 import type { OutboundFile } from './channels/adapter.js';
 import type { PendingApproval, Session } from './types.js';
+import * as retryGate from './delivery-retry.js';
 
 const ACTIVE_POLL_MS = 1000;
 const SWEEP_POLL_MS = 60_000;
@@ -199,8 +200,12 @@ async function drainSession(session: Session): Promise<void> {
 
     // Ensure platform_message_id column exists (migration for existing sessions)
     migrateDeliveredTable(inDb);
+    retryGate.pruneSession(session.id, new Set(undelivered.map((m) => m.id)));
 
     for (const msg of undelivered) {
+      const ordered = retryGate.isOrderedChannel(msg.channel_type);
+      // Telegram: wait out this message's own backoff, and any earlier message still retrying.
+      if (ordered && retryGate.isHeld(msg.id, msg.timestamp)) continue;
       try {
         const platformMsgId = await deliverMessage(msg, session, inDb);
         const deliveredRow = markDelivered(inDb, msg.id, platformMsgId ?? null);
@@ -211,6 +216,7 @@ async function drainSession(session: Session): Promise<void> {
           inboundDbPath(session.agent_group_id, session.id),
         );
         deliveryAttempts.delete(msg.id);
+        retryGate.recordDone(msg.id);
 
         // Live per-turn vault transcript export — cheap no-op when the
         // group has no transcript-append-host script. See
@@ -275,6 +281,17 @@ async function drainSession(session: Session): Promise<void> {
           pauseTypingRefreshAfterDelivery(session.id);
         }
       } catch (err) {
+        if (ordered && retryGate.isTransientDeliveryError(err)) {
+          const { failures, delayMs } = retryGate.recordFailure(msg.id, session.id, msg.timestamp);
+          log.warn('Message delivery failed transiently, will retry', {
+            messageId: msg.id,
+            sessionId: session.id,
+            attempt: failures,
+            retryInMs: delayMs,
+            err,
+          });
+          continue;
+        }
         const attempts = (deliveryAttempts.get(msg.id) ?? 0) + 1;
         deliveryAttempts.set(msg.id, attempts);
         if (attempts >= MAX_DELIVERY_ATTEMPTS) {
@@ -292,6 +309,7 @@ async function drainSession(session: Session): Promise<void> {
             inboundDbPath(session.agent_group_id, session.id),
           );
           deliveryAttempts.delete(msg.id);
+          retryGate.recordDone(msg.id);
         } else {
           log.warn('Message delivery failed, will retry', {
             messageId: msg.id,

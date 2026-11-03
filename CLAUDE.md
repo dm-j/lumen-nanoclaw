@@ -66,6 +66,7 @@ For ad-hoc queries from skills or scripts, use the in-tree wrapper rather than t
 | `src/index.ts` | Entry point: init DB, migrations, channel adapters, delivery polls, sweep, shutdown |
 | `src/router.ts` | Inbound routing: messaging group → agent group → session → `inbound.db` → wake |
 | `src/delivery.ts` | Polls `outbound.db`, delivers via adapter, handles system actions (schedule, approvals, etc.) |
+| `src/delivery-retry.ts` | Telegram's ordered, backed-off delivery retry: transient failures retry forever (5s steps, capped 60s); later messages are held while an earlier one retries |
 | `src/delivery-guard.ts` | `DeliveryGuardSpec` + `runGuarded` — the guard-consult pipeline for privileged delivery actions (registry stays in `delivery.ts`) |
 | `src/host-sweep.ts` | 60s sweep: `processing_ack` sync, stale detection, due-message wake, recurrence |
 | `src/session-manager.ts` | Resolves sessions; opens `inbound.db` / `outbound.db`; manages heartbeat path |
