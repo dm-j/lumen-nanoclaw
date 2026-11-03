@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 
 import { getConfig } from './config.js';
-import { findByName, getAllDestinations, type DestinationEntry } from './destinations.js';
+import { findByName, findByRouting, getAllDestinations, type DestinationEntry } from './destinations.js';
 import { isProjectedSession, projectedResetReason, queryCacheLive } from './projected-sessions.js';
 import { isStatelessTaskSession } from './stateless-session.js';
 import {
@@ -797,7 +797,7 @@ export function dispatchResultText(
   text: string,
   routing: RoutingContext,
 ): { sent: number; hasUnwrapped: boolean; taskBlocks: TaskMessageBlock[] } {
-  const MESSAGE_RE = /<message\s+to="([^"]+)"\s*>([\s\S]*?)<\/message>/g;
+  const MESSAGE_RE = /<message\s+to="([^"]+)"(?:\s+subject="([^"]*)")?\s*>([\s\S]*?)<\/message>/g;
 
   let match: RegExpExecArray | null;
   let sent = 0;
@@ -812,7 +812,8 @@ export function dispatchResultText(
       scratchpadParts.push(text.slice(lastIndex, match.index));
     }
     const toName = match[1];
-    const body = match[2].trim();
+    const subject = match[2]?.trim() || undefined;
+    const body = match[3].trim();
     lastIndex = MESSAGE_RE.lastIndex;
 
     // One-door delivery in task sessions: only the send_message tool delivers.
@@ -827,13 +828,17 @@ export function dispatchResultText(
       taskBlocks.push({ to: toName, body });
       continue;
     }
-    const dest = findByName(toName);
+    // An unknown name (typically a model guessing the person's display name in
+    // a fresh session) falls back to where this batch came from, rather than
+    // silently dropping the reply.
+    const dest = findByName(toName) ?? findByRouting(routing.channelType, routing.platformId);
+    if (dest && dest.name !== toName) log(`Unknown destination "${toName}", replying to "${dest.name}" (batch origin)`);
     if (!dest) {
       log(`Unknown destination in <message to="${toName}">, dropping block`);
       scratchpadParts.push(`[dropped: unknown destination "${toName}"] ${body}`);
       continue;
     }
-    sendToDestination(dest, body, routing);
+    sendToDestination(dest, body, routing, subject);
     sent++;
   }
   if (lastIndex < text.length) {
@@ -900,7 +905,7 @@ export function autoAppendTaskLog(text: string): void {
   // raw XML — replace each with its inner text, marked undelivered, so the
   // log stays readable prose.
   const prose = text.replace(
-    /<message\s+to="([^"]+)"\s*>([\s\S]*?)<\/message>/g,
+    /<message\s+to="([^"]+)"(?:\s+subject="[^"]*")?\s*>([\s\S]*?)<\/message>/g,
     (_m, to: string, body: string) => `[undelivered → ${to}] ${body.trim()}`,
   );
   const line = stripInternalTags(prose).replace(/\s+/g, ' ').trim().slice(0, 500);
@@ -913,7 +918,7 @@ export function autoAppendTaskLog(text: string): void {
   log('Task run log auto-appended from final text');
 }
 
-function sendToDestination(dest: DestinationEntry, body: string, routing: RoutingContext): void {
+function sendToDestination(dest: DestinationEntry, body: string, routing: RoutingContext, subject?: string): void {
   const platformId = dest.type === 'channel' ? dest.platformId! : dest.agentGroupId!;
   const channelType = dest.type === 'channel' ? dest.channelType! : 'agent';
   // Resolve thread_id per-destination from the most recent inbound message
@@ -928,7 +933,7 @@ function sendToDestination(dest: DestinationEntry, body: string, routing: Routin
     platform_id: platformId,
     channel_type: channelType,
     thread_id: destRouting?.threadId ?? null,
-    content: JSON.stringify({ text: body }),
+    content: JSON.stringify({ text: body, ...(subject ? { subject } : {}) }),
   });
 }
 

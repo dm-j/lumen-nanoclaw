@@ -88,6 +88,11 @@ export const sendMessage: McpToolDefinition = {
           description: 'Destination name (e.g., "family", "worker-1").',
         },
         text: { type: 'string', description: 'Message content' },
+        subject: {
+          type: 'string',
+          description:
+            'Short topic label (2–5 words). Never shown to the recipient and not context for them — the text must stand on its own. Recorded only as a transcript annotation to aid later search.',
+        },
       },
       required: ['to', 'text'],
     },
@@ -95,6 +100,7 @@ export const sendMessage: McpToolDefinition = {
   async handler(args) {
     const to = args.to as string;
     const text = args.text as string;
+    const subject = typeof args.subject === 'string' ? args.subject.trim() : '';
     if (!to) return err(`to is required. Options: ${destinationList()}`);
     if (!text) return err('text is required');
 
@@ -109,7 +115,7 @@ export const sendMessage: McpToolDefinition = {
       platform_id: routing.platform_id,
       channel_type: routing.channel_type,
       thread_id: routing.thread_id,
-      content: JSON.stringify({ text }),
+      content: JSON.stringify({ text, ...(subject ? { subject } : {}) }),
     });
 
     log(`send_message: #${seq} → ${routing.resolvedName}`);

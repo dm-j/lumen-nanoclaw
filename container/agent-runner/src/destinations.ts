@@ -122,7 +122,7 @@ function buildDestinationsSection(mode: SessionMode): string {
   }
 
   lines.push(
-    'Wrap each delivered message in a `<message to="name">…</message>` block; include several blocks in one response to address several destinations. `<internal>…</internal>` marks thinking you don\'t want sent.',
+    'Wrap each delivered message in a `<message to="name">…</message>` block; include several blocks in one response to address several destinations. Always add `subject="2–5 word topic"` after `to` (`<message to="name" subject="…">`): a label the recipient never sees, kept only as a transcript annotation for later search. It is not context for the recipient — write the message as if no subject existed, so it makes full sense on its own (never "Did you receive it?" under the subject "Amazon order"). `<internal>…</internal>` marks thinking you don\'t want sent.',
   );
   lines.push('');
   lines.push(

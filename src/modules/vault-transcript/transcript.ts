@@ -50,13 +50,15 @@ async function appendTranscriptTurn(
   timestampIso: string,
   text: string,
   imagePath?: string,
+  subject?: string,
 ): Promise<void> {
   if (!isEnabled(agentGroupId)) return;
   const trimmed = text.trim();
   if (!trimmed) return;
   try {
     const args = [speaker, timestampIso, trimmed];
-    if (imagePath) args.push(imagePath);
+    if (imagePath || subject) args.push(imagePath ?? '');
+    if (subject) args.push(subject);
     const result = await execHostShim(agentGroupId, 'transcript-append', args);
     if (!result.ok && result.refusalReason?.startsWith('no whitelisted shim named')) return; // expected — script absent
     if (!result.ok || result.exitCode !== 0) {
@@ -72,12 +74,13 @@ async function appendTranscriptTurn(
   }
 }
 
-function parseChatContent(content: string): { sender: string; text: string } {
+function parseChatContent(content: string): { sender: string; text: string; subject?: string } {
   try {
     const parsed = JSON.parse(content) as {
       sender?: string;
       author?: { fullName?: string; userName?: string };
       text?: string;
+      subject?: string;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       attachments?: any[];
     };
@@ -86,7 +89,11 @@ function parseChatContent(content: string): { sender: string; text: string } {
     // same reasoning as literal-tail.ts's combineTextAndAttachments: text
     // alone says nothing about what's in the image, and dropping it in
     // favor of the placeholder loses what the user actually said.
-    return { sender, text: combineTextAndAttachments(parsed.text, parsed.attachments) ?? content };
+    return {
+      sender,
+      text: combineTextAndAttachments(parsed.text, parsed.attachments) ?? content,
+      subject: parsed.subject,
+    };
   } catch {
     return { sender: 'Unknown', text: content };
   }
@@ -237,7 +244,8 @@ export async function appendDeliveredOutboundTurn(
   content: string,
   recipientName?: string,
 ): Promise<void> {
-  const { text } = parseChatContent(content);
+  const { text, subject } = parseChatContent(content);
   const speaker = recipientName ? `${assistantName} → ${recipientName}` : assistantName;
-  await appendTranscriptTurn(agentGroupId, speaker, timestampIso, text);
+  // Subject is internal only (delivery never reads it); the shim puts it on the header line.
+  await appendTranscriptTurn(agentGroupId, speaker, timestampIso, text, undefined, subject?.trim() || undefined);
 }

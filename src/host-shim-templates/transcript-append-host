@@ -6,7 +6,7 @@
 #
 # Calling contract (docs/host-shims.md; src/modules/vault-transcript/index.ts):
 # invoked once per delivered/inbound chat turn as
-#   transcript-append-host <speaker> <utc-iso-timestamp> <text> [image-path]
+#   transcript-append-host <speaker> <utc-iso-timestamp> <text> [image-path] [subject]
 # and appends one turn to that local calendar day's
 # 07-Daily/Transcripts-readonly/YYYY/MM/DD.md, creating the file (with
 # frontmatter) on first turn of the day. No stdout contract — NanoClaw
@@ -31,7 +31,7 @@ case "${1:-}" in
     cat <<'EOF'
 transcript-append — append one conversation turn to today's transcript.
 
-Usage: transcript-append <speaker> <utc-iso-timestamp> <text> [image-path]
+Usage: transcript-append <speaker> <utc-iso-timestamp> <text> [image-path] [subject]
 EOF
     exit 0
     ;;
@@ -53,6 +53,9 @@ SPEAKER="$1"
 UTC_TS="$2"
 TEXT="$3"
 IMAGE_PATH="${4:-}"
+# Optional 5th arg: agent-supplied topic label, shown after the header (search aid).
+# Old copies of this script never read $5 and just omit it.
+SUBJECT=$(printf %s "${5:-}" | tr '\n' ' ')
 
 # Strip fractional seconds (JS toISOString() emits them; BSD date -f can't
 # parse them) before converting UTC -> local with an explicit offset.
@@ -97,7 +100,7 @@ if [ -n "$IMAGE_PATH" ] && [ -f "$IMAGE_PATH" ]; then
 fi
 
 {
-  echo "> **${SPEAKER} — ${LOCAL_TS}**"
+  echo "> **${SPEAKER} — ${LOCAL_TS}**${SUBJECT:+ ${SUBJECT}}"
   # Quote every line of the text (blank lines become a bare '>').
   echo "$TEXT" | sed -E 's/^$/>/; s/^([^>])/> \1/'
   if [ -n "$EMBED" ]; then

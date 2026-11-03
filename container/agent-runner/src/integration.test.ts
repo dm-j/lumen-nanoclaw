@@ -132,7 +132,7 @@ describe('poll loop integration', () => {
     await loopPromise.catch(() => {});
   });
 
-  it('unknown destination is dropped, valid destination is sent', async () => {
+  it('unknown destination falls back to the batch origin, valid destination is sent', async () => {
     insertMessage('m1', { sender: 'Alice', text: 'hi' }, { platformId: 'chan-1', channelType: 'discord' });
 
     const provider = new MockProvider(
@@ -142,14 +142,14 @@ describe('poll loop integration', () => {
     const controller = new AbortController();
     const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 2000);
 
-    await waitFor(() => getUndeliveredMessages().length > 0, 2000);
+    await waitFor(() => getUndeliveredMessages().length >= 2, 2000);
     controller.abort();
 
     const out = getUndeliveredMessages();
-    // Only the valid destination should produce output
-    expect(out).toHaveLength(1);
-    expect(JSON.parse(out[0].content).text).toBe('delivered');
-    expect(out[0].platform_id).toBe('chan-1');
+    // The unknown name is replied to the origin channel (chan-1) rather than dropped
+    expect(out).toHaveLength(2);
+    expect(out.map((m) => JSON.parse(m.content).text)).toEqual(['dropped', 'delivered']);
+    expect(out.every((m) => m.platform_id === 'chan-1')).toBe(true);
 
     await loopPromise.catch(() => {});
   });
