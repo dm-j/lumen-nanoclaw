@@ -255,6 +255,11 @@ export function getExpiredAwaitingReasonApprovals(nowIso: string): PendingApprov
     .all(nowIso) as PendingApproval[];
 }
 
+/** Every approval still waiting for an answer (status 'pending'). */
+export function getPendingApprovals(): PendingApproval[] {
+  return getDb().prepare("SELECT * FROM pending_approvals WHERE status = 'pending'").all() as PendingApproval[];
+}
+
 export function deletePendingApproval(approvalId: string): void {
   getDb().prepare('DELETE FROM pending_approvals WHERE approval_id = ?').run(approvalId);
 }

@@ -34,6 +34,8 @@ export type { ApprovalHandler, ApprovalHandlerContext, RequestApprovalOptions } 
 // Host-sweep hook for ghosted "Reject with reason…" holds. The re-export also
 // loads reason-capture.js, registering its message-interceptor on import.
 export { sweepAwaitingReasonRejects } from './reason-capture.js';
+// Host-sweep hook for approvals nobody answered within APPROVAL_TTL_MS.
+export { sweepExpiredApprovals } from './expiry.js';
 
 registerResponseHandler(handleApprovalsResponse);
 

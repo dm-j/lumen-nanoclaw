@@ -226,6 +226,13 @@ export interface RequestApprovalOptions {
  * caller's perspective — the admin's response kicks off the registered
  * approval handler for this action via the response dispatcher.
  */
+/**
+ * How long a module approval waits for an answer before the host sweep expires it
+ * (expiry.ts). Without this a request whose card was missed or lost stays pending
+ * forever and the requesting agent never hears back.
+ */
+export const APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
+
 export async function requestApproval(opts: RequestApprovalOptions): Promise<void> {
   const { session, action, payload, title, question, agentName, approverUserId } = opts;
 
@@ -254,6 +261,7 @@ export async function requestApproval(opts: RequestApprovalOptions): Promise<voi
     action,
     payload: JSON.stringify(payload),
     created_at: new Date().toISOString(),
+    expires_at: new Date(Date.now() + APPROVAL_TTL_MS).toISOString(),
     title,
     question,
     options_json: JSON.stringify(normalizedOptions),

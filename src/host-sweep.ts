@@ -173,6 +173,18 @@ async function sweep(): Promise<void> {
   }
   // MODULE-HOOK:approvals-reason-sweep:end
 
+  // Expire approvals nobody answered within the TTL, so the requesting agent
+  // gets a definite outcome instead of waiting on a card that may never have
+  // been seen.
+  // MODULE-HOOK:approvals-expiry-sweep:start
+  try {
+    const { sweepExpiredApprovals } = await import('./modules/approvals/index.js');
+    await sweepExpiredApprovals();
+  } catch (err) {
+    log.error('Approval expiry sweep failed', { err });
+  }
+  // MODULE-HOOK:approvals-expiry-sweep:end
+
   // Agent-group-scoped, not session-scoped — runs once per tick, not once
   // per active session. Module is optional; skip when its table is absent.
   // MODULE-HOOK:host-cron:start
