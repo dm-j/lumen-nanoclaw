@@ -3,10 +3,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { closeDb, initTestDb, runMigrations } from '../../db/index.js';
+import { closeDb, getDb, initTestDb, runMigrations } from '../../db/index.js';
 import { createAgentGroup } from '../../db/agent-groups.js';
-import { createContainerConfig } from '../../db/container-configs.js';
-import type { ContainerConfigRow } from '../../types.js';
+import { ensureContainerConfig } from '../../db/container-configs.js';
 
 describe('execHostShim', () => {
   let dirA: string;
@@ -34,28 +33,15 @@ describe('execHostShim', () => {
       created_at: new Date().toISOString(),
     });
 
-    const base: Omit<ContainerConfigRow, 'agent_group_id' | 'host_shims_dir'> = {
-      provider: null,
-      model: null,
-      effort: null,
-      image_tag: null,
-      assistant_name: null,
-      max_messages_per_prompt: null,
-      skills: '"all"',
-      mcp_servers: '{}',
-      packages_apt: '[]',
-      packages_npm: '[]',
-      additional_mounts: '[]',
-      cli_scope: 'group',
-      timezone: null,
-      mcp_shims_dir: null,
-      transport: null,
-      wake_script: null,
-      followup_enabled: 0,
-      updated_at: new Date().toISOString(),
-    };
-    createContainerConfig({ ...base, agent_group_id: 'ag-a', host_shims_dir: dirA });
-    createContainerConfig({ ...base, agent_group_id: 'ag-b', host_shims_dir: dirB });
+    // Raw UPDATE rather than a full ContainerConfigRow literal, so this test doesn't change
+    // whenever another feature adds a container_configs column.
+    for (const [id, dir] of [
+      ['ag-a', dirA],
+      ['ag-b', dirB],
+    ]) {
+      ensureContainerConfig(id);
+      getDb().prepare('UPDATE container_configs SET host_shims_dir = ? WHERE agent_group_id = ?').run(dir, id);
+    }
   });
 
   afterEach(() => {

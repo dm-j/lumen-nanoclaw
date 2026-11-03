@@ -1,62 +1,43 @@
 # Remove Host Cron
 
-Every step is idempotent — safe to re-run. Does **not** roll back the
-`host_cron_jobs` migration (forward-only, like every migration here) — a
-leftover table with no reader or writer is harmless.
+Removes the `host-cron` module and its edits to NanoClaw-owned files. Does
+**not** roll back the migration (forward-only, like every migration here) — a
+leftover `host_cron_jobs` table with no reader or writer is harmless. Delete
+any jobs first (`ncl host-cron-jobs delete --job-id <id>`) if you want a clean
+stop rather than pulling the clock out from under scheduled rows.
 
-**First:** delete any scheduled jobs so nothing is silently orphaned —
-`ncl host-cron-jobs list` then `ncl host-cron-jobs delete --job-id <id>`
-for each. Not strictly required (removing the tick mechanism makes the
-rows inert either way), but cleaner.
+**Check first:** does `add-vault-memory-pipeline` still rely on it? Its digest
+jobs are host-cron rows; remove that skill first if applied.
 
-## 1. Remove the module
+## 1. Reverse the shared-file edits
 
 ```bash
-rm -rf src/modules/host-cron
-rm -f src/db/migrations/026-host-cron.ts
+git apply -R --3way .claude/skills/add-host-cron/shared-files.patch
 ```
 
-## 2. Unregister the migration
+If upstream moved and it conflicts: remove the `026-host-cron` registration
+from `src/db/migrations/index.ts`, `import './host-cron/index.js';` from
+`src/modules/index.ts`, and the `MODULE-HOOK:host-cron` block (and the
+`getDb, hasTable` import if nothing else uses it) from `src/host-sweep.ts`.
 
-Remove the `migration026` import and array entry from
-`src/db/migrations/index.ts`.
+## 2. Delete the module-owned files
 
-## 3. Unregister the module
+```bash
+while read -r f; do rm -f "$f"; done < .claude/skills/add-host-cron/files.txt
+rmdir src/modules/host-cron 2>/dev/null || true
+```
 
-Remove `import './host-cron/index.js';` from `src/modules/index.ts`.
-
-## 4. Remove the sweep hook
-
-Remove the `MODULE-HOOK:host-cron:start` … `:end` block from
-`src/host-sweep.ts`'s `sweep()`. Leave the `getDb`/`hasTable` import if
-anything else in the file still needs it (check before removing).
-
-## 5. Leave `execHostShim`'s `timeoutMs` parameter alone
-
-Unless you know nothing else uses it (`grep -rn 'execHostShim(' src/` and
-check for other 4-arg callers — `add-projected-sessions` also uses it),
-don't revert step 5 of the Apply instructions. It's backward-compatible
-and harmless to leave even with `host-cron` gone.
-
-## 6. Remove its recipe entry
+## 3. Remove the recipe entry
 
 ```bash
 sed -i.bak '/add-host-cron/d' .claude/skills/recipe/SKILL.md && rm -f .claude/skills/recipe/SKILL.md.bak
 ```
 
-## 7. Build and test
+## 4. Build, test, restart
 
 ```bash
 pnpm exec tsc --noEmit -p .
 pnpm test
-```
-
-No container rebuild needed — this module is host-side only, nothing in
-`container/agent-runner/` references it.
-
-## 8. Restart
-
-```bash
 source setup/lib/install-slug.sh
 launchctl kickstart -k gui/$(id -u)/$(launchd_label)  # macOS
 systemctl --user restart $(systemd_unit)              # Linux

@@ -82,3 +82,21 @@ Entries below cover changes that had no other write-up. Features that already ha
 | Built-in tool denials in containers | [agent-runner-details.md](agent-runner-details.md), [roadmap/per-agent-tool-control.md](roadmap/per-agent-tool-control.md) |
 | Vision agent group, multi-file `send_file`/`assign_task` | [roadmap/visual-subagent.md](roadmap/visual-subagent.md) |
 | Fresh-install / move to a new machine | [fresh-install-checklist.md](fresh-install-checklist.md), [fresh-install.md](fresh-install.md) |
+
+## Skill freshness (checked 2026-11-03)
+
+The `add-*` skills this fork wrote install by copying files out of branches on `origin` and applying a patch. A skill is only as current as its branch, and the branches were frozen at 2026-08-01 until this check.
+
+| Skill | Status | How it was proven |
+|---|---|---|
+| `add-host-scripts` | **Current.** Branch `host-shim` refreshed (`313eb9c1`); installs the whole host-shim layer: pool + registry, mcp-shims manifest, all templates. `files.txt` + `shared-files.patch` live in the skill folder. | Applied literally on a clean checkout of the upstream merge-base `639577c3`: typecheck clean, 1349 host tests, 164 container tests, tree identical to the validated build. |
+| `add-host-cron` | **Current.** Branch `host-cron` refreshed (`6feb8f97`). | Same, layered on the above: 1356 host tests. |
+| `add-mcp-shim` | Current (guided workflow, no branch). | n/a |
+| `add-mbif-vault` | Skill text only; not re-verified. | n/a |
+| `add-projected-sessions`, `add-vault-memory-pipeline` | **Stale.** Their branches still hold the 2026-08-01 code. See below. | n/a |
+
+Things worth knowing when re-applying:
+
+- **Migrations are keyed on `name`**, not number; `version` is only an ordering hint. Upstream already uses 021–025 for unrelated migrations (`021-approval-question` etc.), so alias imports on collision and never rename an applied migration.
+- **The host-shim container CLI on the branch has no session-sync overlay.** Trunk's `container/agent-runner/src/cli/host-shim.ts` (and `ncl.ts`) also handle the shelved `sync` transport and import `./sync-outbound-push.js`. The branch copy is trunk's file minus that overlay.
+- **The memory system cannot be re-applied from skills alone yet.** Projected sessions, the vault transcript export and attachment captioning share edits in `container-runner.ts` (`wakeContainer`), `router.ts`, `session-manager.ts`, `formatter.ts` and `poll-loop.ts` with at least five other features (gated-task skip, stateless task markers, per-group env/blocked-host overrides, follow-up cancel, staged messages). `vault-transcript` imports `attachment-caption` and `projected-sessions/literal-tail`, and `attachment-caption/notify` imports `vault-transcript`. Until that is decomposed, re-apply them by `git cherry-pick` of the commits named in the sections above, or by diffing against `main`.

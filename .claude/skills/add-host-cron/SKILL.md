@@ -25,7 +25,7 @@ ordinary host-shim scripts; this skill only adds the clock.
 ### Verify `/add-host-scripts` is applied
 
 ```bash
-test -f src/modules/host-shim/exec.ts && echo OK
+test -f src/modules/host-shim/exec.ts && test -f src/modules/host-shim/registry.ts && echo OK
 ```
 
 If missing, run `/add-host-scripts` first.
@@ -33,10 +33,10 @@ If missing, run `/add-host-scripts` first.
 ### Check if already applied
 
 ```bash
-test -d src/modules/host-cron && echo "ALREADY APPLIED — skip to Verify"
+test -f src/modules/host-cron/run.ts && grep -q 'MODULE-HOOK:host-cron' src/host-sweep.ts && echo "ALREADY APPLIED — skip to Verify"
 ```
 
-### Verify the registry branch is reachable
+### Verify the branch is reachable
 
 ```bash
 git fetch origin host-cron && git log -1 --oneline origin/host-cron
@@ -44,106 +44,49 @@ git fetch origin host-cron && git log -1 --oneline origin/host-cron
 
 ## Apply
 
+The module-owned files live on the `host-cron` branch (list: `files.txt`
+beside this file). The three edits to NanoClaw-owned files are in
+`shared-files.patch`, generated from a clean checkout of the fork's upstream
+base with `add-host-scripts` applied, and proven there (typecheck + full test
+suite).
+
 ### 1. Copy the module in
 
 ```bash
-mkdir -p src/modules/host-cron
-for f in \
-  src/db/migrations/026-host-cron.ts \
-  src/modules/host-cron/db.ts \
-  src/modules/host-cron/db.test.ts \
-  src/modules/host-cron/run.ts \
-  src/modules/host-cron/index.ts \
-; do
-  git show origin/host-cron:"$f" > "$f"
-done
+while read -r f; do
+  mkdir -p "$(dirname "$f")"
+  git show "origin/host-cron:$f" > "$f"
+done < .claude/skills/add-host-cron/files.txt
 ```
 
-### 2. Register the migration
+That is `src/modules/host-cron/{db,db.test,run,index}.ts` and migration
+`026-host-cron`.
 
-Edit `src/db/migrations/index.ts` — add the import after `021-host-shims-dir`:
-
-```typescript
-import { migration026 } from './026-host-cron.js';
-```
-
-...and the array entry after `migration021`:
-
-```typescript
-  migration021,
-  migration026,
-```
-
-### 3. Register the module
-
-Edit `src/modules/index.ts` — add, after the `host-shim` import:
-
-```typescript
-import './host-cron/index.js';
-```
-
-### 4. Wire the tick into host-sweep
-
-Edit `src/host-sweep.ts`:
-- Add `import { getDb, hasTable } from './db/connection.js';` to the imports.
-- In `sweep()`, right after the existing `MODULE-HOOK:approvals-reason-sweep:end`
-  marker, add:
-
-```typescript
-  // Agent-group-scoped, not session-scoped — runs once per tick, not once
-  // per active session. Module is optional; skip when its table is absent.
-  // MODULE-HOOK:host-cron:start
-  if (hasTable(getDb(), 'host_cron_jobs')) {
-    try {
-      const { runDueHostCronJobs } = await import('./modules/host-cron/run.js');
-      await runDueHostCronJobs();
-    } catch (err) {
-      log.error('host-cron sweep failed', { err });
-    }
-  }
-  // MODULE-HOOK:host-cron:end
-```
-
-Placement matters: after the per-session sweep loop, not inside it.
-
-### 5. Ensure `execHostShim` accepts a per-call timeout
-
-`host-cron`'s tick calls `execHostShim(agentGroupId, name, args, timeoutMs)`
-— a 4th argument. Check whether your copy of `src/modules/host-shim/exec.ts`
-already has it:
+### 2. Apply the shared-file patch
 
 ```bash
-grep -q 'timeoutMs = TIMEOUT_MS' src/modules/host-shim/exec.ts && echo "already has it"
+git apply --3way .claude/skills/add-host-cron/shared-files.patch
 ```
 
-If not, edit `execHostShim`'s signature and its `execFile` call:
+What it does, if you need to make the edits by hand:
 
-```typescript
-export function execHostShim(
-  agentGroupId: string,
-  name: string,
-  args: string[],
-  timeoutMs = TIMEOUT_MS,
-): Promise<ShimResult> {
-  // ...unchanged body...
-  execFile(
-    shimPath,
-    args,
-    { timeout: timeoutMs, maxBuffer: MAX_BUFFER, encoding: 'utf-8' },
-    // ...
-```
+| File | Edit |
+|---|---|
+| `src/db/migrations/index.ts` | register `026-host-cron` (`migration026`). Migrations are keyed on `name`; `version` is an ordering hint only, so a number clash with upstream is harmless. |
+| `src/modules/index.ts` | `import './host-cron/index.js';` (after the `host-shim` import) |
+| `src/host-sweep.ts` | import `getDb, hasTable` from `./db/connection.js`; add the `MODULE-HOOK:host-cron` block at the end of `sweep()`, **after** the per-session loop and the other module hooks, **before** the final `setTimeout(sweep, ...)`: when the `host_cron_jobs` table exists, `await runDueHostCronJobs()` (dynamic import of `./modules/host-cron/run.js`) inside try/catch that logs `host-cron sweep failed`. |
 
-Backward-compatible — every existing caller keeps the old 30s default.
+The 4-argument `execHostShim(agentGroupId, name, args, timeoutMs)` the tick
+calls ships with `add-host-scripts`; nothing to do here.
 
-### 6. Build and test
+### 3. Build and test
 
 ```bash
 pnpm exec tsc --noEmit -p .
-pnpm exec vitest run src/modules/host-cron/db.test.ts
 pnpm test
 ```
 
-### 7. Record this in the fork's recipe
+### 4. Record this in the fork's recipe
 
 ```bash
 mkdir -p .claude/skills/recipe

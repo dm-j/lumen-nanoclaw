@@ -1,0 +1,61 @@
+diff --git a/src/db/migrations/index.ts b/src/db/migrations/index.ts
+index 1443b819..0eb2a812 100644
+--- a/src/db/migrations/index.ts
++++ b/src/db/migrations/index.ts
+@@ -21,6 +21,7 @@ import { migration019 } from './019-wiring-threads.js';
+ import { migration020 } from './020-container-config-timezone.js';
+ import { migration021 } from './021-host-shims-dir.js';
+ import { migration021 as migration021ApprovalQuestion } from './021-approval-question.js';
++import { migration026 } from './026-host-cron.js';
+ import { migration029 } from './029-mcp-shims-dir.js';
+ 
+ export interface Migration {
+@@ -67,6 +68,7 @@ export const migrations: Migration[] = [
+   migration020,
+   migration021,
+   migration021ApprovalQuestion,
++  migration026,
+   migration029,
+ ];
+ 
+diff --git a/src/host-sweep.ts b/src/host-sweep.ts
+index ed21f703..3b855936 100644
+--- a/src/host-sweep.ts
++++ b/src/host-sweep.ts
+@@ -32,6 +32,7 @@ import fs from 'fs';
+ import { ensureEgressNetwork } from './egress-lockdown.js';
+ import { getActiveSessions, isTaskThread, updateSession } from './db/sessions.js';
+ import { getAgentGroup } from './db/agent-groups.js';
++import { getDb, hasTable } from './db/connection.js';
+ import {
+   countDueMessages,
+   deleteOrphanProcessingClaims,
+@@ -164,6 +165,19 @@ async function sweep(): Promise<void> {
+   }
+   // MODULE-HOOK:approvals-reason-sweep:end
+ 
++  // Agent-group-scoped, not session-scoped — runs once per tick, not once
++  // per active session. Module is optional; skip when its table is absent.
++  // MODULE-HOOK:host-cron:start
++  if (hasTable(getDb(), 'host_cron_jobs')) {
++    try {
++      const { runDueHostCronJobs } = await import('./modules/host-cron/run.js');
++      await runDueHostCronJobs();
++    } catch (err) {
++      log.error('host-cron sweep failed', { err });
++    }
++  }
++  // MODULE-HOOK:host-cron:end
++
+   setTimeout(sweep, SWEEP_INTERVAL_MS);
+ }
+ 
+diff --git a/src/modules/index.ts b/src/modules/index.ts
+index 9d6ae891..11da3050 100644
+--- a/src/modules/index.ts
++++ b/src/modules/index.ts
+@@ -22,3 +22,4 @@ import './permissions/index.js';
+ import './agent-to-agent/index.js';
+ import './self-mod/index.js';
+ import './host-shim/index.js';
++import './host-cron/index.js';

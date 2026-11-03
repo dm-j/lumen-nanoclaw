@@ -1,0 +1,405 @@
+diff --git a/container/Dockerfile b/container/Dockerfile
+index b9dc5e97..0df12dea 100644
+--- a/container/Dockerfile
++++ b/container/Dockerfile
+@@ -111,6 +111,11 @@ RUN --mount=type=cache,target=/root/.cache/pnpm \
+ RUN printf '#!/bin/sh\nexec bun /app/src/cli/ncl.ts "$@"\n' > /usr/local/bin/ncl && \
+     chmod +x /usr/local/bin/ncl
+ 
++# ---- host-shim CLI wrapper -----------------------------------------------------
++# Actual script lives in the mounted source at /app/src/cli/host-shim.ts.
++RUN printf '#!/bin/sh\nexec bun /app/src/cli/host-shim.ts "$@"\n' > /usr/local/bin/host-shim && \
++    chmod +x /usr/local/bin/host-shim
++
+ # ---- Entrypoint --------------------------------------------------------------
+ COPY entrypoint.sh /app/entrypoint.sh
+ RUN chmod +x /app/entrypoint.sh
+diff --git a/container/agent-runner/src/mcp-tools/index.ts b/container/agent-runner/src/mcp-tools/index.ts
+index 95c0e962..973e8847 100644
+--- a/container/agent-runner/src/mcp-tools/index.ts
++++ b/container/agent-runner/src/mcp-tools/index.ts
+@@ -9,6 +9,7 @@ import './core.js';
+ import './interactive.js';
+ import './agents.js';
+ import './self-mod.js';
++import './dynamic-shims.js';
+ import { startMcpServer } from './server.js';
+ 
+ function log(msg: string): void {
+diff --git a/src/backfill-container-configs.ts b/src/backfill-container-configs.ts
+index 12c6f38e..e9221fad 100644
+--- a/src/backfill-container-configs.ts
++++ b/src/backfill-container-configs.ts
+@@ -66,6 +66,8 @@ export function backfillContainerConfigs(): void {
+       additional_mounts: JSON.stringify(legacy.additionalMounts ?? []),
+       cli_scope: 'group',
+       timezone: null,
++      host_shims_dir: null,
++      mcp_shims_dir: null,
+       updated_at: new Date().toISOString(),
+     };
+ 
+diff --git a/src/cli/resources/groups.ts b/src/cli/resources/groups.ts
+index 6503f646..ff1b053e 100644
+--- a/src/cli/resources/groups.ts
++++ b/src/cli/resources/groups.ts
+@@ -41,6 +41,27 @@ function parseTimezoneFlag(value: unknown): string | null | undefined {
+   return tz;
+ }
+ 
++/**
++ * Parse a --host-shims-dir flag: undefined = not passed, null = explicit
++ * clear (empty string → default to groups/<folder>/host-shims/), otherwise
++ * the given path. Validity (existence, etc.) is checked at call time by
++ * execHostShim, not here — an admin may point this at a directory before
++ * populating it.
++ */
++function parseHostShimsDirFlag(value: unknown): string | null | undefined {
++  if (value === undefined) return undefined;
++  const dir = String(value);
++  return dir === '' ? null : dir;
++}
++
++/** Same shape as parseHostShimsDirFlag, for --mcp-shims-dir: empty string
++ *  clears back to the default mcp-shims/<folder>/ under MCP_SHIMS_DIR. */
++function parseMcpShimsDirFlag(value: unknown): string | null | undefined {
++  if (value === undefined) return undefined;
++  const dir = String(value);
++  return dir === '' ? null : dir;
++}
++
+ /** Deserialize JSON columns for display. */
+ function presentConfig(row: ContainerConfigRow): Record<string, unknown> {
+   return {
+@@ -58,6 +79,8 @@ function presentConfig(row: ContainerConfigRow): Record<string, unknown> {
+     additional_mounts: JSON.parse(row.additional_mounts),
+     cli_scope: row.cli_scope,
+     timezone: row.timezone,
++    host_shims_dir: row.host_shims_dir,
++    mcp_shims_dir: row.mcp_shims_dir,
+     updated_at: row.updated_at,
+   };
+ }
+@@ -286,7 +309,9 @@ registerResource({
+       description:
+         'Update container config scalar fields. Changes are saved but do NOT take effect until you run `ncl groups restart`. ' +
+         'Use --id <group-id> and any of: --provider, --model, --effort, --image-tag, --assistant-name, --max-messages-per-prompt, --cli-scope, ' +
+-        '--timezone (IANA id like "Europe/Lisbon"; "" clears back to the install default; scheduled-task times follow it immediately, message display after restart).',
++        '--timezone (IANA id like "Europe/Lisbon"; "" clears back to the install default; scheduled-task times follow it immediately, message display after restart), ' +
++        '--host-shims-dir (path to this group\'s host-shim whitelist directory; "" clears back to the default groups/<folder>/host-shims/), ' +
++        '--mcp-shims-dir (path to this group\'s mcp-shims whitelist directory; "" clears back to the default mcp-shims/<folder>/, never mounted into the container).',
+       handler: async (args) => {
+         const id = args.id as string;
+         if (!id) throw new Error('--id is required');
+@@ -304,11 +329,19 @@ registerResource({
+             | 'max_messages_per_prompt'
+             | 'cli_scope'
+             | 'timezone'
++            | 'host_shims_dir'
++            | 'mcp_shims_dir'
+           >
+         > = {};
+         if (args.provider !== undefined) updates.provider = args.provider as string;
+         const timezone = parseTimezoneFlag(args.timezone);
+         if (timezone !== undefined) updates.timezone = timezone;
++        const hostShimsDirFlag = args['host-shims-dir'] ?? args.host_shims_dir;
++        const hostShimsDir = parseHostShimsDirFlag(hostShimsDirFlag);
++        if (hostShimsDir !== undefined) updates.host_shims_dir = hostShimsDir;
++        const mcpShimsDirFlag = args['mcp-shims-dir'] ?? args.mcp_shims_dir;
++        const mcpShimsDir = parseMcpShimsDirFlag(mcpShimsDirFlag);
++        if (mcpShimsDir !== undefined) updates.mcp_shims_dir = mcpShimsDir;
+         if (args.model !== undefined) updates.model = args.model as string;
+         if (args.effort !== undefined) updates.effort = args.effort as string;
+         if (args.image_tag !== undefined) updates.image_tag = args.image_tag as string;
+@@ -325,7 +358,7 @@ registerResource({
+ 
+         if (Object.keys(updates).length === 0) {
+           throw new Error(
+-            'Nothing to update — provide at least one of: --provider, --model, --effort, --image-tag, --assistant-name, --max-messages-per-prompt, --cli-scope, --timezone',
++            'Nothing to update — provide at least one of: --provider, --model, --effort, --image-tag, --assistant-name, --max-messages-per-prompt, --cli-scope, --timezone, --host-shims-dir, --mcp-shims-dir',
+           );
+         }
+ 
+diff --git a/src/config.ts b/src/config.ts
+index 886f6de6..6cb1b889 100644
+--- a/src/config.ts
++++ b/src/config.ts
+@@ -57,12 +57,38 @@ export const SENDER_ALLOWLIST_PATH = path.join(HOME_DIR, '.config', 'nanoclaw',
+ export const STORE_DIR = path.resolve(PROJECT_ROOT, 'store');
+ export const GROUPS_DIR = path.resolve(PROJECT_ROOT, 'groups');
+ export const DATA_DIR = path.resolve(PROJECT_ROOT, 'data');
++// mcp-shims implementation scripts — deliberately a sibling of groups/, not
++// inside it. groups/<folder>/ is bind-mounted RW into its container as
++// /workspace/agent, so anything living inside a group's own folder is
++// readable *and writable* from inside that agent's own session — fine for
++// CLAUDE.md/container.json (which get their own dedicated read-only mounts
++// overlaying the RW base), but mcp-shims scripts are meant to be invisible
++// to the agent entirely: the container only ever gets a generic forwarder
++// (dynamic-shims.ts) with no implementation in it. Default layout:
++// mcp-shims/<group-folder>/<server>/<name>-host — see resolveMcpShimsDir.
++// NANOCLAW_MCP_SHIMS_DIR: override for tests (vitest.config.ts points it at a temp dir so
++// group-init in a test can never write into the real shim trees).
++export const MCP_SHIMS_DIR = path.resolve(process.env.NANOCLAW_MCP_SHIMS_DIR ?? path.join(PROJECT_ROOT, 'mcp-shims'));
++// host-shims implementation scripts — same reasoning and layout as
++// MCP_SHIMS_DIR, a sibling of groups/, not inside it. host-shims scripts
++// (briefing-host, recall-host, etc.) are Bash-tool-invoked by name via the
++// shared host-shim CLI (agent-runner source, read-only, never per-group) —
++// the agent is meant to know only the tool's *name*, never its
++// implementation. Default layout: host-shims/<group-folder>/<name>-host —
++// see resolveHostShimsDir.
++export const HOST_SHIMS_DIR = path.resolve(
++  process.env.NANOCLAW_HOST_SHIMS_DIR ?? path.join(PROJECT_ROOT, 'host-shims'),
++);
+ // Local agent-template library. Committed but ships empty (+ README). Resolved
+ // once at load. Override to another LOCAL path via NANOCLAW_TEMPLATES_DIR; never
+ // a remote URL, never an ncl flag, never runtime-mutable.
+ export const TEMPLATES_DIR = process.env.NANOCLAW_TEMPLATES_DIR
+   ? path.resolve(process.env.NANOCLAW_TEMPLATES_DIR)
+   : path.resolve(PROJECT_ROOT, 'templates');
++// Trunk-owned default host-shim scripts (e.g. briefing-host), copied into a
++// new group's own host-shims/ once at group-init time. Not runtime-overridable
++// — unlike TEMPLATES_DIR, these aren't user-authored, they're shipped assets.
++export const HOST_SHIM_TEMPLATES_DIR = path.resolve(PROJECT_ROOT, 'src', 'host-shim-templates');
+ 
+ // Per-checkout image tag so two installs on the same host don't share
+ // `nanoclaw-agent:latest` and clobber each other on rebuild.
+diff --git a/src/container-config.ts b/src/container-config.ts
+index 21957790..81eab26c 100644
+--- a/src/container-config.ts
++++ b/src/container-config.ts
+@@ -15,6 +15,7 @@ import { GROUPS_DIR, TIMEZONE } from './config.js';
+ import { getContainerConfig } from './db/container-configs.js';
+ import { getAgentGroup } from './db/agent-groups.js';
+ import { isValidTimezone } from './timezone.js';
++import { discoverMcpShims, type McpShimManifestEntry } from './modules/host-shim/mcp-manifest.js';
+ import type { AgentGroup, ContainerConfigRow } from './types.js';
+ 
+ export interface McpStdioServerConfig {
+@@ -152,6 +153,7 @@ export interface ContainerConfig {
+   model?: string;
+   effort?: string;
+   timezone?: string;
++  mcpShims: McpShimManifestEntry[];
+ }
+ 
+ /**
+@@ -184,6 +186,7 @@ export function configFromDb(row: ContainerConfigRow, group: AgentGroup): Contai
+     model: row.model ?? undefined,
+     effort: row.effort ?? undefined,
+     timezone: row.timezone && isValidTimezone(row.timezone) ? row.timezone : undefined,
++    mcpShims: [],
+   };
+ }
+ 
+@@ -200,6 +203,7 @@ export function materializeContainerJson(agentGroupId: string): ContainerConfig
+   if (!row) throw new Error(`Container config not found for agent group: ${agentGroupId}`);
+ 
+   const config = configFromDb(row, group);
++  config.mcpShims = discoverMcpShims(agentGroupId);
+ 
+   const p = path.join(GROUPS_DIR, group.folder, 'container.json');
+   const dir = path.dirname(p);
+diff --git a/src/db/container-configs.ts b/src/db/container-configs.ts
+index d5c6f2e4..dffebc93 100644
+--- a/src/db/container-configs.ts
++++ b/src/db/container-configs.ts
+@@ -11,6 +11,8 @@ const SCALAR_COLUMNS = new Set([
+   'max_messages_per_prompt',
+   'cli_scope',
+   'timezone',
++  'host_shims_dir',
++  'mcp_shims_dir',
+ ]);
+ const JSON_COLUMNS = new Set(['skills', 'mcp_servers', 'packages_apt', 'packages_npm', 'additional_mounts']);
+ 
+@@ -31,11 +33,11 @@ export function createContainerConfig(config: ContainerConfigRow): void {
+       `INSERT INTO container_configs (
+         agent_group_id, provider, model, effort, image_tag, assistant_name,
+         max_messages_per_prompt, skills, mcp_servers, packages_apt, packages_npm,
+-        additional_mounts, cli_scope, timezone, updated_at
++        additional_mounts, cli_scope, timezone, host_shims_dir, mcp_shims_dir, updated_at
+       ) VALUES (
+         @agent_group_id, @provider, @model, @effort, @image_tag, @assistant_name,
+         @max_messages_per_prompt, @skills, @mcp_servers, @packages_apt, @packages_npm,
+-        @additional_mounts, @cli_scope, @timezone, @updated_at
++        @additional_mounts, @cli_scope, @timezone, @host_shims_dir, @mcp_shims_dir, @updated_at
+       )`,
+     )
+     .run(config);
+@@ -87,6 +89,8 @@ export function updateContainerConfigScalars(
+       | 'max_messages_per_prompt'
+       | 'cli_scope'
+       | 'timezone'
++      | 'host_shims_dir'
++      | 'mcp_shims_dir'
+     >
+   >,
+ ): void {
+diff --git a/src/db/db-v2.test.ts b/src/db/db-v2.test.ts
+index fde5aca5..7695cc9f 100644
+--- a/src/db/db-v2.test.ts
++++ b/src/db/db-v2.test.ts
+@@ -478,6 +478,8 @@ describe('container configs', () => {
+       additional_mounts: '[]',
+       cli_scope: 'global',
+       timezone: null,
++      host_shims_dir: null,
++      mcp_shims_dir: null,
+       updated_at: now(),
+     });
+     const row = getContainerConfig('ag-full');
+diff --git a/src/db/migrations/index.ts b/src/db/migrations/index.ts
+index 30d4c718..1443b819 100644
+--- a/src/db/migrations/index.ts
++++ b/src/db/migrations/index.ts
+@@ -19,7 +19,9 @@ import { moduleApprovalsTitleOptions } from './module-approvals-title-options.js
+ import { migration018 } from './018-approvals-approver-user-id.js';
+ import { migration019 } from './019-wiring-threads.js';
+ import { migration020 } from './020-container-config-timezone.js';
+-import { migration021 } from './021-approval-question.js';
++import { migration021 } from './021-host-shims-dir.js';
++import { migration021 as migration021ApprovalQuestion } from './021-approval-question.js';
++import { migration029 } from './029-mcp-shims-dir.js';
+ 
+ export interface Migration {
+   version: number;
+@@ -64,6 +66,8 @@ export const migrations: Migration[] = [
+   migration019,
+   migration020,
+   migration021,
++  migration021ApprovalQuestion,
++  migration029,
+ ];
+ 
+ /**
+diff --git a/src/group-init.ts b/src/group-init.ts
+index 08a0c1df..b75fbcea 100644
+--- a/src/group-init.ts
++++ b/src/group-init.ts
+@@ -1,11 +1,19 @@
+ import fs from 'fs';
+ import path from 'path';
+ 
+-import { DATA_DIR, DEFAULT_AGENT_PROVIDER, GROUPS_DIR } from './config.js';
++import {
++  DATA_DIR,
++  DEFAULT_AGENT_PROVIDER,
++  GROUPS_DIR,
++  HOST_SHIMS_DIR,
++  HOST_SHIM_TEMPLATES_DIR,
++  MCP_SHIMS_DIR,
++} from './config.js';
+ import { ensureContainerConfig } from './db/container-configs.js';
+ import { stageGroupPersona } from './group-persona.js';
+ import { log } from './log.js';
+ import { migrateClaudeMemorySettings } from './migrate-claude-memory-settings.js';
++import { pooledShimsFor } from './modules/host-shim/registry.js';
+ import { providerProvidesAgentSurfaces } from './providers/provider-container-registry.js';
+ import type { AgentGroup } from './types.js';
+ 
+@@ -78,6 +86,49 @@ export function initGroupFilesystem(
+     initialized.push('instructions.prepend.md');
+   }
+ 
++  // host-shims/<folder>/ — this group's own host-shim whitelist directory
++  // (default location per resolveHostShimsDir; container_configs.host_shims_dir
++  // can override it). Deliberately a sibling of groups/, NOT inside
++  // groupDir — groupDir is bind-mounted RW into this group's own container,
++  // so a script living inside it would be readable *and* writable from
++  // inside the agent's own session; the agent is meant to know a host-shim
++  // by name only. Seeded with the default briefing-host script
++  // (src/host-shim-templates/briefing-host), copied once and never
++  // overwritten again — a group's own edits (e.g. its VAULT_PATH) must
++  // survive every future spawn/restart.
++  // A group listed in host-shims/_registry.json draws from the shared pool instead (see
++  // modules/host-shim/registry.ts): no private directory, nothing seeded.
++  if (!pooledShimsFor(group.id, 'host')) {
++    const hostShimsDir = path.join(HOST_SHIMS_DIR, group.folder);
++    if (!fs.existsSync(hostShimsDir)) {
++      fs.mkdirSync(hostShimsDir, { recursive: true });
++      initialized.push('host-shims/');
++    }
++    // transcript-append-host, digest-daily-host: same seed-once-never-overwrite
++    // treatment, for the vault memory pipeline (live per-turn transcript
++    // export + scheduled daily digest generation via add-host-cron).
++    for (const shimName of ['briefing-host', 'transcript-append-host', 'digest-daily-host', 'digest-rollup-host']) {
++      const shimDst = path.join(hostShimsDir, shimName);
++      const shimSrc = path.join(HOST_SHIM_TEMPLATES_DIR, shimName);
++      if (!fs.existsSync(shimDst) && fs.existsSync(shimSrc)) {
++        fs.copyFileSync(shimSrc, shimDst);
++        fs.chmodSync(shimDst, 0o755);
++        initialized.push(`host-shims/${shimName}`);
++      }
++    }
++  }
++
++  // mcp-shims/<folder>/ — this group's own dynamic MCP-tool whitelist
++  // directory. Same off-mount isolation model as host-shims/ above (a
++  // subfolder script is invisible to every other group, and to the agent
++  // itself) but auto-exposed as an MCP tool per script instead of requiring
++  // a Bash-tool call. Empty by default — no seeded scripts.
++  const mcpShimsDir = path.join(MCP_SHIMS_DIR, group.folder);
++  if (!pooledShimsFor(group.id, 'mcp') && !fs.existsSync(mcpShimsDir)) {
++    fs.mkdirSync(mcpShimsDir, { recursive: true });
++    initialized.push('mcp-shims/');
++  }
++
+   // Ensure container_configs row exists in the DB. Idempotent — no-op if
+   // the row already exists (e.g. created by backfill or group creation). On a
+   // fresh row, stamp the resolved provider hint so a new group is created on
+diff --git a/src/modules/index.ts b/src/modules/index.ts
+index 2724a53e..9d6ae891 100644
+--- a/src/modules/index.ts
++++ b/src/modules/index.ts
+@@ -21,3 +21,4 @@ import './interactive/index.js';
+ import './permissions/index.js';
+ import './agent-to-agent/index.js';
+ import './self-mod/index.js';
++import './host-shim/index.js';
+diff --git a/src/provider-surfaces.test.ts b/src/provider-surfaces.test.ts
+index aa102898..ac893c48 100644
+--- a/src/provider-surfaces.test.ts
++++ b/src/provider-surfaces.test.ts
+@@ -45,7 +45,7 @@ function session(id: string, agentGroupId: string): Session {
+ }
+ 
+ function containerConfig(): ContainerConfig {
+-  return { mcpServers: {}, packages: { apt: [], npm: [] }, additionalMounts: [], skills: [] };
++  return { mcpServers: {}, packages: { apt: [], npm: [] }, additionalMounts: [], skills: [], mcpShims: [] };
+ }
+ 
+ beforeEach(() => {
+diff --git a/src/types.ts b/src/types.ts
+index 0f0fd65e..71e4f97b 100644
+--- a/src/types.ts
++++ b/src/types.ts
+@@ -26,6 +26,8 @@ export interface ContainerConfigRow {
+   additional_mounts: string; // JSON: AdditionalMountConfig[]
+   cli_scope: string; // 'disabled' | 'group' | 'global'
+   timezone: string | null; // IANA id; NULL = follow the install-global timezone
++  host_shims_dir: string | null; // NULL = default to groups/<folder>/host-shims/
++  mcp_shims_dir: string | null; // NULL = default to groups/<folder>/mcp-shims/
+   updated_at: string;
+ }
+ 
+diff --git a/vitest.config.ts b/vitest.config.ts
+index 24b4b5cf..86808759 100644
+--- a/vitest.config.ts
++++ b/vitest.config.ts
+@@ -1,7 +1,16 @@
++import os from 'node:os';
++import path from 'node:path';
++
+ import { defineConfig } from 'vitest/config';
+ 
+ export default defineConfig({
+   test: {
++    // Tests must never write into the real host-shims/ and mcp-shims/ trees (they are symlinks into the
++    // instance repo, so group-init in a test used to litter it with test-group folders).
++    env: {
++      NANOCLAW_HOST_SHIMS_DIR: path.join(os.tmpdir(), 'nanoclaw-vitest-host-shims'),
++      NANOCLAW_MCP_SHIMS_DIR: path.join(os.tmpdir(), 'nanoclaw-vitest-mcp-shims'),
++    },
+     // container/agent-runner tests run under Bun (they depend on bun:sqlite).
+     // See container/agent-runner/package.json "test" script.
+     // container/*.test.ts: top-level only — container/agent-runner tests run
