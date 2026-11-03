@@ -25,7 +25,7 @@ import { BRIEFING_HISTORY_CAP, compileBriefing, sessionBriefingKey } from './com
 import { renderLiteralTail } from './literal-tail.js';
 
 // Responder's own tail is real working context, not just tone.
-const RESPONDER_TAIL_TURNS = 9;
+const RESPONDER_TAIL_TURNS = 12;
 
 /** Marker file inside the group's already-RW-mounted folder (`/workspace/agent`
  *  in the container) — the container-side hook reads this directly, no

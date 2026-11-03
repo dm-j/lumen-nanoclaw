@@ -48,3 +48,5 @@ Verified: `pnpm exec tsc -p container/agent-runner/tsconfig.json --noEmit` clean
 `RESPONDER_TAIL_TURNS` 12 → 9 and `PROJECTED_FOLLOWUP_RESET_COUNT` 12 → 9 (kept equal, per the criterion above). Purpose: find how far the tail can shrink before response quality drops. Open: judge quality at 9; if it holds, try lower. Running containers keep the old reset count until they respawn.
 
 Also 2026-10-15: briefer and responder now share one `BRIEFING_HISTORY_CAP = 2` (compile-briefing.ts; replaces COMPILER_TAIL_TURNS-as-history-cap and RESPONDER_BRIEFING_CAP). Reason: the briefer omits anything "already visible" in its history, so a wider briefer window than the responder left facts only the briefer could see.
+
+Addendum 2026-11-01: `RESPONDER_TAIL_TURNS` 9 → 12 and `PROJECTED_FOLLOWUP_RESET_COUNT` 9 → 12 (kept equal), and `BRIEFING_HISTORY_CAP` 2 → 3. Per David; the 9 trial is over. Running containers keep the old reset count until they respawn.

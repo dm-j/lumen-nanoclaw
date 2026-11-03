@@ -157,7 +157,7 @@ export const COMPILER_TAIL_TURNS = 5;
 // Past briefings shown to BOTH compiler and responder, and the retention cap of session_briefing_history.
 // One shared constant on purpose: the briefer drops anything "already visible" in its history, so if it
 // saw more briefings than the responder, facts only in the older ones would be invisible to the responder.
-export const BRIEFING_HISTORY_CAP = 2;
+export const BRIEFING_HISTORY_CAP = 3;
 
 function briefingFailureNote(errorDetail: string): string {
   return `Briefing generation failed with error: ${errorDetail}. Use your Recall tool to search your memory for specific topics in the conversation.`;
