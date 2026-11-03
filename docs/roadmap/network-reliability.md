@@ -36,3 +36,14 @@ Lumen was slow and dropped replies. Context size was ruled out (flat at 21–28k
 
 - Whether to switch the whole SSID to 5 GHz-only (IoT stays on a separate 2.4 GHz SSID for isolation and throttling; that is intentional).
 - Whether to run a second watcher target (e.g. a Telegram or ollama.com endpoint) to separate router problems from ISP problems.
+
+## Addendum 2026-11-03: Telegram polling failures with a healthy router
+
+70 `Telegram polling request failed … Network error calling Telegram getUpdates` warnings between 2026-11-01 14Z and 2026-11-03 16Z, in bursts (44 single failures that recovered on the 1 s retry; the longest streak was 10 failures, about 3 minutes, around 06:25Z on 11-03, which is 00:25 local). `netwatch` showed router and 1.1.1.1 up through most of those bursts, so Wi-Fi/ICMP alone doesn't explain them. Fresh HTTPS connections to `api.telegram.org` from this Mac are fine (12/12, about 110 ms to connect), so the failures are on the 30 s long-poll. Polling keeps its update offset and retries, so messages are delayed, not lost; a 10-failure streak delays inbound by roughly 3 minutes.
+
+Why we couldn't say more: the adapter logs `String(error)` and drops the socket error underneath. Two diagnostics were added so the next bursts can be explained:
+
+- `src/channels/telegram.ts` logs `Telegram fetch failed` with the API method, `durationMs` and the socket `cause` code (ECONNRESET, connect timeout, …). Short durations point at refused/unroutable connections; about 30 s at a dropped long-poll (NAT or Wi-Fi idle drop).
+- `scripts/netwatch.sh` has a third probe, an HTTPS request to `api.telegram.org` (this is the "second watcher target" listed under "Not decided" above). A `telegram DOWN` with router and internet up is a Telegram-path problem; all three down is the link.
+
+To read it: `grep "Telegram fetch failed" logs/nanoclaw.error.log` and `grep telegram logs/net/netwatch.log | grep -E "DOWN|RECOVERED"`.

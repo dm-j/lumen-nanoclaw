@@ -209,11 +209,43 @@ function createPairingInterceptor(
   };
 }
 
+let fetchWrapped = false; // the factory can run more than once; wrap fetch once
+
+/**
+ * The Telegram adapter wraps a failed fetch in a NetworkError and logs only its message, dropping the socket error
+ * underneath (ECONNRESET, connect timeout, ...) — the one thing that says why polling dropped. Log that here, with how
+ * long the call ran (a failure after ~30 s is a dropped long-poll, an instant one is a refused/unroutable connection),
+ * then rethrow unchanged. Logs the API method only: the URL carries the bot token.
+ */
+export function withTelegramFailureLogging(inner: typeof fetch): typeof fetch {
+  return async (input, init) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    const started = Date.now();
+    try {
+      return await inner(input, init);
+    } catch (err) {
+      if (url.startsWith('https://api.telegram.org/') && (err as Error)?.name !== 'AbortError') {
+        const cause = (err as { cause?: { code?: string; message?: string } }).cause;
+        log.warn('Telegram fetch failed', {
+          method: url.split('/').pop(),
+          durationMs: Date.now() - started,
+          cause: cause?.code ?? cause?.message ?? String(err),
+        });
+      }
+      throw err;
+    }
+  };
+}
+
 registerChannelAdapter('telegram', {
   factory: () => {
     const env = readEnvFile(['TELEGRAM_BOT_TOKEN']);
     if (!env.TELEGRAM_BOT_TOKEN) return null;
     const token = env.TELEGRAM_BOT_TOKEN;
+    if (!fetchWrapped) {
+      globalThis.fetch = withTelegramFailureLogging(globalThis.fetch);
+      fetchWrapped = true;
+    }
     const telegramAdapter = createTelegramAdapter({
       botToken: token,
       mode: 'polling',
