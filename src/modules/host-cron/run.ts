@@ -37,7 +37,7 @@ export async function runDueHostCronJobs(): Promise<void> {
           agentGroupId: job.agent_group_id,
           exitCode: result.exitCode,
           refusalReason: result.refusalReason,
-          stderr: result.stderr?.slice(0, 500),
+          stderr: result.stderr?.slice(0, 4000),
         });
       }
     } catch (err) {
