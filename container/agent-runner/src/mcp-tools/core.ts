@@ -152,6 +152,38 @@ function sendNoReply(to: string, text: string, toolName: string, closesSession: 
 }
 
 /**
+ * Validate and copy files into this message's outbox dir, returning the
+ * filenames to put in the message's `files`. All-or-nothing: every path is
+ * checked before any copy, so a typo in the second path doesn't leave a
+ * half-sent message. Files from different folders can share a basename (every
+ * inbox photo is `attachment-<n>.jpg`); a clash gets an index prefix rather
+ * than an overwrite. `displayName` only applies to a single file.
+ */
+function stageOutboxFiles(id: string, requested: string[], displayName?: string): { filenames: string[] } | { error: string } {
+  const resolved = requested.map((p) => (path.isAbsolute(p) ? p : path.resolve('/workspace/agent', p)));
+  const missing = requested.filter((_, i) => !fs.existsSync(resolved[i]));
+  if (missing.length > 0) return { error: `File not found: ${missing.join(', ')}` };
+
+  const outboxDir = path.join(process.env.NANOCLAW_OUTBOX_DIR || '/workspace/outbox', id); // env override: tests have no /workspace
+  fs.mkdirSync(outboxDir, { recursive: true });
+  const filenames: string[] = [];
+  resolved.forEach((src, i) => {
+    let name = resolved.length === 1 && displayName ? displayName : path.basename(src);
+    if (filenames.includes(name)) name = `${i + 1}-${name}`;
+    filenames.push(name);
+    fs.copyFileSync(src, path.join(outboxDir, name));
+  });
+  return { filenames };
+}
+
+const PATHS_PROPERTY = {
+  type: 'array',
+  items: { type: 'string' },
+  description:
+    'Several file paths to deliver together in ONE message (use this, not repeated calls, when the receiver must see the files side by side, e.g. images to compare).',
+};
+
+/**
  * Delegates work — or a question another agent is better placed to answer,
  * by domain, data, or tool access — to a brand-new, dedicated session, not
  * the target's usual shared a2a session. Questions and answers within that
@@ -177,6 +209,7 @@ export const assignTask: McpToolDefinition = {
           description: 'Destination name of the agent to delegate to.',
         },
         task: { type: 'string', description: 'The work order — what you need done.' },
+        paths: PATHS_PROPERTY,
       },
       required: ['to', 'task'],
     },
@@ -195,6 +228,12 @@ export const assignTask: McpToolDefinition = {
 
     const taskId = `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const id = generateId();
+    let files: string[] = [];
+    if (Array.isArray(args.paths) && args.paths.length > 0) {
+      const staged = stageOutboxFiles(id, args.paths as string[]);
+      if ('error' in staged) return err(staged.error);
+      files = staged.filenames;
+    }
     const seq = writeMessageOut({
       id,
       in_reply_to: getCurrentInReplyTo(),
@@ -202,7 +241,7 @@ export const assignTask: McpToolDefinition = {
       platform_id: routing.platform_id,
       channel_type: routing.channel_type,
       thread_id: routing.thread_id,
-      content: JSON.stringify({ text: task, assignTaskId: taskId }),
+      content: JSON.stringify({ text: task, assignTaskId: taskId, ...(files.length ? { files } : {}) }),
     });
 
     log(`assign_task: #${seq} → ${routing.resolvedName} (task ${taskId})`);
@@ -283,36 +322,34 @@ export const reportCompletion: McpToolDefinition = {
 export const sendFile: McpToolDefinition = {
   tool: {
     name: 'send_file',
-    description: 'Send a file to a named destination.',
+    description: 'Send one or more files to a named destination in a single message.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         to: { type: 'string', description: 'Destination name.' },
         path: { type: 'string', description: 'File path (relative to /workspace/agent/ or absolute)' },
+        paths: PATHS_PROPERTY,
         text: { type: 'string', description: 'Optional accompanying message' },
-        filename: { type: 'string', description: 'Display name (default: basename of path)' },
+        filename: { type: 'string', description: 'Display name (single file only; default: basename of path)' },
       },
-      required: ['to', 'path'],
+      required: ['to'],
     },
   },
   async handler(args) {
     const to = args.to as string;
-    const filePath = args.path as string;
+    const requested = Array.isArray(args.paths) ? (args.paths as string[]) : args.path ? [args.path as string] : [];
     if (!to) return err(`to is required. Options: ${destinationList()}`);
-    if (!filePath) return err('path is required');
+    if (requested.length === 0) return err('path (or paths) is required');
 
     const routing = resolveRouting(to);
     if ('error' in routing) return err(routing.error);
 
-    const resolvedPath = path.isAbsolute(filePath) ? filePath : path.resolve('/workspace/agent', filePath);
-    if (!fs.existsSync(resolvedPath)) return err(`File not found: ${filePath}`);
-
+    // All-or-nothing: check every file before copying any, so a typo in the
+    // second path doesn't leave a half-sent message.
     const id = generateId();
-    const filename = (args.filename as string) || path.basename(resolvedPath);
-
-    const outboxDir = path.join('/workspace/outbox', id);
-    fs.mkdirSync(outboxDir, { recursive: true });
-    fs.copyFileSync(resolvedPath, path.join(outboxDir, filename));
+    const staged = stageOutboxFiles(id, requested, args.filename as string | undefined);
+    if ('error' in staged) return err(staged.error);
+    const { filenames } = staged;
 
     writeMessageOut({
       id,
@@ -321,11 +358,11 @@ export const sendFile: McpToolDefinition = {
       platform_id: routing.platform_id,
       channel_type: routing.channel_type,
       thread_id: routing.thread_id,
-      content: JSON.stringify({ text: (args.text as string) || '', files: [filename] }),
+      content: JSON.stringify({ text: (args.text as string) || '', files: filenames }),
     });
 
-    log(`send_file: ${id} → ${routing.resolvedName} (${filename})`);
-    return ok(`File sent to ${routing.resolvedName} (id: ${id}, filename: ${filename})`);
+    log(`send_file: ${id} → ${routing.resolvedName} (${filenames.join(', ')})`);
+    return ok(`${filenames.length} file(s) sent to ${routing.resolvedName} (id: ${id}, filenames: ${filenames.join(', ')})`);
   },
 };
 

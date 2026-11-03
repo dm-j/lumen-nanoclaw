@@ -12,10 +12,13 @@
  * via any in-memory helper, so they exercise the real process boundary.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 
 import { initTestSessionDb, closeSessionDb, getInboundDb, getOutboundDb } from '../db/connection.js';
 import { getUndeliveredMessages } from '../db/messages-out.js';
-import { sendMessage } from './core.js';
+import { assignTask, sendFile, sendMessage } from './core.js';
 
 /**
  * Publish the a2a reply stamp the way the poll loop does: a direct write to
@@ -72,5 +75,70 @@ describe('send_message MCP tool — in_reply_to plumbing', () => {
     const out = getUndeliveredMessages();
     expect(out).toHaveLength(1);
     expect(out[0].in_reply_to).toBeNull();
+  });
+});
+
+describe('send_file MCP tool — multiple files in one message', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'send-file-'));
+    process.env.NANOCLAW_OUTBOX_DIR = path.join(dir, 'outbox');
+  });
+  afterEach(() => {
+    delete process.env.NANOCLAW_OUTBOX_DIR;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  function mk(rel: string): string {
+    const p = path.join(dir, rel);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, rel);
+    return p;
+  }
+
+  it('delivers several files as one outbound message, disambiguating a shared basename', async () => {
+    const a = mk('m1/attachment-1.jpg');
+    const b = mk('m2/attachment-1.jpg');
+
+    await sendFile.handler({ to: 'peer', paths: [a, b], text: 'compare these' });
+
+    const out = getUndeliveredMessages();
+    expect(out).toHaveLength(1);
+    const content = JSON.parse(out[0].content);
+    expect(content.text).toBe('compare these');
+    expect(content.files).toEqual(['attachment-1.jpg', '2-attachment-1.jpg']);
+    const outbox = path.join(dir, 'outbox', out[0].id);
+    expect(fs.readFileSync(path.join(outbox, 'attachment-1.jpg'), 'utf8')).toBe('m1/attachment-1.jpg');
+    expect(fs.readFileSync(path.join(outbox, '2-attachment-1.jpg'), 'utf8')).toBe('m2/attachment-1.jpg');
+  });
+
+  it('sends nothing when any path is missing', async () => {
+    const a = mk('a.jpg');
+
+    const res = await sendFile.handler({ to: 'peer', paths: [a, path.join(dir, 'nope.jpg')] });
+
+    expect(res.isError).toBe(true);
+    expect(getUndeliveredMessages()).toHaveLength(0);
+  });
+
+  it('still accepts a single path with a display filename', async () => {
+    await sendFile.handler({ to: 'peer', path: mk('a.jpg'), filename: 'renamed.jpg' });
+
+    const content = JSON.parse(getUndeliveredMessages()[0].content);
+    expect(content.files).toEqual(['renamed.jpg']);
+  });
+
+  it('assign_task carries files in the same message as the work order', async () => {
+    const a = mk('x/one.jpg');
+    const b = mk('y/two.jpg');
+
+    await assignTask.handler({ to: 'peer', task: 'compare', paths: [a, b] });
+
+    const out = getUndeliveredMessages();
+    expect(out).toHaveLength(1);
+    const content = JSON.parse(out[0].content);
+    expect(content.text).toBe('compare');
+    expect(typeof content.assignTaskId).toBe('string');
+    expect(content.files).toEqual(['one.jpg', 'two.jpg']);
   });
 });

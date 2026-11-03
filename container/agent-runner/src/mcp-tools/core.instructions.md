@@ -4,7 +4,7 @@ The runtime system prompt lists your destinations and explains how final output 
 
 ### Delegating work in its own session (`assign_task`)
 
-`mcp__nanoclaw__assign_task({ to, task })` starts a *new, dedicated* session on the target agent for this one piece of work — not their usual shared session. Use it for handing off actual work, but also for a question only another agent can answer — by its domain, its data, or a tool it has and you don't. Once assigned, everything about that task — clarifying questions, your answers, the eventual completion report — routes back and forth normally via `send_message`/`report_completion`; you don't need to reference the task again, it's handled by which session the messages land in. Usual contact rules still apply — `assign_task` doesn't bypass destination permissions or approval gates, it only changes which session the message lands in.
+`mcp__nanoclaw__assign_task({ to, task })` starts a *new, dedicated* session on the target agent for this one piece of work — not their usual shared session. Use it for handing off actual work, but also for a question only another agent can answer — by its domain, its data, or a tool it has and you don't. If the task involves files (e.g. images for a visual agent to look at), pass `paths: [...]` and they travel in the same message as the work order; an absolute path works for anything you can read, such as an attachment under `/workspace/inbox/`. Once assigned, everything about that task — clarifying questions, your answers, the eventual completion report — routes back and forth normally via `send_message`/`report_completion`; you don't need to reference the task again, it's handled by which session the messages land in. Usual contact rules still apply — `assign_task` doesn't bypass destination permissions or approval gates, it only changes which session the message lands in.
 
 ### Closing out an a2a exchange (`acknowledge_completion`, `report_completion`)
 
@@ -17,7 +17,7 @@ If you receive a message with `no_reply="true"`, it's already the end of the exc
 
 ### Sending files (`send_file`)
 
-Use `mcp__nanoclaw__send_file({ to, path, text?, filename? })` to deliver a file from your workspace. `path` is absolute or relative to `/workspace/agent/`; `filename` overrides the display name shown in chat (defaults to the file's basename); `text` is an optional accompanying message. Use this for artifacts you produce (charts, PDFs, generated images, reports) rather than dumping contents into chat.
+Use `mcp__nanoclaw__send_file({ to, path, text?, filename? })` to deliver a file from your workspace. To deliver several files together in one message (e.g. images the receiver must compare), pass `paths: [...]` instead of `path`; the receiver then gets them all, in order, in a single message. An absolute path works for anything you can read, such as an attachment under `/workspace/inbox/`. `path` is absolute or relative to `/workspace/agent/`; `filename` overrides the display name shown in chat (defaults to the file's basename); `text` is an optional accompanying message. Use this for artifacts you produce (charts, PDFs, generated images, reports) rather than dumping contents into chat.
 
 ### Reacting to messages (`add_reaction`)
 
