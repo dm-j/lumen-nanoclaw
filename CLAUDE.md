@@ -378,6 +378,7 @@ An item doesn't only get resolved by someone finishing it directly — it can go
 | [docs/migration-dev.md](docs/migration-dev.md) | Migration development guide — testing, debugging, dev loop |
 | [docs/provider-migration.md](docs/provider-migration.md) | Switching a live agent group between providers (e.g. Claude → Codex) — what carries over, rollback |
 | [docs/customizing.md](docs/customizing.md) | Short intro to customizing via skills |
+| [docs/local-modifications.md](docs/local-modifications.md) | Re-apply guide: every local change to NanoClaw's own code by feature (what, why, files, how to re-apply, test) — read before pulling upstream |
 | [docs/roadmap.md](docs/roadmap.md) | Open items / planning list |
 | [docs/skills-model.md](docs/skills-model.md) | The skills model in full: recipes, tests, upgrades, migrations |
 | [docs/skill-guidelines.md](docs/skill-guidelines.md) | Authoritative checklist for writing a skill |
