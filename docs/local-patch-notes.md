@@ -19,3 +19,23 @@ A history of what's been locally changed on this NanoClaw install, on top of ups
 15. [2026-09-16](local-patch-notes/2026-09-16.md) — Multi-agent delegation goes live: the `routine` agent, a Computation specialist agent, per-task a2a sessions (`assign_task`), ack-loop breakers, `--stateless` scheduled tasks, and calendar tool fixes/handoff to Routine.
 16. [2026-09-18](local-patch-notes/2026-09-18.md) — Added a per-agent-group `wake_script` and wired/verified Routine's daily-note awareness; fixed a vault-transcript recipient routing bug; scoped a plan for Routine to read/edit the calendar via the vault's local mirror.
 17. [2026-09-19](local-patch-notes/2026-09-19.md) — Roadmap-staleness sweep (closed 3 stale items, corrected 4 more) and a strengthened roadmap-maintenance rule; fixed a `tsx` deprecation warning and added the Minimal Friction principle to CLAUDE.md.
+18. [2026-09-21](local-patch-notes/2026-09-21.md) — Added mcp-shims overview and per-group inventory docs; fixed a worktree hook bug.
+19. [2026-09-22](local-patch-notes/2026-09-22.md) — Fixed a runaway a2a guard-wake loop that crash-looped the host; worktrees auto-provision on checkout; Routine's calendar became vault-backed with add/edit/conflict-scan shims.
+20. [2026-09-23](local-patch-notes/2026-09-23.md) — Session-sync handler crash fixed (sync-drop traced to chain divergence); fresh-install backup/restore scripts; notes shims and wake-script notes block for Routine and Lumen.
+21. [2026-09-24](local-patch-notes/2026-09-24.md) — Notes double-signing fixed and a `journal_entry` tool added for Lumen.
+22. [2026-09-25](local-patch-notes/2026-09-25.md) — Disabled Lumen's Vector shims; `journal_entry` description made a relevance gate.
+23. [2026-09-26](local-patch-notes/2026-09-26.md) — Central shim pool with per-group allowlist registry, shared day-token resolver, `get_calendar` with `lumen_file_id`, and recall/briefing shim fixes.
+24. [2026-09-28](local-patch-notes/2026-09-28.md) — Agent-runner dumps each turn's prompt to `/workspace/last-prompt.md`.
+25. [2026-09-29](local-patch-notes/2026-09-29.md) — Raw briefer output logged per day under `logs/briefing-raw/`.
+26. [2026-09-30](local-patch-notes/2026-09-30.md) — Added the `research` task agent group and a `transcript-prune` host shim.
+27. [2026-10-01](local-patch-notes/2026-10-01.md) — Unresolvable recall citations become `[UNSUPPORTED]`.
+28. [2026-10-03](local-patch-notes/2026-10-03.md) — Added `agent_groups.decision_description`; retired `researchagent` for `research`; soft tool limits for Routine and Computation.
+29. [2026-10-05](local-patch-notes/2026-10-05.md) — SQLite errors in the agent-runner now name DB file, operation and SQL.
+30. [2026-10-07](local-patch-notes/2026-10-07.md) — Idle container reaps demoted to INFO; last-context Stop-hook dump added.
+31. [2026-10-08](local-patch-notes/2026-10-08.md) — ISO-8601 UTC host log timestamps; projected-session prompt-size cuts; unused built-in tool definitions denied; `x-agent-group` header.
+32. [2026-10-12](local-patch-notes/2026-10-12.md) — Host-cron keeps 4000 chars of failed-job stderr.
+33. [2026-10-13](local-patch-notes/2026-10-13.md) — Opt-in `set_followup` timer, `scripts/netwatch.sh`, and `obsidian_*` tools for Lumen.
+34. [2026-10-20](local-patch-notes/2026-10-20.md) — Nightly backup script and roadmap items for offsite backup, delivery retry and network reliability.
+35. [2026-10-26](local-patch-notes/2026-10-26.md) — Recorded the abandoned Dispatcher decision-model idea.
+36. [2026-10-27](local-patch-notes/2026-10-27.md) — Weekly log rotation script, quieter pre-commit, and projected-session tail trial.
+37. [2026-11-03](local-patch-notes/2026-11-03.md) — Message `subject`, ordered/backed-off Telegram retries and diagnostics, approval expiry, new Vision and Vault agent groups, multi-file `send_file`/`assign_task`.
