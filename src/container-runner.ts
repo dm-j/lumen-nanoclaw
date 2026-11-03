@@ -58,6 +58,15 @@ import { dueMessagesAreAllGatedTasks } from './db/session-db.js';
 import { isTaskThread } from './db/sessions.js';
 import type { AgentGroup, Session } from './types.js';
 
+// Exit code the agent-runner uses to ask for a respawn (poll-loop.ts). Also used for an exhausted SQLite
+// retry (DB_RETRY_EXHAUSTED), so the code alone doesn't say whether it was routine.
+const PROJECTED_RESET_EXIT_CODE = 75;
+
+/** The reason from the agent-runner's `PROJECTED_QUERY_RESET: <reason> (N follow-ups pushed) — ...` stderr line. */
+export function parseProjectedReset(line: string): string | null {
+  return line.match(/PROJECTED_QUERY_RESET: (.+?) \(\d+ follow-ups pushed\)/)?.[1] ?? null;
+}
+
 /**
  * Marker (session dir, mounted at /workspace) telling the container it must
  * pull a fresh briefing itself before answering — see the comment above the
@@ -305,12 +314,14 @@ async function spawnContainer(session: Session): Promise<void> {
   // binary, bad config) explains itself only here — and debug is below the
   // default log level — so keep a tail to surface on a non-zero exit.
   const stderrTail: string[] = [];
+  let projectedReset: string | null = null;
   container.stderr?.on('data', (data) => {
     for (const line of data.toString().trim().split('\n')) {
       if (!line) continue;
       log.debug(line, { container: agentGroup.folder });
       stderrTail.push(line);
       if (stderrTail.length > 10) stderrTail.shift();
+      projectedReset ??= parseProjectedReset(line);
     }
   });
 
@@ -329,7 +340,13 @@ async function spawnContainer(session: Session): Promise<void> {
     stopTypingRefresh(session.id);
     // code null = killed by signal (normal shutdown path), not a boot failure.
     // An idle reap is expected (SIGTERM exit), not a boot failure — keep it out of the error log.
-    if (code !== 0 && code !== null && stderrTail.length > 0 && !idleReaped) {
+    if (code === PROJECTED_RESET_EXIT_CODE && projectedReset) {
+      // The container chose to exit so the next one starts from a small freshly compiled briefing.
+      log.info(`${projectedReset[0].toUpperCase()}${projectedReset.slice(1)}, truncating projected context`, {
+        sessionId: session.id,
+        containerName,
+      });
+    } else if (code !== 0 && code !== null && stderrTail.length > 0 && !idleReaped) {
       log.warn('Container exited non-zero', { sessionId: session.id, code, containerName, stderrTail });
     } else {
       log.info('Container exited', { sessionId: session.id, code, containerName });

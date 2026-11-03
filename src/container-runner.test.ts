@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { describe, expect, it } from 'vitest';
 
-import { hardeningArgs, resolveProviderName } from './container-runner.js';
+import { hardeningArgs, parseProjectedReset, resolveProviderName } from './container-runner.js';
 
 describe('resolveProviderName', () => {
   it('prefers session over container config', () => {
@@ -136,5 +136,23 @@ describe('hardeningArgs', () => {
 
   it('floors fractional values', () => {
     expect(hardeningArgs('2048.7').join(' ')).toContain('--pids-limit 2048');
+  });
+});
+
+describe('parseProjectedReset', () => {
+  it('extracts the reason from the agent-runner reset line', () => {
+    expect(
+      parseProjectedReset(
+        '[poll-loop] PROJECTED_QUERY_RESET: prompt cache expired (3 follow-ups pushed) — exiting so host respawns with a fresh query',
+      ),
+    ).toBe('prompt cache expired');
+    expect(parseProjectedReset('PROJECTED_QUERY_RESET: 12 follow-ups pushed (12 follow-ups pushed) — exiting')).toBe(
+      '12 follow-ups pushed',
+    );
+  });
+
+  it('ignores other lines, including the corruption exit that shares code 75', () => {
+    expect(parseProjectedReset('[poll-loop] DB_RETRY_EXHAUSTED: follow-up poll gave up')).toBeNull();
+    expect(parseProjectedReset('[poll-loop] Result: fine')).toBeNull();
   });
 });
