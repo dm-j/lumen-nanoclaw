@@ -25,6 +25,13 @@ registerDeliveryAction(
     const requestId = content.requestId as string;
     const name = content.name as string;
     const args = Array.isArray(content.args) ? (content.args as unknown[]).map(String) : [];
+    // Per-shim override from the mcp-shim's own --help-declared timeoutMs
+    // (see mcp-manifest.ts) — threaded here via cli/host-shim.ts. Absent
+    // for plain host-shims calls, which keep using timeoutFor()'s default.
+    const timeoutMs =
+      typeof content.timeoutMs === 'number' && Number.isFinite(content.timeoutMs) && content.timeoutMs > 0
+        ? content.timeoutMs
+        : undefined;
 
     if (!requestId || !name) {
       log.warn('host_shim_exec missing requestId or name', { sessionId: session.id });
@@ -32,7 +39,9 @@ registerDeliveryAction(
     }
 
     log.info('host-shim request', { requestId, name, agentGroupId: session.agent_group_id, sessionId: session.id });
-    const response = await execHostShim(session.agent_group_id, name, args);
+    const response = timeoutMs
+      ? await execHostShim(session.agent_group_id, name, args, timeoutMs)
+      : await execHostShim(session.agent_group_id, name, args);
 
     writeSessionMessage(session.agent_group_id, session.id, {
       id: `shim-resp-${requestId}`,

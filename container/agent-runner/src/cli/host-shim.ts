@@ -28,15 +28,38 @@ type ShimResponse = {
 
 const INBOUND_DB = '/workspace/inbound.db';
 const OUTBOUND_DB = '/workspace/outbound.db';
-const TIMEOUT_MS = 30_000;
+// See mcp-tools/memory-fact.ts's HOST_SHIM_TIMEOUT_MS for why this needs to
+// stay above the host's own execHostShim ceiling for subagent-dispatch shims
+// (recall/remember/digest/briefing) rather than the old flat 30s.
+const TIMEOUT_MS = 210_000;
 
 function generateId(): string {
   return `shim-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function buildPayload(name: string, args: string[]): Record<string, unknown> {
+  const timeoutOverride = process.env.HOST_SHIM_TIMEOUT_MS_OVERRIDE
+    ? Number(process.env.HOST_SHIM_TIMEOUT_MS_OVERRIDE)
+    : undefined;
+  return {
+    name,
+    args,
+    ...(timeoutOverride && Number.isFinite(timeoutOverride) ? { timeoutMs: timeoutOverride } : {}),
+  };
+}
+
 // Mirrors ncl.ts's writeRequest — BEGIN IMMEDIATE to avoid seq collisions
 // with concurrent agent-runner writes.
+//
+// timeoutMs: an mcp-shim's per-script override (see mcp-manifest.ts's
+// `timeoutMs` field), threaded through by dynamic-shims.ts via the
+// HOST_SHIM_TIMEOUT_MS_OVERRIDE env var — this CLI's own argv contract
+// (name + payload) has no room for a third concept, so it rides along in
+// the environment instead. Absent for plain host-shims calls.
 function writeRequest(requestId: string, name: string, args: string[]): void {
+  const timeoutOverride = process.env.HOST_SHIM_TIMEOUT_MS_OVERRIDE
+    ? Number(process.env.HOST_SHIM_TIMEOUT_MS_OVERRIDE)
+    : undefined;
   const db = new Database(OUTBOUND_DB);
   db.exec('PRAGMA journal_mode = DELETE');
   db.exec('PRAGMA busy_timeout = 5000');
@@ -58,7 +81,13 @@ function writeRequest(requestId: string, name: string, args: string[]): void {
       $id: requestId,
       $seq: nextSeq,
       $timestamp: new Date().toISOString(),
-      $content: JSON.stringify({ action: 'host_shim_exec', requestId, name, args }),
+      $content: JSON.stringify({
+        action: 'host_shim_exec',
+        requestId,
+        name,
+        args,
+        ...(timeoutOverride && Number.isFinite(timeoutOverride) ? { timeoutMs: timeoutOverride } : {}),
+      }),
     });
     db.exec('COMMIT');
   } catch (e) {
@@ -70,38 +99,65 @@ function writeRequest(requestId: string, name: string, args: string[]): void {
   }
 }
 
-// Mirrors ncl.ts's pollResponse — fresh connection each poll for cross-mount
-// visibility, marks the row completed via processing_ack so the agent-runner
-// poll loop never surfaces it as a normal message.
-function pollResponse(requestId: string, timeoutMs: number): ShimResponse | null {
-  const deadline = Date.now() + timeoutMs;
+// A read landing mid-write on a VirtioFS/bind-mount cross-mount boundary can
+// surface as SQLITE_CORRUPT even though nothing on disk is actually damaged
+// (see docker/for-mac#6690, #7494 — known Docker Desktop VirtioFS cache-
+// coherency gap). Retried immediate/+1s/+2s, a fresh connection each time in
+// case the stale state was connection-local; if all three attempts still
+// throw, the row is treated as "not there yet" for this iteration and the
+// outer poll loop's own 500ms cadence tries again — worth logging, not worth
+// failing the whole shim call over.
+const CORRUPT_RETRY_DELAYS_MS = [0, 1000, 2000];
 
-  while (Date.now() < deadline) {
+function queryPendingRow(requestId: string): { id: string; content: string } | null {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < CORRUPT_RETRY_DELAYS_MS.length; attempt++) {
+    if (CORRUPT_RETRY_DELAYS_MS[attempt] > 0) Bun.sleepSync(CORRUPT_RETRY_DELAYS_MS[attempt]);
+
     const inDb = new Database(INBOUND_DB, { readonly: true });
     inDb.exec('PRAGMA busy_timeout = 5000');
     inDb.exec('PRAGMA mmap_size = 0');
-
     try {
-      const row = inDb
+      return inDb
         .prepare("SELECT id, content FROM messages_in WHERE status = 'pending' AND content LIKE ?")
         .get(`%"requestId":"${requestId}"%`) as { id: string; content: string } | null;
-
-      if (row) {
-        const outDb = new Database(OUTBOUND_DB);
-        outDb.exec('PRAGMA journal_mode = DELETE');
-        outDb.exec('PRAGMA busy_timeout = 5000');
-        outDb
-          .prepare(
-            "INSERT OR REPLACE INTO processing_ack (message_id, status, status_changed) VALUES (?, 'completed', ?)",
-          )
-          .run(row.id, new Date().toISOString());
-        outDb.close();
-
-        const parsed = JSON.parse(row.content);
-        return parsed.response as ShimResponse;
-      }
+    } catch (err) {
+      lastErr = err;
     } finally {
       inDb.close();
+    }
+  }
+  // DB_RETRY_EXHAUSTED marks a persistent problem (retries exhausted, read
+  // abandoned for this poll iteration) — grepped by
+  // host-shims/lumen-dmj/sqlite-corrupt-count-host. Individual SQLITE_CORRUPT
+  // throws inside the retry loop above are transient and intentionally not
+  // logged on their own.
+  process.stderr.write(
+    `DB_RETRY_EXHAUSTED: host-shim inbound.db read failed after ${CORRUPT_RETRY_DELAYS_MS.length} attempts, skipping this poll: ${lastErr}\n`,
+  );
+  return null;
+}
+
+// Mirrors ncl.ts's pollResponse — fresh connection each poll for cross-mount
+// visibility, marks the row completed via processing_ack so the agent-runner
+// poll loop never surfaces it as a normal message.
+async function pollResponse(requestId: string, timeoutMs: number): Promise<ShimResponse | null> {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const row = queryPendingRow(requestId);
+
+    if (row) {
+      const outDb = new Database(OUTBOUND_DB);
+      outDb.exec('PRAGMA journal_mode = DELETE');
+      outDb.exec('PRAGMA busy_timeout = 5000');
+      outDb
+        .prepare("INSERT OR REPLACE INTO processing_ack (message_id, status, status_changed) VALUES (?, 'completed', ?)")
+        .run(row.id, new Date().toISOString());
+      outDb.close();
+
+      const parsed = JSON.parse(row.content);
+      return parsed.response as ShimResponse;
     }
 
     Bun.sleepSync(500);
@@ -121,7 +177,7 @@ const [name, ...args] = argv;
 const requestId = generateId();
 
 writeRequest(requestId, name, args);
-const resp = pollResponse(requestId, TIMEOUT_MS);
+const resp = await pollResponse(requestId, TIMEOUT_MS);
 
 if (!resp) {
   process.stderr.write(`host-shim: "${name}" timed out after ${TIMEOUT_MS / 1000}s\n`);
