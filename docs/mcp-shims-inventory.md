@@ -19,6 +19,7 @@ are documented below but not counted in the table.
 | lumen-dmj | 12 (+17 disabled) | `journal`, `memory`, `notes`, `obsidian`; `task_management` and `vector` are disabled |
 | routine | 21 | `calendar`, `daily_note`, `get`, `memory`, `notes`, `obsidian` |
 | dispatcher | 1 | `gaps` |
+| vault | 20 | `memory`, `obsidian`, `vault` |
 
 ## lumen-dmj
 
@@ -146,3 +147,18 @@ host-side scripts don't get gateway credential injection yet (see `CLAUDE.md`,
 
 Update this file when a shim is added, removed or moved to another group. The
 `/add-mcp-shim` skill is the natural place to remind whoever builds one.
+
+## vault
+
+The vault-maintenance agent (added 2026-10-27), the only crew member chartered to edit the vault. Reached via
+Dispatcher (destination `vault`); replies with `report_completion`. Registry env: `VAULT_PATH` for the four shims
+that touch files directly (`obsidian/replace`, `vault/*`); the rest go through the Obsidian CLI (app must be running).
+
+| Server | Tools |
+|---|---|
+| `memory` | `memory_recall`, `memory_remember` (same as lumen-dmj/routine) |
+| `obsidian` (read) | `obsidian_search`, `obsidian_read`, `obsidian_read_wikilink`, `obsidian_outline`, `obsidian_backlinks`, `obsidian_tags`, `obsidian_unresolved`, `obsidian_promotion_candidates`, `obsidian_orphans` (`kind`: orphans or deadends) |
+| `obsidian` (write) | `obsidian_create`, `obsidian_append`, `obsidian_replace` (exact text, must match once unless `replace_all`; path confined to the vault, `.md` only, no dot-folders), `obsidian_move`, `obsidian_property_set`, `obsidian_delete` (trash only, no permanent delete) |
+| `vault` | `vault_stats`, `vault_check_wikilinks` (wraps `Meta/scripts/check-wikilinks`), `vault_inbox_triage` (starts the vault's Sorter in the background if `00-Inbox/` is non-empty) |
+
+Known rough edge: `Meta/scripts/vault-stats` counts a stale folder list (`05-People`; no `05-Entities`, `08-Weekly`, `09-Monthly`).
