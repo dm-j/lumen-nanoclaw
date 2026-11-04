@@ -27,8 +27,38 @@ resolves symlinks before bind-mounting, and `src/modules/host-shim/exec.ts`'s
 symlink-escape check (`realpathSync` on both the candidate and the shims
 dir) resolves consistently on both sides, so no runtime code changed.
 
-No remote is configured yet for `lumen-nanoclaw-instance` — it's a local git
-repo until a private GitHub repo is created and wired as `origin`.
+The instance repo has a remote, `git@github.com:dm-j/lumen-instance.git` (private). Its commits are
+made automatically by the hooks below and are **not pushed** by them, so its local branch can run well
+ahead of `origin`; push it deliberately.
+
+## How the two repos stay in step (hooks in `lumen-nanoclaw/.husky/`)
+
+- **`pre-commit`**: after formatting, runs `git add -A` in the instance repo, so whatever changed there
+  (a persona, a shim, a registry entry) is staged alongside the commit being made here. It unsets
+  `GIT_DIR`/`GIT_INDEX_FILE`/`GIT_WORK_TREE` first: in a worktree git exports them to hooks and they
+  would otherwise stage the instance repo into *this* repo's index.
+- **`post-commit`**: if the instance repo has staged changes, runs a backgrounded `claude -p` there that
+  commits them as one commit with a real summary message (allowed tools: `git add/commit/status/diff`
+  only; never pushes). The instance repo's own `.git/hooks/post-commit` then snapshots `data/*.db`.
+- **`post-checkout`** (worktrees only): re-creates the three symlinks and runs a Node-22-pinned
+  `pnpm install --frozen-lockfile`, and registers the worktree in `~/.claude/worktrees.json`.
+- **Side effect of `pre-commit` on text files:** it strips zero-width characters and rewrites the em dash
+  (U+2014) to a hyphen in every staged text file. Em dashes in committed code or docs will not survive
+  a commit here.
+
+`.gitignore` keeps the private areas out of this repo: `groups/*` (with the few tracked exceptions),
+`/mcp-shims/`, `/host-shims/`. The hooks hardcode `INSTANCE_REPO=/Users/lumen/Projects/lumen-nanoclaw-instance`;
+on another machine either use the same path or edit the three hooks.
+
+## Rebuilding on a new machine
+
+1. `git clone git@github.com:dm-j/lumen-instance.git ~/Projects/lumen-nanoclaw-instance`
+2. In the NanoClaw checkout: `ln -s ~/Projects/lumen-nanoclaw-instance/{groups,mcp-shims,host-shims} .`
+   (the `post-checkout` hook does this for worktrees only).
+3. `data/*.db` is not in either repo; restore the newest `~/nanoclaw-db-backups/<timestamp>/` (or the
+   encrypted nightly backup, see `docs/fresh-install.md`).
+4. Re-apply the skills (`add-host-scripts` first: the shim pool, registry and `NANOCLAW_*_SHIMS_DIR`
+   overrides that make this layout work are in it).
 
 ## DB backups
 
@@ -49,8 +79,8 @@ the commit, no git involved.
   at a temp dir, and the litter was removed on 2026-09-26. The group dirs
   `readpendingbatch`, `tailpersist` and `vaulttranscript` under `groups/` are
   still untriaged.
-- `add-host-scripts` and `add-vault-memory-pipeline` are install-recipe skills
-  that describe the per-group seeding; they do not mention the registry.
+- (Resolved 2026-11-03.) `add-host-scripts` now installs the shim pool and registry; the memory
+  pipeline is installed by `add-memory-stack`.
 - Git worktrees of the instance repo must live outside it: its automatic
   "chore" commits record an in-repo worktree as an embedded-repo entry.
 

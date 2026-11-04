@@ -83,6 +83,26 @@ Entries below cover changes that had no other write-up. Features that already ha
 | Vision agent group, multi-file `send_file`/`assign_task` | [roadmap/visual-subagent.md](roadmap/visual-subagent.md) |
 | Fresh-install / move to a new machine | [fresh-install-checklist.md](fresh-install-checklist.md), [fresh-install.md](fresh-install.md) |
 
+## Private instance repo split, `docs/instance-repo-split.md`
+
+- **What:** everything specific to this install (agent personas and workspaces in `groups/`, the host and
+  MCP shim scripts, the registries and per-group state) lives in a separate private repo,
+  `~/Projects/lumen-nanoclaw-instance` (remote `dm-j/lumen-instance`). In this repo `groups/`, `mcp-shims/`
+  and `host-shims/` are gitignored **symlinks** into it, so upstream's tracked tree never contains personal
+  paths, addresses or vault locations.
+- **Why:** upstream tracked some personal and private areas, which made every update a merge against private
+  data. Splitting them out keeps the fork generic and the personal part independently versioned.
+- **Code that supports it (in this repo):** `HOST_SHIMS_DIR`/`MCP_SHIMS_DIR` (+ `NANOCLAW_*` overrides) in
+  `src/config.ts`, the shim pool/registry in `src/modules/host-shim/registry.ts`, `group-init.ts` skipping
+  private dirs for registered groups, and the vitest env that keeps tests out of the real trees; all of it
+  ships with `add-host-scripts`.
+- **Glue that is not in any skill:** `.husky/pre-commit` (stages the instance repo), `.husky/post-commit`
+  (backgrounded `claude -p` commit there), `.husky/post-checkout` (symlinks + install in worktrees), the
+  `.gitignore` entries, and the instance repo's own `post-commit` DB-snapshot hook. Re-apply by copying
+  those three husky files and the ignore lines, then creating the symlinks (steps in the doc).
+- **Gotchas:** hooks hardcode the instance path; the em-dash rewrite in `pre-commit` applies to all staged
+  text; instance worktrees must live outside the instance repo; instance commits are not auto-pushed.
+
 ## Skill freshness (checked 2026-11-03)
 
 The `add-*` skills this fork wrote install by copying files out of branches on `origin` and applying a patch. A skill is only as current as its branch, and the branches were frozen at 2026-08-01 until this check.
