@@ -98,8 +98,9 @@ Entries below cover changes that had no other write-up. Features that already ha
   ships with `add-host-scripts`.
 - **Glue that is not in any skill:** `.husky/pre-commit` (stages the instance repo), `.husky/post-commit`
   (backgrounded `claude -p` commit there), `.husky/post-checkout` (symlinks + install in worktrees), the
-  `.gitignore` entries, and the instance repo's own `post-commit` DB-snapshot hook. Re-apply by copying
-  those three husky files and the ignore lines, then creating the symlinks (steps in the doc).
+  `.gitignore` entries, and the instance repo's own `post-commit` DB-snapshot hook. Re-apply with the
+  **`add-instance-repo`** skill (`install.sh`; the hooks take the path from `NANOCLAW_INSTANCE_REPO`, so nothing
+  is hardcoded to one username any more). `add-lumen-customizations` runs it first.
 - **Gotchas:** hooks hardcode the instance path; the em-dash rewrite in `pre-commit` applies to all staged
   text; instance worktrees must live outside the instance repo; instance commits are not auto-pushed.
 
@@ -111,6 +112,8 @@ The `add-*` skills this fork wrote install by copying files out of branches on `
 |---|---|---|
 | `add-host-scripts` | **Current.** Branch `host-shim` refreshed (`313eb9c1`); installs the whole host-shim layer: pool + registry, mcp-shims manifest, all templates. `files.txt` + `shared-files.patch` live in the skill folder. | Applied literally on a clean checkout of the upstream merge-base `639577c3`: typecheck clean, 1349 host tests, 164 container tests, tree identical to the validated build. |
 | `add-host-cron` | **Current.** Branch `host-cron` refreshed (`6feb8f97`). | Same, layered on the above: 1356 host tests. |
+| `add-instance-repo` | **Current.** Idempotent `install.sh` + assets (parameterized hooks, `NANOCLAW_INSTANCE_REPO`). | Run on a fresh base checkout with a throwaway instance repo: install, re-run (no-op), `--migrate` of a real dir, refuse on a non-empty dir, a real commit (instance repo got its own commit; the checkout's commit held none of the instance files; DB snapshot taken), and a new worktree (symlinks + install). |
+| `add-lumen-customizations` | **Current.** Umbrella; `apply.sh` runs instance repo → host scripts → host cron → memory stack with a checkpoint after each. | Run on a clean checkout of `639577c3`: four layer commits; 1349 → 1356 → 1406 host tests green at the checkpoints, container suite green. |
 | `add-mcp-shim` | Current (guided workflow, no branch). | n/a |
 | `add-mbif-vault` | Skill text only; not re-verified. | n/a |
 | `add-memory-stack` | **Current.** New skill; branch `memory-stack` (a snapshot of `main` at `1d932c23`). Installs projected sessions, the vault transcript export, attachment captioning and remember/recall as one unit, plus the interleaved plumbing (staged inbound rows, gated-task briefing deferral, headers, env/blockedHosts). Includes the per-group wake script (pinned context) with its tests. Excludes session-sync, follow-ups, a2a guards, stateless tasks, Telegram, subject, approval expiry, delivery retry. | Chain run literally on a clean checkout of `639577c3`: add-host-scripts → add-host-cron → add-memory-stack. Host typecheck clean, 1406 host tests, 181 container tests; tree identical to the validated build except `sharp` resolving to a newer patch. |

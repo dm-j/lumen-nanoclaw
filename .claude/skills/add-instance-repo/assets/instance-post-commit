@@ -1,0 +1,8 @@
+#!/bin/sh
+# Installed by add-instance-repo. Snapshots the NanoClaw SQLite DBs on every commit to this repo, so each
+# config/persona change has a DB state to go with it. Plain fs copy, no rotation: add a cleanup pass if
+# the backup dir grows unbounded.
+DEST="$HOME/nanoclaw-db-backups/$(date -u +%Y-%m-%dT%H-%M-%SZ)"
+mkdir -p "$DEST"
+cp @NANOCLAW_ROOT@/data/*.db "$DEST"/ 2>/dev/null
+exit 0

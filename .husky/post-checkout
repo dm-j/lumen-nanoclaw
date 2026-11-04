@@ -18,7 +18,7 @@ cd "$ROOT" || exit 0
 REGISTRY="$HOME/.claude/hooks/worktree-registry.sh"
 [ -x "$REGISTRY" ] && "$REGISTRY" sync "$ROOT" || true
 
-INSTANCE_REPO="/Users/lumen/Projects/lumen-nanoclaw-instance"
+INSTANCE_REPO="${NANOCLAW_INSTANCE_REPO:-/Users/lumen/Projects/lumen-nanoclaw-instance}"
 for name in groups mcp-shims host-shims; do
   [ -L "$ROOT/$name" ] && continue
   [ -d "$INSTANCE_REPO/$name" ] || continue

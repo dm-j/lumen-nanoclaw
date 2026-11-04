@@ -1,0 +1,8 @@
+# >>> instance-repo (add-instance-repo)
+# Stage everything in the private instance repo too; .husky/post-commit commits it there.
+INSTANCE_REPO="${NANOCLAW_INSTANCE_REPO:-@INSTANCE_DEFAULT@}"
+if [ -d "$INSTANCE_REPO/.git" ]; then
+  # Unset GIT_* env git exports to hooks: in a worktree they override -C and stage the instance repo into THIS repo's index.
+  env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE git -C "$INSTANCE_REPO" add -A
+fi
+# <<< instance-repo

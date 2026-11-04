@@ -1,0 +1,12 @@
+# ponytail: delegates the actual commit message to Claude Code so the instance
+# repo gets a real summary instead of a canned "sync" message. Single commit,
+# not split — the instruction below says so explicitly. Backgrounded so it
+# doesn't block `git commit` here; the instance repo's own post-commit hook
+# handles the data/*.db backup snapshot once this lands.
+INSTANCE_REPO="${NANOCLAW_INSTANCE_REPO:-@INSTANCE_DEFAULT@}"
+if [ -d "$INSTANCE_REPO/.git" ] && ! env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE git -C "$INSTANCE_REPO" diff --cached --quiet; then
+  (cd "$INSTANCE_REPO" && env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE claude -p \
+    "Commit all currently staged changes in this repo as a SINGLE commit (do not split into multiple commits). Write a concise commit message summarizing what changed. Do not push." \
+    --allowedTools "Bash(git add:*) Bash(git commit:*) Bash(git status:*) Bash(git diff:*)" \
+    >/dev/null 2>&1) &
+fi

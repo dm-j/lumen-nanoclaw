@@ -31,6 +31,9 @@ The instance repo has a remote, `git@github.com:dm-j/lumen-instance.git` (privat
 made automatically by the hooks below and are **not pushed** by them, so its local branch can run well
 ahead of `origin`; push it deliberately.
 
+Installed by the `add-instance-repo` skill (`install.sh`, idempotent; `--migrate` moves existing
+`groups/`/shim directories into the instance repo). `add-lumen-customizations` runs it first.
+
 ## How the two repos stay in step (hooks in `lumen-nanoclaw/.husky/`)
 
 - **`pre-commit`**: after formatting, runs `git add -A` in the instance repo, so whatever changed there
@@ -47,8 +50,8 @@ ahead of `origin`; push it deliberately.
   a commit here.
 
 `.gitignore` keeps the private areas out of this repo: `groups/*` (with the few tracked exceptions),
-`/mcp-shims/`, `/host-shims/`. The hooks hardcode `INSTANCE_REPO=/Users/lumen/Projects/lumen-nanoclaw-instance`;
-on another machine either use the same path or edit the three hooks.
+`/mcp-shims/`, `/host-shims/`. The hooks read `NANOCLAW_INSTANCE_REPO`, falling back to the path chosen when the skill was run
+(here `/Users/lumen/Projects/lumen-nanoclaw-instance`).
 
 ## Rebuilding on a new machine
 
