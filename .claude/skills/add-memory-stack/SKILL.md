@@ -1,6 +1,6 @@
 ---
 name: add-memory-stack
-description: Use when the user wants the agent memory system on a fork: projected sessions (briefing + literal tail instead of transcript resume), the live vault transcript export, image attachment captioning, and the remember/recall tools. Also use when re-applying this fork's memory features onto a fresh NanoClaw.
+description: Use when the user wants the agent memory system on a fork: projected sessions (briefing + literal tail instead of transcript resume), the live vault transcript export, image attachment captioning, and the remember/recall tools, and the per-group wake script (pinned context). Also use when re-applying this fork's memory features onto a fresh NanoClaw.
 ---
 
 # Add Memory Stack
@@ -37,7 +37,16 @@ separate: the code is one subsystem.
 4. **remember / recall MCP tools** (`container/.../mcp-tools/memory-fact.ts`):
    ad-hoc vault fact capture and retrieval through the `remember-host` /
    `recall-host` shims.
-5. **Plumbing bundled because it is interleaved with the above:**
+5. **Wake script — pinned context** (`container_configs.wake_script`,
+   migration `034-wake-script`, `ncl groups config update --wake-script`).
+   A bash script run in the container at the start of **every** wake,
+   whatever triggered it (a task fire, an `assign_task` session, a chat
+   message). Its last stdout line is JSON `{"wakeAgent": bool, "data"?: any}`;
+   `data` is rendered at the top of that turn's prompt inside
+   `<wake-context>…</wake-context>`. It costs no model tokens, and a failing
+   script just adds nothing. Combined with MCP tools that edit what the script
+   reads, the agent can **pin** things it must not lose: see "Pinning" below.
+6. **Plumbing bundled because it is interleaved with the above:**
    - **Staged inbound rows.** A wake-triggering message is written `staged`,
      the host finishes the briefing, then `releaseStagedMessage` flips it to
      `pending`, so an already-warm container cannot race the compile.
@@ -57,7 +66,7 @@ separate: the code is one subsystem.
 
 **Not included** (separate features, listed in `docs/local-modifications.md`):
 session-sync, follow-up timer, agent-to-agent loop guards, stateless scheduled
-tasks, per-group wake script, Telegram, message `subject`, approval expiry,
+tasks, Telegram, message `subject`, approval expiry,
 delivery retry, `DEFAULT_AGENT_MODEL` seeding, the last-context dump.
 
 **Dead files:** migrations `022-session-lifecycle`, `023-session-briefings` and
@@ -109,11 +118,14 @@ append, deferred/awaited synth, headers, env/blockedHosts, reset logging),
 archive), `src/delivery.ts` (vault transcript hook with recipient name),
 `src/db/session-db.ts` (`dueMessagesAreAllGatedTasks`, outbound `timestamp`),
 `src/host-sweep.ts`, `src/container-config.ts` (`sessionLifecycle`, `env`,
-`blockedHosts`, `resolveAssistantName`), `src/config.ts` (`LOGS_DIR`),
+`blockedHosts`, `resolveAssistantName`), `src/config.ts` (`LOGS_DIR`), the `wake_script` column plumbing (`src/types.ts`,
+`src/db/container-configs.ts`, `src/backfill-container-configs.ts`,
+`src/cli/resources/groups.ts` `--wake-script`, `migration 034`),
 `src/timezone.ts` (`formatLocalIsoOffset`), `src/cli/resources/sessions.ts`
 (`sessions sync-briefing`), `src/modules/index.ts`,
-`src/db/migrations/index.ts` (025, 027, 028, 030), and container
-`poll-loop.ts`, `formatter.ts`, `memory/*`, `mcp-tools/index.ts`, plus tests.
+`src/db/migrations/index.ts` (025, 027, 028, 030, 034), and container
+`poll-loop.ts` (also the wake-script run), `config.ts`, `index.ts`,
+`formatter.ts`, `memory/*`, `mcp-tools/index.ts`, plus tests.
 
 **Migration numbers** are ordering hints only; identity is the migration
 `name`, so reuse of numbers upstream already uses is safe. Alias imports on
@@ -159,6 +171,42 @@ Both are off by default. The group also needs working shims
 `VAULT_PATH` set — via the registry env or an edited private copy (see
 `add-host-scripts`). Tuning knobs: `add-projected-sessions`. Scheduling digests
 and migrating off a crontab: `add-vault-memory-pipeline`.
+
+## Pinning with the wake script
+
+The wake script is how an agent keeps something in front of itself across
+turns, sessions and container restarts, without depending on conversation
+history. The pattern this fork uses (`wake-script.notes.example.sh`, in this
+skill's folder):
+
+1. The script runs `host-shim notes/read`, which returns today's ID'd notes
+   from the vault daily note's `## Notes` block (`[id] text`, one per line),
+   truncates it to 4000 characters, prefixes today's date and a standing
+   instruction ("delete a note when it is no longer useful"), and prints the
+   JSON line.
+2. The agent maintains the block with the **`notes_*` MCP tools**:
+   `notes_add` (returns the ID), `notes_edit`, `notes_delete`, `notes_read`.
+   Anything added is in context from the next wake onward; deleting it
+   un-pins it.
+
+The scripts behind the tools are *instance* files, not NanoClaw code: the pooled
+`notes` mcp-shim server (`mcp-shims/_pool/notes/`, with `notes-block.ts` in
+`mcp-shims/lib/`) and the `notes/read` shim, allowed per group in
+`mcp-shims/_registry.json` / `host-shims/_registry.json` (`NOTES_WHO` names the
+agent). They live in the private instance repo and are listed in
+`docs/mcp-shims-inventory.md`. Re-applying this skill gives you the wake-script
+mechanism; the notes tools come back with the instance repo.
+
+```bash
+ncl groups config update --id <group-id> --wake-script "$(cat .claude/skills/add-memory-stack/wake-script.notes.example.sh)"
+ncl groups restart --id <group-id>      # takes effect on the next container
+```
+
+Design notes: keep the output small (it is paid for in every wake's context, so
+cap it as the example does); the script has a 30 s limit (the same runner as
+task scripts); it runs with the container's environment, so `host-shim` and `node`
+are on PATH; `wakeAgent` is read by task scripts but the wake path only uses
+`data`.
 
 ## Verify
 

@@ -2,12 +2,14 @@ container/agent-runner/src/mcp-tools/memory-fact.instructions.md
 container/agent-runner/src/mcp-tools/memory-fact.ts
 container/agent-runner/src/projected-sessions.test.ts
 container/agent-runner/src/projected-sessions.ts
+container/agent-runner/src/wake-script.test.ts
 scripts/show-briefings.ts
 show-briefings.sh
 src/db/migrations/025-projected-sessions.ts
 src/db/migrations/027-briefing-history.ts
 src/db/migrations/028-tail-anchor-last-call.ts
 src/db/migrations/030-vault-transcript-enabled.ts
+src/db/migrations/034-wake-script.ts
 src/db/session-briefings.ts
 src/modules/attachment-caption/caption.test.ts
 src/modules/attachment-caption/caption.ts

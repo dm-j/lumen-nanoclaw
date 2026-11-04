@@ -2,13 +2,13 @@
 
 Removes the projected sessions, vault transcript export, attachment captioning
 and remember/recall code and every edit to NanoClaw-owned files. Does **not**
-roll back migrations 025/027/028/030 (forward-only, like every migration here);
+roll back migrations 025/027/028/030/034 (forward-only, like every migration here);
 leftover tables (`projected_sessions_enabled`, `session_briefings`,
 `vault_transcript_enabled`, …) with no reader or writer are harmless.
 
 **Before removing:** disable the features per group so nothing is left half
 wired (`ncl projected-sessions disable --id <g>`, `ncl vault-transcripts disable
---id <g>`), and restart the groups.
+--id <g>`, `ncl groups config update --id <g> --wake-script ""`), and restart the groups.
 
 ## 1. Reverse the shared-file edits
 

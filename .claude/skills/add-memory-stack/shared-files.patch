@@ -1,3 +1,24 @@
+diff --git a/container/agent-runner/src/config.ts b/container/agent-runner/src/config.ts
+index 91126802..ab49391e 100644
+--- a/container/agent-runner/src/config.ts
++++ b/container/agent-runner/src/config.ts
+@@ -20,6 +20,8 @@ export interface RunnerConfig {
+   mcpServers: Record<string, McpServerConfig>;
+   model?: string;
+   effort?: string;
++  /** Script run at the start of every wake — scheduled task fire or a2a assign_task session alike. */
++  wakeScript?: string;
+ }
+ 
+ const DEFAULT_MAX_MESSAGES = 10;
+@@ -49,6 +51,7 @@ export function loadConfig(): RunnerConfig {
+     mcpServers: (raw.mcpServers as RunnerConfig['mcpServers']) || {},
+     model: (raw.model as string) || undefined,
+     effort: (raw.effort as string) || undefined,
++    wakeScript: (raw.wakeScript as string) || undefined,
+   };
+ 
+   return _config;
 diff --git a/container/agent-runner/src/formatter.test.ts b/container/agent-runner/src/formatter.test.ts
 index 8c71c88c..c681a8ea 100644
 --- a/container/agent-runner/src/formatter.test.ts
@@ -84,6 +105,18 @@ index 43feb812..640d9bd1 100644
    });
    return '\n' + parts.join('\n');
  }
+diff --git a/container/agent-runner/src/index.ts b/container/agent-runner/src/index.ts
+index ca7f98cd..ac6d0d29 100644
+--- a/container/agent-runner/src/index.ts
++++ b/container/agent-runner/src/index.ts
+@@ -117,6 +117,7 @@ async function main(): Promise<void> {
+     providerName,
+     cwd: CWD,
+     systemContext: { instructions },
++    wakeScript: config.wakeScript,
+   });
+ }
+ 
 diff --git a/container/agent-runner/src/mcp-tools/index.ts b/container/agent-runner/src/mcp-tools/index.ts
 index 973e8847..cfc6a46c 100644
 --- a/container/agent-runner/src/mcp-tools/index.ts
@@ -200,7 +233,7 @@ index 0860df03..5dd37767 100644
 +  return source === 'resume' || isProjected ? undefined : renderMemorySection(baseDir);
  }
 diff --git a/container/agent-runner/src/poll-loop.ts b/container/agent-runner/src/poll-loop.ts
-index 5544899b..87a6350c 100644
+index 5544899b..ddd71954 100644
 --- a/container/agent-runner/src/poll-loop.ts
 +++ b/container/agent-runner/src/poll-loop.ts
 @@ -1,4 +1,9 @@
@@ -274,7 +307,23 @@ index 5544899b..87a6350c 100644
  function log(msg: string): void {
    console.error(`[poll-loop] ${msg}`);
  }
-@@ -93,12 +145,19 @@ export interface PollLoopConfig {
+@@ -80,6 +132,15 @@ export interface PollLoopConfig {
+    * polling forever and stealing messages from the next test's DB.
+    */
+   signal?: AbortSignal;
++  /**
++   * Script run once at the start of every wake, regardless of trigger kind
++   * (scheduled task fire or a2a `assign_task` session's first message
++   * alike) — unlike a task's own `--script`, which only fires for
++   * `kind: 'task'` rows and misses the a2a path. Same contract: last
++   * stdout line is JSON `{wakeAgent, data?}`; `data` is rendered into the
++   * prompt. See docs/roadmap/routine-daily-notes.md.
++   */
++  wakeScript?: string;
+ }
+ 
+ /**
+@@ -93,12 +154,19 @@ export interface PollLoopConfig {
   * 6. Loop
   */
  export async function runPollLoop(config: PollLoopConfig): Promise<void> {
@@ -295,7 +344,7 @@ index 5544899b..87a6350c 100644
  
    // Before resuming, drop a session whose on-disk transcript has grown too
    // large/old to cold-resume within the host's idle ceiling. Without this a
-@@ -230,9 +289,21 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
+@@ -230,9 +298,35 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
        continue;
      }
  
@@ -310,14 +359,29 @@ index 5544899b..87a6350c 100644
 +      await syncBriefingNow();
 +    }
 +
++    // Wake script: runs once per wake regardless of what triggered it
++    // (scheduled task or a2a assign_task session), unlike the per-task
++    // `script` column above which only fires for kind:'task' rows.
++    let wakeContext = '';
++    if (config.wakeScript) {
++      const { runScript } = await import('./scheduling/task-script.js');
++      const wakeResult = await runScript(config.wakeScript, `wake-${Date.now()}`);
++      if (wakeResult?.data !== undefined) {
++        const rendered =
++          typeof wakeResult.data === 'string' ? wakeResult.data : JSON.stringify(wakeResult.data, null, 2);
++        wakeContext = `<wake-context>\n${rendered}\n</wake-context>\n\n`;
++      }
++    }
++
      // Format messages: passthrough commands get raw text (only if the
      // provider natively handles slash commands), others get XML.
-     const prompt = formatMessagesWithCommands(keep, config.provider.supportsNativeSlashCommands);
+-    const prompt = formatMessagesWithCommands(keep, config.provider.supportsNativeSlashCommands);
++    const prompt = wakeContext + formatMessagesWithCommands(keep, config.provider.supportsNativeSlashCommands);
 +    writeLastPrompt(prompt, 'wake');
  
      log(`Processing ${keep.length} message(s), kinds: ${[...new Set(keep.map((m) => m.kind))].join(',')}`);
  
-@@ -259,7 +330,7 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
+@@ -259,7 +353,7 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
          prompt,
          continuation,
        );
@@ -326,7 +390,7 @@ index 5544899b..87a6350c 100644
          continuation = result.continuation;
          setContinuation(config.providerName, continuation);
        }
-@@ -307,6 +378,20 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
+@@ -307,6 +401,20 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
   * passthrough commands are sent raw (no XML wrapping) so the SDK can
   * dispatch them. Otherwise they fall through to standard XML formatting.
   */
@@ -347,7 +411,7 @@ index 5544899b..87a6350c 100644
  function formatMessagesWithCommands(messages: MessageInRow[], nativeSlashCommands: boolean): string {
    const parts: string[] = [];
    const normalBatch: MessageInRow[] = [];
-@@ -372,6 +457,19 @@ export async function processQuery(
+@@ -372,6 +480,19 @@ export async function processQuery(
    let pollInFlight = false;
    let endedForCommand = false;
    let corruptionStreak = 0;
@@ -367,7 +431,7 @@ index 5544899b..87a6350c 100644
    const pollHandle = setInterval(() => {
      if (done || pollInFlight || endedForCommand) return;
      pollInFlight = true;
-@@ -436,13 +534,30 @@ export async function processQuery(
+@@ -436,13 +557,30 @@ export async function processQuery(
          // claimed messages get released by the host's processing-claim sweep.
          if (done) return;
  
@@ -399,7 +463,7 @@ index 5544899b..87a6350c 100644
          markCompleted(keptIds);
        } catch (err) {
          // Without this catch the rejection escapes the void IIFE and Node
-@@ -461,8 +576,13 @@ export async function processQuery(
+@@ -461,8 +599,13 @@ export async function processQuery(
          if (isCorruptionError(errMsg)) {
            corruptionStreak += 1;
            if (corruptionStreak >= CORRUPTION_STREAK_EXIT) {
@@ -414,7 +478,7 @@ index 5544899b..87a6350c 100644
                  `inbound.db page cache is poisoned. Exiting so host respawns with a fresh mount.`,
              );
              // Stop touching the heartbeat so host-sweep stale detection fires
-@@ -486,6 +606,7 @@ export async function processQuery(
+@@ -486,6 +629,7 @@ export async function processQuery(
      for await (const event of query.events) {
        handleEvent(event, routing);
        touchHeartbeat();
@@ -422,7 +486,7 @@ index 5544899b..87a6350c 100644
  
        if (event.type === 'init') {
          queryContinuation = event.continuation;
-@@ -495,7 +616,7 @@ export async function processQuery(
+@@ -495,7 +639,7 @@ export async function processQuery(
          // container died between `init` and `result`, the SDK session was
          // effectively orphaned and the next message started a blank
          // Claude session with no prior context.
@@ -431,6 +495,68 @@ index 5544899b..87a6350c 100644
        } else if (event.type === 'result') {
          // A result — with or without text — means the turn is done. Mark
          // the initial batch completed now so the host sweep doesn't see
+diff --git a/src/backfill-container-configs.ts b/src/backfill-container-configs.ts
+index e9221fad..322b53b9 100644
+--- a/src/backfill-container-configs.ts
++++ b/src/backfill-container-configs.ts
+@@ -68,6 +68,7 @@ export function backfillContainerConfigs(): void {
+       timezone: null,
+       host_shims_dir: null,
+       mcp_shims_dir: null,
++      wake_script: null,
+       updated_at: new Date().toISOString(),
+     };
+ 
+diff --git a/src/cli/resources/groups.ts b/src/cli/resources/groups.ts
+index ff1b053e..1c2cbfa0 100644
+--- a/src/cli/resources/groups.ts
++++ b/src/cli/resources/groups.ts
+@@ -81,6 +81,7 @@ function presentConfig(row: ContainerConfigRow): Record<string, unknown> {
+     timezone: row.timezone,
+     host_shims_dir: row.host_shims_dir,
+     mcp_shims_dir: row.mcp_shims_dir,
++    wake_script: row.wake_script,
+     updated_at: row.updated_at,
+   };
+ }
+@@ -311,7 +312,8 @@ registerResource({
+         'Use --id <group-id> and any of: --provider, --model, --effort, --image-tag, --assistant-name, --max-messages-per-prompt, --cli-scope, ' +
+         '--timezone (IANA id like "Europe/Lisbon"; "" clears back to the install default; scheduled-task times follow it immediately, message display after restart), ' +
+         '--host-shims-dir (path to this group\'s host-shim whitelist directory; "" clears back to the default groups/<folder>/host-shims/), ' +
+-        '--mcp-shims-dir (path to this group\'s mcp-shims whitelist directory; "" clears back to the default mcp-shims/<folder>/, never mounted into the container).',
++        '--mcp-shims-dir (path to this group\'s mcp-shims whitelist directory; "" clears back to the default mcp-shims/<folder>/, never mounted into the container), ' +
++        '--wake-script (bash script run at the start of every wake — scheduled task fire or a2a assign_task session alike; last stdout line must be JSON {"wakeAgent": bool, "data"?: any}, and `data` is rendered into that turn\'s prompt; "" clears it).',
+       handler: async (args) => {
+         const id = args.id as string;
+         if (!id) throw new Error('--id is required');
+@@ -331,6 +333,7 @@ registerResource({
+             | 'timezone'
+             | 'host_shims_dir'
+             | 'mcp_shims_dir'
++            | 'wake_script'
+           >
+         > = {};
+         if (args.provider !== undefined) updates.provider = args.provider as string;
+@@ -342,6 +345,10 @@ registerResource({
+         const mcpShimsDirFlag = args['mcp-shims-dir'] ?? args.mcp_shims_dir;
+         const mcpShimsDir = parseMcpShimsDirFlag(mcpShimsDirFlag);
+         if (mcpShimsDir !== undefined) updates.mcp_shims_dir = mcpShimsDir;
++        const wakeScriptFlag = args['wake-script'] ?? args.wake_script;
++        if (wakeScriptFlag !== undefined) {
++          updates.wake_script = (wakeScriptFlag as string) === '' ? null : (wakeScriptFlag as string);
++        }
+         if (args.model !== undefined) updates.model = args.model as string;
+         if (args.effort !== undefined) updates.effort = args.effort as string;
+         if (args.image_tag !== undefined) updates.image_tag = args.image_tag as string;
+@@ -358,7 +365,7 @@ registerResource({
+ 
+         if (Object.keys(updates).length === 0) {
+           throw new Error(
+-            'Nothing to update — provide at least one of: --provider, --model, --effort, --image-tag, --assistant-name, --max-messages-per-prompt, --cli-scope, --timezone, --host-shims-dir, --mcp-shims-dir',
++            'Nothing to update — provide at least one of: --provider, --model, --effort, --image-tag, --assistant-name, --max-messages-per-prompt, --cli-scope, --timezone, --host-shims-dir, --mcp-shims-dir, --wake-script',
+           );
+         }
+ 
 diff --git a/src/cli/resources/sessions.ts b/src/cli/resources/sessions.ts
 index 33e2407f..e930b971 100644
 --- a/src/cli/resources/sessions.ts
@@ -485,10 +611,10 @@ index 6cb1b889..b3fdae3e 100644
  // inside it. groups/<folder>/ is bind-mounted RW into its container as
  // /workspace/agent, so anything living inside a group's own folder is
 diff --git a/src/container-config.ts b/src/container-config.ts
-index 81eab26c..4622b684 100644
+index 81eab26c..4e9c62a8 100644
 --- a/src/container-config.ts
 +++ b/src/container-config.ts
-@@ -153,6 +153,9 @@ export interface ContainerConfig {
+@@ -153,7 +153,15 @@ export interface ContainerConfig {
    model?: string;
    effort?: string;
    timezone?: string;
@@ -496,9 +622,15 @@ index 81eab26c..4622b684 100644
 +  env?: Record<string, string>;
 +  blockedHosts?: string[];
    mcpShims: McpShimManifestEntry[];
++  /**
++   * Script run once at the start of every wake (scheduled task fire or a2a
++   * `assign_task` session alike). See `container_configs.wake_script`.
++   */
++  wakeScript?: string;
  }
  
-@@ -167,6 +170,12 @@ export function resolveGroupTimezone(agentGroupId: string): string {
+ /**
+@@ -167,6 +175,12 @@ export function resolveGroupTimezone(agentGroupId: string): string {
    return tz && isValidTimezone(tz) ? tz : TIMEZONE;
  }
  
@@ -511,7 +643,15 @@ index 81eab26c..4622b684 100644
  /** Build a `ContainerConfig` from a DB row + agent group identity. */
  export function configFromDb(row: ContainerConfigRow, group: AgentGroup): ContainerConfig {
    return {
-@@ -208,6 +217,19 @@ export function materializeContainerJson(agentGroupId: string): ContainerConfig
+@@ -187,6 +201,7 @@ export function configFromDb(row: ContainerConfigRow, group: AgentGroup): Contai
+     effort: row.effort ?? undefined,
+     timezone: row.timezone && isValidTimezone(row.timezone) ? row.timezone : undefined,
+     mcpShims: [],
++    wakeScript: row.wake_script ?? undefined,
+   };
+ }
+ 
+@@ -208,6 +223,19 @@ export function materializeContainerJson(agentGroupId: string): ContainerConfig
    const p = path.join(GROUPS_DIR, group.folder, 'container.json');
    const dir = path.dirname(p);
    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -783,11 +923,57 @@ index 306166db..7c40b5b3 100644
    // Egress lockdown when enabled — throws if it can't be established, aborting
    // the spawn rather than running with open egress. Otherwise the host gateway.
    if (ensureEgressNetwork()) {
+diff --git a/src/db/container-configs.ts b/src/db/container-configs.ts
+index dffebc93..b56c9735 100644
+--- a/src/db/container-configs.ts
++++ b/src/db/container-configs.ts
+@@ -13,6 +13,7 @@ const SCALAR_COLUMNS = new Set([
+   'timezone',
+   'host_shims_dir',
+   'mcp_shims_dir',
++  'wake_script',
+ ]);
+ const JSON_COLUMNS = new Set(['skills', 'mcp_servers', 'packages_apt', 'packages_npm', 'additional_mounts']);
+ 
+@@ -33,11 +34,11 @@ export function createContainerConfig(config: ContainerConfigRow): void {
+       `INSERT INTO container_configs (
+         agent_group_id, provider, model, effort, image_tag, assistant_name,
+         max_messages_per_prompt, skills, mcp_servers, packages_apt, packages_npm,
+-        additional_mounts, cli_scope, timezone, host_shims_dir, mcp_shims_dir, updated_at
++        additional_mounts, cli_scope, timezone, host_shims_dir, mcp_shims_dir, wake_script, updated_at
+       ) VALUES (
+         @agent_group_id, @provider, @model, @effort, @image_tag, @assistant_name,
+         @max_messages_per_prompt, @skills, @mcp_servers, @packages_apt, @packages_npm,
+-        @additional_mounts, @cli_scope, @timezone, @host_shims_dir, @mcp_shims_dir, @updated_at
++        @additional_mounts, @cli_scope, @timezone, @host_shims_dir, @mcp_shims_dir, @wake_script, @updated_at
+       )`,
+     )
+     .run(config);
+@@ -91,6 +92,7 @@ export function updateContainerConfigScalars(
+       | 'timezone'
+       | 'host_shims_dir'
+       | 'mcp_shims_dir'
++      | 'wake_script'
+     >
+   >,
+ ): void {
+diff --git a/src/db/db-v2.test.ts b/src/db/db-v2.test.ts
+index 7695cc9f..e2823a95 100644
+--- a/src/db/db-v2.test.ts
++++ b/src/db/db-v2.test.ts
+@@ -480,6 +480,7 @@ describe('container configs', () => {
+       timezone: null,
+       host_shims_dir: null,
+       mcp_shims_dir: null,
++      wake_script: null,
+       updated_at: now(),
+     });
+     const row = getContainerConfig('ag-full');
 diff --git a/src/db/migrations/index.ts b/src/db/migrations/index.ts
-index 0eb2a812..ef46f153 100644
+index 0eb2a812..c6f13393 100644
 --- a/src/db/migrations/index.ts
 +++ b/src/db/migrations/index.ts
-@@ -21,8 +21,12 @@ import { migration019 } from './019-wiring-threads.js';
+@@ -21,8 +21,13 @@ import { migration019 } from './019-wiring-threads.js';
  import { migration020 } from './020-container-config-timezone.js';
  import { migration021 } from './021-host-shims-dir.js';
  import { migration021 as migration021ApprovalQuestion } from './021-approval-question.js';
@@ -797,10 +983,11 @@ index 0eb2a812..ef46f153 100644
 +import { migration028 } from './028-tail-anchor-last-call.js';
  import { migration029 } from './029-mcp-shims-dir.js';
 +import { migration030 } from './030-vault-transcript-enabled.js';
++import { migration034 } from './034-wake-script.js';
  
  export interface Migration {
    version: number;
-@@ -68,8 +72,12 @@ export const migrations: Migration[] = [
+@@ -68,8 +73,13 @@ export const migrations: Migration[] = [
    migration020,
    migration021,
    migration021ApprovalQuestion,
@@ -810,6 +997,7 @@ index 0eb2a812..ef46f153 100644
 +  migration028,
    migration029,
 +  migration030,
++  migration034,
  ];
  
  /**
@@ -1451,3 +1639,23 @@ index a2809c08..35a861ce 100644
  /**
   * Interpret a naive ISO-like timestamp (no trailing `Z`, no offset) as wall-clock
   * time in `tz` and return the corresponding UTC Date. Strings that already carry
+diff --git a/src/types.ts b/src/types.ts
+index 71e4f97b..647e7f14 100644
+--- a/src/types.ts
++++ b/src/types.ts
+@@ -28,6 +28,15 @@ export interface ContainerConfigRow {
+   timezone: string | null; // IANA id; NULL = follow the install-global timezone
+   host_shims_dir: string | null; // NULL = default to groups/<folder>/host-shims/
+   mcp_shims_dir: string | null; // NULL = default to groups/<folder>/mcp-shims/
++  /**
++   * Script run once at the start of every wake, regardless of what
++   * triggered it (scheduled task fire or a2a `assign_task` session) — the
++   * per-task `script` column only fires for `kind: 'task'` messages, which
++   * misses the a2a path. Same contract: last stdout line is JSON
++   * `{wakeAgent, data?}`; `data` is rendered into the prompt. NULL = no
++   * wake script. See docs/roadmap/routine-daily-notes.md.
++   */
++  wake_script: string | null;
+   updated_at: string;
+ }
+ 
